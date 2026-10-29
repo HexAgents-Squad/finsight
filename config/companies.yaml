@@ -1,0 +1,42 @@
+# FinSight corpus scope: the single source of truth for which companies and filings are in scope.
+# Used by: WP2 (download + parse), WP3 (XBRL facts), WP4 (gold set), and later the agent's scope checks.
+# Changes need team agreement and an entry in docs/decisions.md (see docs/spec.md §3).
+schema_version: 1
+
+# Fiscal years are the COMPANY'S OWN fiscal-year labels (as tagged in its XBRL filings), not calendar years.
+# See docs/spec.md §4. Example: Apple FY2025 = Oct 2024 – Sep 2025.
+fiscal_years: [2023, 2024, 2025]
+
+forms:
+  "10-K":
+    fiscal_years: [2023, 2024, 2025]   # one original annual report per fiscal year (amendments ignored)
+  "10-Q":
+    fiscal_years: [2025]               # the three quarterly reports of fiscal 2025 (Q4 is covered by the 10-K)
+
+# cik: SEC Central Index Key, zero-padded to 10 digits as used by data.sec.gov URLs.
+# fiscal_year_end: when the company's fiscal year ends ("52/53-week" = ends on a weekday near that date).
+companies:
+  # --- Big Tech --------------------------------------------------------------------------------------
+  - {ticker: AAPL,  name: "Apple Inc.",                       cik: "0000320193", sector: tech,       fiscal_year_end: "last Saturday of September (52/53-week)"}
+  - {ticker: MSFT,  name: "Microsoft Corporation",            cik: "0000789019", sector: tech,       fiscal_year_end: "June 30"}
+  - {ticker: GOOGL, name: "Alphabet Inc.",                    cik: "0001652044", sector: tech,       fiscal_year_end: "December 31"}
+  - {ticker: AMZN,  name: "Amazon.com, Inc.",                 cik: "0001018724", sector: tech,       fiscal_year_end: "December 31"}
+  - {ticker: META,  name: "Meta Platforms, Inc.",             cik: "0001326801", sector: tech,       fiscal_year_end: "December 31"}
+  - {ticker: NVDA,  name: "NVIDIA Corporation",               cik: "0001045810", sector: tech,       fiscal_year_end: "last Sunday of January (52/53-week)"}
+  # --- Banks & financials ----------------------------------------------------------------------------
+  - {ticker: JPM,   name: "JPMorgan Chase & Co.",             cik: "0000019617", sector: financials, fiscal_year_end: "December 31"}
+  - {ticker: BAC,   name: "Bank of America Corporation",      cik: "0000070858", sector: financials, fiscal_year_end: "December 31"}
+  - {ticker: WFC,   name: "Wells Fargo & Company",            cik: "0000072971", sector: financials, fiscal_year_end: "December 31"}
+  - {ticker: C,     name: "Citigroup Inc.",                   cik: "0000831001", sector: financials, fiscal_year_end: "December 31"}
+  - {ticker: GS,    name: "The Goldman Sachs Group, Inc.",    cik: "0000886982", sector: financials, fiscal_year_end: "December 31"}
+  # --- Healthcare & pharma ---------------------------------------------------------------------------
+  - {ticker: JNJ,   name: "Johnson & Johnson",                cik: "0000200406", sector: healthcare, fiscal_year_end: "Sunday nearest December 31 (52/53-week)"}
+  - {ticker: PFE,   name: "Pfizer Inc.",                      cik: "0000078003", sector: healthcare, fiscal_year_end: "December 31"}
+  - {ticker: MRK,   name: "Merck & Co., Inc.",                cik: "0000310158", sector: healthcare, fiscal_year_end: "December 31"}
+  - {ticker: ABBV,  name: "AbbVie Inc.",                      cik: "0001551152", sector: healthcare, fiscal_year_end: "December 31"}
+  - {ticker: UNH,   name: "UnitedHealth Group Incorporated",  cik: "0000731766", sector: healthcare, fiscal_year_end: "December 31"}
+  # --- Consumer & retail -----------------------------------------------------------------------------
+  - {ticker: WMT,   name: "Walmart Inc.",                     cik: "0000104169", sector: consumer,   fiscal_year_end: "January 31"}
+  - {ticker: COST,  name: "Costco Wholesale Corporation",     cik: "0000909832", sector: consumer,   fiscal_year_end: "Sunday nearest August 31 (52/53-week)"}
+  - {ticker: KO,    name: "The Coca-Cola Company",            cik: "0000021344", sector: consumer,   fiscal_year_end: "December 31"}
+  - {ticker: PG,    name: "The Procter & Gamble Company",     cik: "0000080424", sector: consumer,   fiscal_year_end: "June 30"}
