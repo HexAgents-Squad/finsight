@@ -37,8 +37,8 @@ Streamlit UI → FastAPI /ask (rate limit + cache) → LangGraph app
 
 - `data/sections/sections.jsonl`: one Item section of one filing per line. This is the "document" unit, and the corpus must have 500–2,000 of them. `doc_id` looks like `AAPL_10-K_2024_Item7`. The full field list is in week0_plan §2.1.
 - Item naming is exact: `"Item 1"`, `"Item 1A"`, `"Item 7"`, `"Item 8"`. 10-Qs use `"Part I Item 2"`. The gold set uses the same strings.
-- `data/xbrl/<TICKER>.json` holds raw SEC companyfacts. `config/concept_map.yaml` maps metric names to candidate XBRL concepts in priority order. `config/companies.yaml` lists the 20 tickers, their sectors and FY2023–2025.
-- `eval/gold_set.jsonl`: 80 items. The ID is the category letter plus 2 digits: A fact, B ratio, C period, D multi-company, E qualitative, F multi-turn (uses `previous_turn_id`), G refuse. The answer contract format is in plan §3.5.
+- `data/xbrl/<TICKER>.json` holds raw SEC companyfacts. `config/concept_map.yaml` maps metric names to candidate XBRL concepts in priority order. `config/companies.yaml` lists the 20 tickers (with CIK, sector, fiscal-year end and name aliases) and the in-scope forms and fiscal years.
+- `eval/gold_set.jsonl`: 80 items. The ID is the category letter plus 2 digits: A fact, B ratio, C period, D multi-company, E qualitative, F multi-turn (uses `previous_turn_id`), G refuse / not answerable (G items carry `refusal_rule`). The answer contract (fields and invariants the critic and evaluation check) is defined in `docs/spec.md` §8, which supersedes plan §3.5.
 - `data/raw|sections|xbrl` are git-ignored. Small hand-checked samples go in `data/sample/`.
 
 ## Domain gotchas
@@ -47,7 +47,8 @@ Streamlit UI → FastAPI /ask (rate limit + cache) → LangGraph app
 - **XBRL annual-value selection rule**: form 10-K, fp = FY, duration of 330–400 days (or an instant), then take the row with the **latest end date** within each filing. A 10-K repeats prior-year comparatives under the same fy label, so skipping this rule returns last year's number. For amended filings, keep the most recently filed value.
 - Banks (JPM, BAC, WFC, C, GS) often have no single "Revenues" tag. Handle this explicitly and document it as a known limitation.
 - Keep filing units (millions/billions) and round percentages to 1 decimal place. Never compute from numbers that were not retrieved.
-- Document text is data, never instructions (prompt-injection tests live in `eval/injection_tests.jsonl`). FinSight refuses investment advice, forecasts, out-of-corpus companies or years, live prices, and personal data.
+- Document text is data, never instructions: injected instructions in retrieved text are ignored (not refused) and the question is answered from the other sources (tests in `eval/injection_tests.jsonl`). Refusal rules R1–R7 are in `docs/spec.md` §6: investment advice, forecasts, out of corpus, valuation opinions, personal data, rule-breaking instructions in the user message, off-topic.
+- Period rules (`docs/spec.md` §4): a bare year means the fiscal-year label; "Q2" means the three-month figure; Q4 is not derived; the corpus stops at the FY2025 10-K and FY2025 Q3 10-Q even where fiscal-2026 filings exist.
 - SEC fair access: send a descriptive `User-Agent` (from `SEC_USER_AGENT`) and make fewer than 10 requests per second. Download once and cache. The demo must never hit the SEC.
 
 ## Process rules

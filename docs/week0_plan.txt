@@ -86,9 +86,14 @@ One JSON object per line = one "document":
      "form": "10-K", "fiscal_year": 2024, "fiscal_period": "FY", "period_end": "2024-09-28",
      "filing_date": "2024-11-01", "accession_no": "0000320193-24-000123",
      "item": "Item 7", "item_title": "Management's Discussion and Analysis ...",
-     "source_url": "https://www.sec.gov/Archives/edgar/data/...", "text": "...", "n_chars": 41234, "has_tables": true}
+     "source_url": "https://www.sec.gov/Archives/edgar/data/...", "source_location": "main document",
+     "text": "...", "n_chars": 41234, "has_tables": true}
 - item naming is exactly "Item 1", "Item 1A", "Item 7", "Item 8"… (10-Q: "Part I Item 2" etc.). The gold set
   uses the same names.
+- Section-mapping rule (docs/spec.md §3): text that sits in an exhibit (e.g. a bank's Exhibit 13 annual report)
+  or behind a cross-reference index is labelled with the Item the filing's cross-reference index assigns it;
+  source_location records where it physically came from ("main document", "Exhibit 13", …) and source_url
+  points at that file.
 - Day 2: WP2 commits data/sample/sections_sample.jsonl (2 companies, hand-checked) so WP5 can start.
 
 2.2 XBRL cache (WP3 → WP6)
@@ -98,20 +103,29 @@ operating_income, net_income, rd_expense, capex, total_assets…) to XBRL concep
 
 2.3 Tool signatures (WP6)
 -------------------------
-    calculate(operation: ratio|percent|growth|difference|sum|cagr, inputs: [float], years?: float) -> {result, unit, expression}
-    get_financial_fact(ticker, metric, fiscal_year) -> {value, unit, period_start, period_end, concept, accession_no, filed}
-    compare_periods(ticker, metric, years: [int]) -> [{fiscal_year, value, yoy_growth_pct}]
-    search_filings(query, ticker?, fiscal_year?, form?, item?, k=5) -> [{chunk_id, text, ticker, form, fiscal_year, item, source_url, score}]
+    calculate(operation: ratio|percent|growth|difference|sum|cagr, inputs: [float], years?: float) -> {operation, inputs, result, unit, expression}
+    get_financial_fact(ticker, metric, fiscal_year, fiscal_period="FY", duration?: 3M|6M|9M|12M) -> {value, unit, ticker, fiscal_year, fiscal_period, duration, period_start, period_end, concept, accession_no, filed, url}
+    compare_periods(ticker, metric, years: [int]) -> [{fiscal_year, value, unit, period_end, yoy_growth_pct}]
+    search_filings(query, ticker?, fiscal_year?, fiscal_period?, form?, item?, k=5) -> [{chunk_id, text, ticker, form, fiscal_year, fiscal_period, item, source_url, score}]
 Errors are returned as structured "not found" results (never crash), so the agent can replan.
+Outputs carry the fields the answer contract (docs/spec.md §8) needs, so the composer copies them without
+re-typing. get_financial_fact: duration defaults to 12M for FY and 3M for quarters (spec §4.2); point-in-time
+facts return duration null. Currency values are scaled to the unit the company's statements use (spec §7.3).
+Formulas and undefined cases for calculate are fixed in spec §7.2.
 
 2.4 Gold item: eval/gold_set.jsonl (WP4 → WP5/WP8 and later all evaluation)
 ---------------------------------------------------------------------------
     {"id": "B07", "category": "ratio", "question": "...", "companies": ["MSFT"], "fiscal_years": [2024],
      "gold_answer": "...", "gold_value": 44.6, "unit": "%", "tolerance_pct": 1.0,
-     "gold_sources": [{"ticker": "MSFT", "form": "10-K", "fiscal_year": 2024, "item": "Item 8"}],
-     "must_refuse": false, "previous_turn_id": null, "written_by": "Anirudh", "verified_by": "Chandra Shekhar"}
+     "gold_sources": [{"ticker": "MSFT", "form": "10-K", "fiscal_year": 2024, "fiscal_period": "FY", "item": "Item 8"}],
+     "must_refuse": false, "refusal_rule": null, "previous_turn_id": null,
+     "written_by": "Anirudh", "verified_by": "Chandra Shekhar"}
 ID = category letter + 2 digits: A fact · B ratio · C period comparison · D multi-company · E qualitative · F
-multi-turn · G refuse.
+multi-turn · G refuse / not answerable.
+- fiscal_period in gold_sources: "FY" for 10-K, "Q1"/"Q2"/"Q3" for 10-Q.
+- refusal_rule: "R1"…"R7" (docs/spec.md §6) when the expected answer is a full or partial refusal, else null.
+  G items are either refusals (must_refuse true, refusal_rule set) or "not reported" traps (must_refuse false,
+  refusal_rule null, gold_answer "not reported", no gold_value).
 
 2.5 LLM client (WP7 → everyone)
 -------------------------------
@@ -153,8 +167,10 @@ Writing rules (summary):
 3. Always fill in gold_sources (ticker, form, fiscal year, Item), because recall@k depends on it.
 4. Mention the fiscal-year end when it is not December (Apple ~Sep, Microsoft Jun, NVIDIA ~Jan, Walmart
    Jan).
-5. G (refuse): investment advice, forecasts, companies or years outside the corpus, personal data, plus 2–3
-   "trap" questions that look answerable but aren't in the filings.
+5. G (refuse): at least one question per refusal rule R1–R7 in docs/spec.md §6 (investment advice, forecasts,
+   out of corpus, valuation opinions, personal data, rule-breaking instructions, off-topic), each with its
+   refusal_rule, plus 2–3 "trap" questions that look answerable but aren't in the filings (refusal_rule null,
+   gold_answer "not reported").
 6. Verification: the verifier re-opens the filing, checks every number and source, then sets verified_by.
    Disagreements go to the group; nobody edits someone else's question silently.
 7. Collect in a shared Google Sheet first (easier for 6 people), then Jegan converts it to gold_set.jsonl
@@ -465,7 +481,8 @@ WP8 – Eval tooling + refusal and prompt-injection test sets  (Jegan, backup Al
 Output: eval/schema.py, eval/validate_gold.py, sheet→jsonl converter, eval/retrieval_eval.py (with Anirudh),
         eval/refusal_tests.jsonl, eval/injection_tests.jsonl, .github/workflows/ci.yml
 1. Pydantic schema for a gold item (§2.4) plus rules: ID letter matches category; refusal items have no
-   sources; answerable items have ≥1 source; ratio and period questions have a gold_value; follow-ups have a
+   sources; must_refuse true ⇒ refusal_rule in R1–R7; G items are refusals or "not reported" traps (§2.4);
+   every rule R1–R7 has ≥1 G item; answerable items have ≥1 source; ratio and period questions have a gold_value; follow-ups have a
    previous_turn_id that exists; verified_by ≠ written_by; no duplicate IDs.
    "--final" mode additionally requires every item verified and the category counts in §3.
 2. Converter: Google Sheet (CSV export) → eval/gold_set.jsonl.
