@@ -6,10 +6,11 @@ Capstone project (Track B · API-Side), Executive PG Programme in Generative AI 
 Team **HexAgents_Squad**: Alok Srivastava · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj · Jegan Raj
 Mentor: Dr. Gunjan Balde
 
-The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt).
+The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt). What FinSight answers, refuses and returns is defined in [docs/spec.md](docs/spec.md); the corpus scope is [config/companies.yaml](config/companies.yaml).
 
 ## Folder structure
 ```
+config/        companies.yaml (corpus scope), concept_map.yaml (metric → XBRL tags)
 docs/          spec, decisions, mentor meeting notes, report/
 data/          raw/ (SEC filings), sections/ (parsed sections), xbrl/ (structured financial data); not committed
 ingest/        download → parse sections → chunk → index
