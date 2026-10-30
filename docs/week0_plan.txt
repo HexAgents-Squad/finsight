@@ -124,8 +124,9 @@ ID = category letter + 2 digits: A fact · B ratio · C period comparison · D m
 multi-turn · G refuse / not answerable.
 - fiscal_period in gold_sources: "FY" for 10-K, "Q1"/"Q2"/"Q3" for 10-Q.
 - refusal_rule: "R1"…"R7" (docs/spec.md §6) when the expected answer is a full or partial refusal, else null.
-  G items are either refusals (must_refuse true, refusal_rule set) or "not reported" traps (must_refuse false,
-  refusal_rule null, gold_answer "not reported", no gold_value).
+  G items are either refusals (must_refuse true, refusal_rule set, no gold_sources) or "not reported" traps
+  (must_refuse false, refusal_rule null, gold_answer "not reported", no gold_value, and gold_sources = the
+  section where the figure would appear, e.g. Item 8, because a non-refused answer must cite what it checked).
 
 2.5 LLM client (WP7 → everyone)
 -------------------------------
@@ -386,6 +387,10 @@ Output: data/xbrl/<TICKER>.json, config/concept_map.yaml, ingest/05_xbrl_facts.p
    then, within each filing, take the row with the LATEST end date. A 10-K also repeats last year's figures
    with the same fy label, so without this rule you return the prior year. If a 10-K was amended, keep the
    most recently filed value.
+   Quarterly values (fiscal_period Q1–Q3, needed by the §2.3 contract): form 10-Q, fp = Q1/Q2/Q3, then pick by
+   duration: 3M ≈ 80–100 days (the default), 6M ≈ 170–190 days, 9M ≈ 260–280 days (year-to-date), and again
+   the row with the latest end date within the filing (10-Qs repeat the prior-year quarter). Balance-sheet
+   items are instants (duration null). Q4 is never derived (spec §4.2).
 5. Build the coverage matrix (metric × company × year). Close gaps only with concepts that mean the SAME thing
    (e.g. banks report "total net revenue": RevenuesNetOfInterestExpense; "cash and due from banks"). Some
    companies simply don't report a metric (banks and several pharma companies have no operating income): write
