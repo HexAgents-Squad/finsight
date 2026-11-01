@@ -1,0 +1,6 @@
+# Lightweight dependencies for CI and the evaluation tooling (eval/, tests/).
+# The full application dependencies live in requirements.txt (WP7); keep this file small so CI stays fast.
+pydantic>=2.6,<3
+pyyaml>=6.0
+pytest>=8.0
+ruff>=0.5

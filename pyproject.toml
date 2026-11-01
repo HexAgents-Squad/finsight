@@ -1,0 +1,20 @@
+[project]
+name = "finsight"
+version = "0.1.0"
+description = "Multi-agent copilot for SEC 10-K/10-Q filings with citations and verified calculations"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes, I: import order, B: bugbear, UP: modern syntax
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]   # long lines are allowed in data tables and messages; the formatter width is 110
