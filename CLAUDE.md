@@ -17,11 +17,11 @@ The commands and file paths below are the **planned** ones. Check that a file ex
 - Setup: Python 3.11/3.12 venv, `pip install -r requirements.txt`, copy `.env.example` to `.env`, then `ollama pull llama3.2:3b`.
 - LLM smoke test: `python scripts/smoke_llm.py`
 - Dev tools (exist): `pip install -r requirements-dev.txt` (pydantic, pyyaml, pytest, ruff); config in `pyproject.toml`.
-- Tests (exist): `pytest` (single test: `pytest tests/test_companies_config.py::test_name`). Tests must run offline in seconds, using synthetic fixtures in `tests/fixtures/` and a fake retriever.
+- Tests (exist): `pytest` (single test: `pytest tests/test_companies_config.py::test_name`). Tests must run offline in seconds, using synthetic fixtures (e.g. `tests/factories.py`) and, later, a fake retriever.
 - Lint (exists): `ruff check .`
 - Gold-set validation: `python eval/validate_gold.py` (add `--final` before freezing).
 - Pipeline: `ingest/01_download.py` → `02_parse_sections.py` → `03_chunk.py` → `04_index.py`. The Makefile will wrap these as `make ingest`, `make index`, `make eval` and `make up` (Docker Compose).
-- CI (exists): `.github/workflows/ci.yml` runs ruff and pytest on every pull request and on pushes to `main` (results in the PR's Checks tab); the data validators are added as their scripts land. Keep CI green before merging.
+- CI (exists): `.github/workflows/ci.yml` runs ruff, pytest and the data validators (`eval/validate_gold.py`, skipped until the gold set exists) on every pull request and on pushes to `main` (results in the PR's Checks tab). Add each new validator as a step. Keep CI green before merging.
 
 ## Architecture (planned)
 

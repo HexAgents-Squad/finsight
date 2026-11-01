@@ -443,7 +443,7 @@ Output: retrieval/chunking.py, bm25.py, dense.py, hybrid.py, ingest/03_chunk.py,
    small sentence-transformers model (e.g. BAAI/bge-small-en-v1.5) behind the same embed() function for now.
 4. Hybrid: Reciprocal Rank Fusion of the top 50 from BM25 and the top 50 from dense (score = Σ 1/(60+rank)).
 5. Evaluation (with Jegan): for every answerable gold question, a hit = a retrieved chunk with the same
-   ticker, fiscal year and Item as a gold source. Report recall@1/5/10 and MRR for BM25, dense and hybrid,
+   ticker, fiscal year, fiscal period and Item as a gold source (eval/retrieval_eval.py). Report recall@1/5/10 and MRR for BM25, dense and hybrid,
    both without filters and with company + year filters. For follow-up questions, prepend the previous
    question to the query. Write the table to eval/results/retrieval_summary.md.
 6. Timeline: build on the sample file from Sat 31 Oct, index the full corpus Wed 4 Nov, numbers Thu 5 Nov.
