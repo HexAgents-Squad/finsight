@@ -19,6 +19,11 @@ TICKER_PATTERN = re.compile(r"[A-Z]{1,5}")
 CIK_PATTERN = re.compile(r"\d{10}")                     # SEC CIK, zero-padded to 10 digits
 
 
+def alias_key(alias: str) -> str:
+    """Case- and whitespace-insensitive form, so "Apple", " apple " and "APPLE" collide."""
+    return " ".join(alias.split()).casefold()
+
+
 @pytest.fixture(scope="module")
 def config() -> dict:
     return yaml.safe_load(COMPANIES_FILE.read_text(encoding="utf-8"))
@@ -46,13 +51,16 @@ def test_every_company_has_valid_fields(config):
         assert c["name"].strip(), c
         assert 1 <= c["fiscal_year_end_month"] <= 12, c
         assert c["fiscal_year_end"].strip(), c
-        assert c["aliases"], f"{c['ticker']}: needs at least one alias"
+        aliases = c["aliases"]
+        assert isinstance(aliases, list) and aliases, f"{c['ticker']}: aliases must be a non-empty list"
+        assert all(isinstance(a, str) and a.strip() for a in aliases), (
+            f"{c['ticker']}: aliases must be non-empty strings, got {aliases}")
 
 
 def test_aliases_are_unambiguous(config):
     owner: dict[str, str] = {}
     for c in config["companies"]:
         for alias in [*c["aliases"], c["ticker"]]:
-            key = alias.lower()
+            key = alias_key(alias)
             assert owner.setdefault(key, c["ticker"]) == c["ticker"], (
                 f"alias '{alias}' used by both {owner[key]} and {c['ticker']}")
