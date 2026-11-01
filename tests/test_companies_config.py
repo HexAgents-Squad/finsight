@@ -15,6 +15,8 @@ SECTORS = {"tech", "financials", "healthcare", "consumer"}
 TENK_FISCAL_YEARS = [2023, 2024, 2025]
 TENQ_FISCAL_YEARS = [2025]
 TENQ_FISCAL_PERIODS = ["Q1", "Q2", "Q3"]
+TICKER_PATTERN = re.compile(r"[A-Z]{1,5}")
+CIK_PATTERN = re.compile(r"\d{10}")                     # SEC CIK, zero-padded to 10 digits
 
 
 @pytest.fixture(scope="module")
@@ -39,8 +41,8 @@ def test_twenty_unique_companies_in_four_sectors(config):
 
 def test_every_company_has_valid_fields(config):
     for c in config["companies"]:
-        assert re.fullmatch(r"[A-Z]{1,5}", c["ticker"]), c
-        assert re.fullmatch(r"\d{10}", c["cik"]), f"{c['ticker']}: CIK must be 10 digits, zero-padded"
+        assert TICKER_PATTERN.fullmatch(c["ticker"]), c
+        assert CIK_PATTERN.fullmatch(c["cik"]), f"{c['ticker']}: CIK must be 10 digits, zero-padded"
         assert c["name"].strip(), c
         assert 1 <= c["fiscal_year_end_month"] <= 12, c
         assert c["fiscal_year_end"].strip(), c
