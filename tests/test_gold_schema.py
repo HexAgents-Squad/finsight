@@ -120,3 +120,34 @@ def test_final_rules_counts_verification_coverage_and_traps():
     assert "refusal rules without a G question: ['R7']" in joined
     assert "'not reported' traps: 0" in joined
     assert errors_for(*items, final=False) == []                             # draft mode tolerates all four
+
+
+@pytest.mark.parametrize("overrides, expected", [
+    ({"must_refuse": "yes"}, "must_refuse"),                # strict types: strings are not bools/ints
+    ({"fiscal_years": ["2024"]}, "fiscal_years"),
+    ({"gold_value": True}, "gold_value"),
+    ({"gold_value": float("nan")}, "gold_value"),           # NaN/Infinity are not valid JSON numbers
+    ({"question": "            "}, "must not be blank"),
+    ({"written_by": "  "}, "must not be blank"),
+])
+def test_strict_types_and_blank_text_are_rejected(overrides, expected):
+    errors = errors_for(make("fact", **overrides))
+    assert any(expected in e for e in errors), errors
+
+
+def test_fiscal_years_must_be_in_the_corpus_and_unique():
+    assert any("fiscal_years [2019] outside the corpus" in e
+               for e in errors_for(make("fact", fiscal_years=[2024, 2019])))
+    assert any("fiscal_years contains duplicates" in e for e in errors_for(make("fact", fiscal_years=[2024, 2024])))
+
+
+def test_every_listed_company_needs_a_source():
+    d = make("multi_company")
+    errors = errors_for({**d, "gold_sources": d["gold_sources"][:1]})
+    assert any("no gold_source for compan(ies) ['GOOGL']" in e for e in errors), errors
+
+
+def test_follow_ups_may_share_question_text():
+    f1 = make("multi_turn", question="And what was it in fiscal 2023?")
+    f2 = {**f1, "id": "F02"}
+    assert not any("same question text" in e for e in errors_for(make("fact"), f1, f2))

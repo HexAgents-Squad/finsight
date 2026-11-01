@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPANIES_FILE = ROOT / "config" / "companies.yaml"
@@ -66,9 +66,12 @@ def corpus_scope(path: Path = COMPANIES_FILE) -> CorpusScope:
 
 
 # ----------------------------------------------------------------------------------------------- models
+STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+
 class GoldSource(BaseModel):
     """Where the evidence for an answer lives: one Item of one filing (used for recall@k)."""
-    model_config = ConfigDict(extra="forbid")
+    model_config = STRICT
 
     ticker: str
     form: Literal["10-K", "10-Q"]
@@ -83,7 +86,7 @@ class GoldSource(BaseModel):
 
 class GoldItem(BaseModel):
     """One gold question (docs/week0_plan.txt §2.4)."""
-    model_config = ConfigDict(extra="forbid")
+    model_config = STRICT
 
     id: str = Field(pattern=r"^[A-G]\d{2}$")
     category: Category
@@ -101,6 +104,13 @@ class GoldItem(BaseModel):
     written_by: str = Field(min_length=1)
     verified_by: str | None = None
     notes: str | None = None
+
+    @field_validator("question", "gold_answer", "written_by")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v
 
     @property
     def is_trap(self) -> bool:
@@ -187,6 +197,17 @@ def item_problems(item: GoldItem, scope: CorpusScope | None = None) -> list[str]
             out.append(f"companies not in config/companies.yaml: {unknown}")
         if len(set(item.companies)) != len(item.companies):
             out.append("companies contains duplicates")
+        corpus_years = scope.tenk_years | scope.tenq_years
+        outside = [y for y in item.fiscal_years if y not in corpus_years]
+        if outside:
+            out.append(f"fiscal_years {outside} outside the corpus {sorted(corpus_years)} (that is an R3 refusal)")
+        if len(set(item.fiscal_years)) != len(item.fiscal_years):
+            out.append("fiscal_years contains duplicates")
+        if item.gold_sources:
+            sourced = {s.ticker for s in item.gold_sources}
+            unsourced = [t for t in item.companies if t not in sourced]
+            if unsourced:
+                out.append(f"no gold_source for compan(ies) {unsourced}: every listed company needs one")
         for src in item.gold_sources:
             out.extend(source_problems(src, scope))
             if src.ticker not in item.companies:
@@ -230,6 +251,8 @@ def set_problems(items: list[GoldItem], final: bool = False) -> SetReport:
         rep.errors.append(f"duplicate id {dup}")
     questions: dict[str, str] = {}
     for i in items:
+        if i.category == "multi_turn":                   # follow-ups may share text ("And in fiscal 2023?")
+            continue
         key = _norm(i.question)
         if key in questions:
             rep.errors.append(f"{i.id}: same question text as {questions[key]}")

@@ -12,20 +12,22 @@ Cell formats:
     category      fact | ratio | period_comparison | multi_company | qualitative | multi_turn | refuse,
                   or the letter A–G, or "period comparison", "multi-company", "multi-turn", "refusal"
     companies     tickers separated by commas:            MSFT, GOOGL
-    fiscal_years  years separated by commas ("FY" ok):    2023, FY2024
-    gold_value    number; "$", "%" and thousands commas are ignored:   44.6   or   391,035
+    fiscal_years  4-digit years separated by commas ("FY" ok):    2023, FY2024
+    gold_value    number; "$", "%" and thousands commas are ignored:   44.6   or   391,035   or (1,200)
     gold_sources  one source per line or separated by ";", each "TICKER | FORM | YEAR | PERIOD | ITEM";
                   PERIOD may be omitted for a 10-K (FY):   MSFT | 10-K | 2024 | Item 8
                                                             AAPL | 10-Q | 2025 | Q2 | Part I Item 2
     must_refuse   TRUE/FALSE, yes/no, 1/0 (empty = FALSE)
 The output is written ONLY if every row passes the validator (eval/validate_gold.py rules), so the
 committed file is always valid. Rows are sorted by id for clean diffs.
+Exit codes: 0 = valid (written), 1 = problems in the sheet, 2 = file missing or not UTF-8.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -72,7 +74,7 @@ def parse_list(value: str) -> list[str]:
 
 def parse_year(value: str) -> int:
     v = value.strip().upper().removeprefix("FY").strip()
-    if not v.isdigit():
+    if not (v.isdigit() and len(v) == 4):              # "FY24" or "2,024" must not silently become 24
         raise CellError(f"'{value}' is not a year")
     return int(v)
 
@@ -80,13 +82,18 @@ def parse_year(value: str) -> int:
 def parse_number(value: str) -> float | None:
     if _blank(value):
         return None
-    v = value.strip().replace(",", "").replace("$", "").replace("%", "").strip()
+    v = value.strip().replace(",", "").replace("$", "").replace("%", "").replace("−", "-").strip()
     if v.startswith("(") and v.endswith(")"):           # accounting negative: (1,234) -> -1234
         v = "-" + v[1:-1]
+    if "e" in v.lower():                               # Excel exports narrow columns as 3.91E+05
+        raise CellError(f"'{value}' is in scientific notation; format the column as a plain number and export again")
     try:
-        return float(v)
+        number = float(v)
     except ValueError as err:
         raise CellError(f"'{value}' is not a number") from err
+    if not math.isfinite(number):
+        raise CellError(f"'{value}' is not a finite number")
+    return number
 
 
 def parse_bool(value: str) -> bool:
@@ -178,7 +185,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="validate only; do not write the output file")
     args = ap.parse_args(argv)
 
-    records, sheet_errors = read_sheet(args.csv_path)
+    try:
+        records, sheet_errors = read_sheet(args.csv_path)
+    except FileNotFoundError:
+        print(f"ERROR: {args.csv_path} not found", file=sys.stderr)
+        return 2
+    except UnicodeDecodeError:
+        print(f"ERROR: {args.csv_path} is not UTF-8; in Excel use 'CSV UTF-8', in Google Sheets "
+              "File > Download > CSV", file=sys.stderr)
+        return 2
     blocking = [e for e in sheet_errors if not e.startswith("unknown column")]
     for e in sheet_errors:
         print(("ERROR: " if e in blocking else "WARNING: ") + e)

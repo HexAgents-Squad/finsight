@@ -121,3 +121,24 @@ def test_parse_errors():
         parse_sources("AAPL | 10-Q | 2025 | Part I Item 2")
     assert parse_year(" fy2024 ") == 2024
     assert parse_bool("Yes") is True and parse_bool("") is False
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-Infinity", "3.91E+05"])
+def test_parse_number_rejects_non_finite_and_scientific(value):
+    with pytest.raises(CellError):
+        parse_number(value)
+
+
+def test_parse_number_accepts_unicode_minus_and_years_need_4_digits():
+    assert parse_number("−5.2") == -5.2
+    for bad in ("FY24", "24", "02024"):
+        with pytest.raises(CellError):
+            parse_year(bad)
+
+
+def test_missing_or_non_utf8_csv_exits_2(tmp_path, capsys):
+    assert main([str(tmp_path / "missing.csv"), "--dry-run"]) == 2
+    cp1252 = tmp_path / "excel.csv"
+    cp1252.write_bytes(",".join(HEADER).encode() + b"\nA01,fact,What were Apple\x92s net sales?\n")
+    assert main([str(cp1252), "--dry-run"]) == 2
+    assert "is not UTF-8" in capsys.readouterr().err
