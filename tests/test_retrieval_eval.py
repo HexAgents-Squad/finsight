@@ -92,3 +92,21 @@ def test_cli_end_to_end(tmp_path, capsys):
     bad_gold = tmp_path / "bad.jsonl"
     bad_gold.write_text(json.dumps(make("ratio", gold_value=None)) + "\n", encoding="utf-8")
     assert main(["--gold", str(bad_gold), "--runs", str(runs)]) == 1
+
+
+def test_read_runs_rejects_bad_json_and_duplicate_ids(tmp_path):
+    line = json.dumps({"id": "B01", "retrieved": []})
+    for name, text in (("json", "{not json\n"), ("dup", f"{line}\n{line}\n")):
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError, match="bad run record"):
+            read_runs(path)
+
+
+def test_quarter_must_match_for_a_10q_hit():
+    q2 = make("quarterly")
+    item = GoldItem.model_validate(q2)
+    src = q2["gold_sources"][0]
+    q1_chunk = hit_key({**src, "fiscal_period": "Q1"})
+    assert score_runs([item], {item.id: [q1_chunk]})["overall"]["recall@10"] == 0.0
+    assert score_runs([item], {item.id: [hit_key(src)]})["overall"]["recall@10"] == 1.0

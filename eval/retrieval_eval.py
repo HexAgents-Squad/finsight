@@ -9,7 +9,8 @@ Contract with WP5 (retrieval):
      (ranked best first; extra fields such as chunk_id or score are allowed and ignored)
   3. Score it:  python eval/retrieval_eval.py --runs eval/results/runs_c2_hybrid.jsonl [--out table.md]
 
-A retrieved chunk is a HIT for a gold source when (ticker, fiscal_year, fiscal_period, item) match.
+A retrieved chunk is a HIT for a gold source when (ticker, fiscal_year, fiscal_period, item) match
+(fiscal_period separates the 10-Q quarters, which share Item names; docs/decisions.md ADR-009).
 recall@k = share of the item's gold sources found in the top k (multi-company items have several);
 MRR = 1 / rank of the first hit (0 if none in the list). Refusal items (no gold sources) are skipped.
 """
@@ -92,10 +93,12 @@ def read_runs(path: Path) -> tuple[dict[str, list[SourceKey]], dict]:
     for n, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
         if not line.strip():
             continue
-        rec = json.loads(line)
         try:
+            rec = json.loads(line)
+            if rec["id"] in runs:
+                raise ValueError(f"duplicate id {rec['id']}")
             runs[rec["id"]] = [hit_key(r) for r in rec["retrieved"]]
-        except (KeyError, TypeError, ValueError) as err:
+        except (KeyError, TypeError, ValueError) as err:     # JSONDecodeError is a ValueError
             raise ValueError(f"{path}:{n}: bad run record ({err})") from err
         meta = {k: rec.get(k) for k in ("retriever", "filters")} if not meta else meta
     return runs, meta
@@ -125,7 +128,14 @@ def main(argv: list[str] | None = None) -> int:
     if not rep.ok:
         print(f"ERROR: gold set {args.gold} is invalid; run eval/validate_gold.py first", file=sys.stderr)
         return 1
-    runs, meta = read_runs(args.runs)
+    try:
+        runs, meta = read_runs(args.runs)
+    except (OSError, ValueError) as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+    unknown = sorted(set(runs) - {i.id for i in rep.items})
+    if unknown:
+        print(f"WARNING: run ids not in the gold set (ignored): {unknown}", file=sys.stderr)
     result = score_runs(rep.items, runs)
     table = to_markdown(result, meta)
     print(table)
