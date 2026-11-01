@@ -7,7 +7,14 @@ import pytest
 import yaml
 
 COMPANIES_FILE = Path(__file__).resolve().parents[1] / "config" / "companies.yaml"
+
+# The agreed corpus scope (spec §3, ADR-002). Changing any of these is a contract change: update the spec too.
+EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_COMPANY_COUNT = 20
 SECTORS = {"tech", "financials", "healthcare", "consumer"}
+TENK_FISCAL_YEARS = [2023, 2024, 2025]
+TENQ_FISCAL_YEARS = [2025]
+TENQ_FISCAL_PERIODS = ["Q1", "Q2", "Q3"]
 
 
 @pytest.fixture(scope="module")
@@ -16,17 +23,17 @@ def config() -> dict:
 
 
 def test_schema_version_and_forms(config):
-    assert config["schema_version"] == 2
-    assert config["forms"]["10-K"]["fiscal_years"] == [2023, 2024, 2025]
-    assert config["forms"]["10-Q"]["fiscal_years"] == [2025]
-    assert config["forms"]["10-Q"]["fiscal_periods"] == ["Q1", "Q2", "Q3"]
+    assert config["schema_version"] == EXPECTED_SCHEMA_VERSION
+    assert config["forms"]["10-K"]["fiscal_years"] == TENK_FISCAL_YEARS
+    assert config["forms"]["10-Q"]["fiscal_years"] == TENQ_FISCAL_YEARS
+    assert config["forms"]["10-Q"]["fiscal_periods"] == TENQ_FISCAL_PERIODS
 
 
 def test_twenty_unique_companies_in_four_sectors(config):
     companies = config["companies"]
     tickers = [c["ticker"] for c in companies]
-    assert len(companies) == 20
-    assert len(set(tickers)) == 20, f"duplicate tickers: {[t for t, n in Counter(tickers).items() if n > 1]}"
+    assert len(companies) == EXPECTED_COMPANY_COUNT
+    assert len(set(tickers)) == EXPECTED_COMPANY_COUNT, f"duplicate tickers: {[t for t, n in Counter(tickers).items() if n > 1]}"
     assert {c["sector"] for c in companies} == SECTORS
 
 
