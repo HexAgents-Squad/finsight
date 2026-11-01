@@ -41,3 +41,6 @@ jobs:
 
       - name: Validate gold set (draft rules; skipped until eval/gold_set.jsonl exists)
         run: python eval/validate_gold.py --allow-missing
+
+      - name: Validate refusal and prompt-injection test sets
+        run: python eval/validate_test_sets.py
