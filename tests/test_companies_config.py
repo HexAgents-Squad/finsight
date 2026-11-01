@@ -11,7 +11,7 @@ COMPANIES_FILE = Path(__file__).resolve().parents[1] / "config" / "companies.yam
 # The agreed corpus scope (spec §3, ADR-002). Changing any of these is a contract change: update the spec too.
 EXPECTED_SCHEMA_VERSION = 2
 EXPECTED_COMPANY_COUNT = 20
-SECTORS = {"tech", "financials", "healthcare", "consumer"}
+SECTOR_COUNTS = {"tech": 6, "financials": 5, "healthcare": 5, "consumer": 4}   # ADR-002
 TENK_FISCAL_YEARS = [2023, 2024, 2025]
 TENQ_FISCAL_YEARS = [2025]
 TENQ_FISCAL_PERIODS = ["Q1", "Q2", "Q3"]
@@ -31,12 +31,12 @@ def test_schema_version_and_forms(config):
     assert config["forms"]["10-Q"]["fiscal_periods"] == TENQ_FISCAL_PERIODS
 
 
-def test_twenty_unique_companies_in_four_sectors(config):
+def test_twenty_unique_companies_with_agreed_sector_split(config):
     companies = config["companies"]
     tickers = [c["ticker"] for c in companies]
     assert len(companies) == EXPECTED_COMPANY_COUNT
     assert len(set(tickers)) == EXPECTED_COMPANY_COUNT, f"duplicate tickers: {[t for t, n in Counter(tickers).items() if n > 1]}"
-    assert {c["sector"] for c in companies} == SECTORS
+    assert Counter(c["sector"] for c in companies) == SECTOR_COUNTS
 
 
 def test_every_company_has_valid_fields(config):
