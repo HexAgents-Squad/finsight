@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FinSight is an IIT Kharagpur capstone (Track B · API-side): a multi-agent copilot that answers questions about US companies' SEC 10-K/10-Q filings, with citations and verified calculations, running on a hosted ≤8B chat model plus an embeddings endpoint. Fine-tuning and larger models are not allowed. Quality has to come from retrieval, tools, orchestration and evaluation.
 
-**The repo is currently a skeleton.** The folders contain only `.gitkeep` files. No code, `requirements.txt`, Makefile or CI exists yet. The design lives in two documents. Read them before adding anything:
+**The repo is at an early stage.** It contains the scope file, the spec, the decision log, the CI workflow and the test/lint configuration; no application code, `requirements.txt` or Makefile exists yet. The design lives in two documents. Read them before adding anything:
 - [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt): full plan (spec, data, retrieval, agents, eval, responsible AI, deployment).
 - [docs/week0_plan.txt](docs/week0_plan.txt): Week 0 work packages (WP1–WP8), the interface contracts between them, and step-by-step how-tos.
 
@@ -16,11 +16,12 @@ The commands and file paths below are the **planned** ones. Check that a file ex
 
 - Setup: Python 3.11/3.12 venv, `pip install -r requirements.txt`, copy `.env.example` to `.env`, then `ollama pull llama3.2:3b`.
 - LLM smoke test: `python scripts/smoke_llm.py`
-- Tests: `pytest` (single test: `pytest tests/test_calculator.py::test_name`). Tests must run offline in seconds, using synthetic XBRL fixtures in `tests/fixtures/` and a fake retriever.
-- Lint: `ruff check .`
+- Dev tools (exist): `pip install -r requirements-dev.txt` (pydantic, pyyaml, pytest, ruff); config in `pyproject.toml`.
+- Tests (exist): `pytest` (single test: `pytest tests/test_companies_config.py::test_name`). Tests must run offline in seconds, using synthetic fixtures in `tests/fixtures/` and a fake retriever.
+- Lint (exists): `ruff check .`
 - Gold-set validation: `python eval/validate_gold.py` (add `--final` before freezing).
 - Pipeline: `ingest/01_download.py` → `02_parse_sections.py` → `03_chunk.py` → `04_index.py`. The Makefile will wrap these as `make ingest`, `make index`, `make eval` and `make up` (Docker Compose).
-- CI (planned): GitHub Actions runs ruff, pytest and the gold validator on every PR.
+- CI (exists): `.github/workflows/ci.yml` runs ruff and pytest on every pull request and on pushes to `main` (results in the PR's Checks tab); the data validators are added as their scripts land. Keep CI green before merging.
 
 ## Architecture (planned)
 
