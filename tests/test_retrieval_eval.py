@@ -110,3 +110,7 @@ def test_quarter_must_match_for_a_10q_hit():
     q1_chunk = hit_key({**src, "fiscal_period": "Q1"})
     assert score_runs([item], {item.id: [q1_chunk]})["overall"]["recall@10"] == 0.0
     assert score_runs([item], {item.id: [hit_key(src)]})["overall"]["recall@10"] == 1.0
+
+
+def test_hit_key_strips_every_part():
+    assert hit_key({"ticker": " msft ", "fiscal_year": "2024", "fiscal_period": " fy", "item": "Item  8"}) == MSFT

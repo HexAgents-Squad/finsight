@@ -27,6 +27,7 @@ from eval.schema import GoldItem  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH, safe_console, validate_file  # noqa: E402
 
 KS = (1, 5, 10)
+METRIC_DECIMALS = 3
 SourceKey = tuple[str, int, str, str]
 
 
@@ -41,8 +42,8 @@ def build_query(item: GoldItem, items_by_id: dict[str, GoldItem]) -> str:
 
 
 def hit_key(record: dict) -> SourceKey:
-    return (str(record["ticker"]).upper(), int(record["fiscal_year"]), str(record["fiscal_period"]).upper(),
-            " ".join(str(record["item"]).split()))
+    return (str(record["ticker"]).strip().upper(), int(record["fiscal_year"]),
+            str(record["fiscal_period"]).strip().upper(), " ".join(str(record["item"]).split()))
 
 
 def recall_at_k(retrieved: list[SourceKey], gold: list[SourceKey], k: int) -> float:
@@ -81,8 +82,8 @@ def score_runs(items: list[GoldItem], runs: dict[str, list[SourceKey]], ks: tupl
     return {
         "n": len(per_item),
         "missing": missing,
-        "overall": {m: round(mean(per_item, m), 3) for m in metrics},
-        "by_category": {c: {"n": len(rows), **{m: round(mean(rows, m), 3) for m in metrics}}
+        "overall": {m: round(mean(per_item, m), METRIC_DECIMALS) for m in metrics},
+        "by_category": {c: {"n": len(rows), **{m: round(mean(rows, m), METRIC_DECIMALS) for m in metrics}}
                         for c, rows in sorted(by_cat.items())},
         "per_item": per_item,
     }

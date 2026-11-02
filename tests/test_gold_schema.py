@@ -151,3 +151,9 @@ def test_follow_ups_may_share_question_text():
     f1 = make("multi_turn", question="And what was it in fiscal 2023?")
     f2 = {**f1, "id": "F02"}
     assert not any("same question text" in e for e in errors_for(make("fact"), f1, f2))
+
+
+def test_default_tolerance_is_shared_with_the_converter():
+    from eval.schema import DEFAULT_TOLERANCE_PCT, GoldItem
+    rec = {k: v for k, v in make("fact").items() if k != "tolerance_pct"}
+    assert GoldItem.model_validate(rec).tolerance_pct == DEFAULT_TOLERANCE_PCT

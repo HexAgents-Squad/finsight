@@ -33,10 +33,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from eval.schema import CATEGORY_LETTER  # noqa: E402
+from eval.schema import CATEGORY_LETTER, DEFAULT_TOLERANCE_PCT  # noqa: E402
 from eval.validate_gold import safe_console, summary, validate_records  # noqa: E402
 
 DEFAULT_OUT = Path(__file__).resolve().parent / "gold_set.jsonl"
+LIST_SEPARATORS = re.compile(r"[,;\n]")         # companies / fiscal_years cells
+SOURCE_SEPARATORS = re.compile(r"[;\n]")        # gold_sources cell: one source per line or ";"
+SOURCE_FIELDS = 5                                # TICKER | FORM | YEAR | PERIOD | ITEM
 REQUIRED = ("id", "category", "question", "gold_answer", "written_by")
 KNOWN = REQUIRED + ("companies", "fiscal_years", "gold_value", "unit", "tolerance_pct", "gold_sources",
                     "must_refuse", "refusal_rule", "previous_turn_id", "verified_by", "notes")
@@ -60,6 +63,11 @@ def _blank(value: str | None) -> bool:
     return value is None or not value.strip()
 
 
+def header_key(header: str) -> str:
+    """'Gold Answer', ' gold_answer ' and 'GOLD-ANSWER' all name the gold_answer column."""
+    return "_".join(header.replace("-", " ").replace("_", " ").split()).casefold()
+
+
 def parse_category(value: str) -> str:
     v = value.strip()
     if v.upper() in _LETTER_TO_CATEGORY:
@@ -69,7 +77,7 @@ def parse_category(value: str) -> str:
 
 
 def parse_list(value: str) -> list[str]:
-    return [p.strip() for p in re.split(r"[,;\n]", value or "") if p.strip()]
+    return [p.strip() for p in LIST_SEPARATORS.split(value or "") if p.strip()]
 
 
 def parse_year(value: str) -> int:
@@ -107,13 +115,13 @@ def parse_bool(value: str) -> bool:
 
 def parse_sources(value: str) -> list[dict]:
     sources = []
-    for entry in re.split(r"[;\n]", value or ""):
+    for entry in SOURCE_SEPARATORS.split(value or ""):
         if not entry.strip():
             continue
         parts = [p.strip() for p in entry.split("|")]
-        if len(parts) == 4 and parts[1].upper() == "10-K":
-            parts.insert(3, "FY")
-        if len(parts) != 5:
+        if len(parts) == SOURCE_FIELDS - 1 and parts[1].upper() == "10-K":
+            parts.insert(3, "FY")                         # a 10-K always covers the full fiscal year
+        if len(parts) != SOURCE_FIELDS:
             raise CellError(f"source '{entry.strip()}' must be 'TICKER | FORM | YEAR | PERIOD | ITEM' "
                             "(PERIOD may be omitted only for a 10-K)")
         ticker, form, year, period, item = parts
@@ -145,7 +153,7 @@ def row_to_record(row: dict[str, str]) -> dict:
         "notes": cell("notes") or None,
     }
     if rec["tolerance_pct"] is None:
-        rec["tolerance_pct"] = 1.0
+        rec["tolerance_pct"] = DEFAULT_TOLERANCE_PCT
     return {k: rec[k] for k in FIELD_ORDER}
 
 
@@ -154,7 +162,7 @@ def read_sheet(path: Path) -> tuple[list[tuple[int, dict]], list[str]]:
     errors: list[str] = []
     with path.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
-        headers = [h.strip().lower() for h in (reader.fieldnames or [])]
+        headers = [header_key(h) for h in (reader.fieldnames or [])]
         reader.fieldnames = headers
         missing = [c for c in REQUIRED if c not in headers]
         if missing:

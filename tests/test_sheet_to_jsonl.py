@@ -89,7 +89,7 @@ def test_unknown_columns_warn_but_do_not_block(tmp_path, capsys):
     header = HEADER + ["Reviewer comment"]
     rows = [r + (["looks fine"] if r[0] else [""]) for r in ROWS]
     assert main([str(write_csv(tmp_path / "s.csv", rows, header=header, bom=False)), "--dry-run"]) == 0
-    assert "WARNING: unknown column(s) ignored: ['reviewer comment']" in capsys.readouterr().out
+    assert "WARNING: unknown column(s) ignored: ['reviewer_comment']" in capsys.readouterr().out
 
 
 def test_row_with_content_but_no_id_gets_a_clear_message(tmp_path, capsys):
@@ -142,3 +142,9 @@ def test_missing_or_non_utf8_csv_exits_2(tmp_path, capsys):
     cp1252.write_bytes(",".join(HEADER).encode() + b"\nA01,fact,What were Apple\x92s net sales?\n")
     assert main([str(cp1252), "--dry-run"]) == 2
     assert "is not UTF-8" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("header", ["Gold Answer", " gold_answer ", "GOLD-ANSWER", "gold  answer"])
+def test_header_spellings_map_to_the_same_column(header):
+    from eval.sheet_to_jsonl import header_key
+    assert header_key(header) == "gold_answer"
