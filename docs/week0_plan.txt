@@ -174,8 +174,8 @@ Writing rules (summary):
    gold_answer "not reported").
 6. Verification: the verifier re-opens the filing, checks every number and source, then sets verified_by.
    Disagreements go to the group; nobody edits someone else's question silently.
-7. Collect in a shared Google Sheet first (easier for 6 people), then Jegan converts it to gold_set.jsonl
-   and runs the validator.
+7. Collect in a shared Google Sheet first (easier for 6 people), then Alok converts it to gold_set.jsonl
+   with eval/sheet_to_jsonl.py and runs eval/validate_gold.py.
 
 Freeze: Thu 5 Nov EOD → validator passes in --final mode → git tag gold-v1 → no edits afterwards (corrections
 only through a reviewed PR that bumps the version).
@@ -400,9 +400,12 @@ Output: data/xbrl/<TICKER>.json, config/concept_map.yaml, ingest/05_xbrl_facts.p
 WP4 – 80-question gold set  (everyone; coordinator Alok)
 --------------------------------------------------------
 Output: Google Sheet → eval/gold_set.jsonl (tag gold-v1)
-1. Sheet columns: id, category, question, companies, fiscal_years, gold_answer, gold_value, unit,
-   tolerance_pct, gold_sources (ticker | form | fiscal year | Item), must_refuse, previous_turn_id,
-   written_by, verified_by, notes. Use your ID range (e.g. Anirudh A01–A03, B01–B03 …; agree on Day 1).
+1. Sheet columns: import eval/gold_sheet_template.csv (id, category, question, companies, fiscal_years,
+   gold_answer, gold_value, unit, tolerance_pct, gold_sources, must_refuse, refusal_rule, previous_turn_id,
+   written_by, verified_by, notes). gold_sources = "TICKER | FORM | YEAR | PERIOD | Item", one per line,
+   e.g. "MSFT | 10-K | 2024 | FY | Item 8" or "AAPL | 10-Q | 2025 | Q2 | Part I Item 2". Cell formats are in
+   eval/README.md. Use your ID range (e.g. Anirudh A01–A03, B01–B03 …; agree on Day 1).
+   Check the sheet any time: export as CSV → python eval/sheet_to_jsonl.py sheet.csv --dry-run
 2. Find filings on SEC EDGAR: https://www.sec.gov/edgar/search/ (search the company, filter 10-K). Use only
    fiscal years 2023–2025 and the 20 companies.
 3. Numeric questions (A–D, F): copy figures from the financial statements (Item 8), keep units (most filings
@@ -412,13 +415,15 @@ Output: Google Sheet → eval/gold_set.jsonl (tag gold-v1)
    answer summarises it in 2–3 sentences; record the Item.
 5. Follow-up questions (F): put the first question's ID in previous_turn_id; the follow-up must only make
    sense with that context ("…and in fiscal 2023?").
-6. Refusal questions (G, Alok): one or more per refusal rule in the spec; leave gold_sources empty.
+6. G questions (Alok): at least one refusal per rule R1–R7 (must_refuse TRUE, refusal_rule set,
+   gold_sources empty) plus 2–3 "not reported" traps (must_refuse FALSE, gold_answer starts with
+   "not reported", no gold_value, gold_sources = the filing section that was checked).
 7. Good questions: mix years and companies; include at least 2 that compare companies with different
    fiscal-year ends; avoid anything that needs a 10-Q unless intended.
 8. Verification (Wed 4 Nov): the verifier re-opens the filing, re-checks every number and the Item, then
    writes their name in verified_by or leaves a comment. Disagreements are settled in the group chat;
    nobody silently edits someone else's question.
-9. Freeze (Thu 5 Nov): Jegan exports the sheet to gold_set.jsonl → validator --final passes → Alok tags
+9. Freeze (Thu 5 Nov): Alok exports the sheet to gold_set.jsonl → validator --final passes → Alok tags
    gold-v1. After that, no edits except through a reviewed PR that bumps the version.
 
 WP5 – BM25 + dense retrieval + recall@k  (Anirudh, backup Giridharan)
@@ -438,7 +443,7 @@ Output: retrieval/chunking.py, bm25.py, dense.py, hybrid.py, ingest/03_chunk.py,
    small sentence-transformers model (e.g. BAAI/bge-small-en-v1.5) behind the same embed() function for now.
 4. Hybrid: Reciprocal Rank Fusion of the top 50 from BM25 and the top 50 from dense (score = Σ 1/(60+rank)).
 5. Evaluation (with Jegan): for every answerable gold question, a hit = a retrieved chunk with the same
-   ticker, fiscal year and Item as a gold source. Report recall@1/5/10 and MRR for BM25, dense and hybrid,
+   ticker, fiscal year, fiscal period and Item as a gold source (eval/retrieval_eval.py). Report recall@1/5/10 and MRR for BM25, dense and hybrid,
    both without filters and with company + year filters. For follow-up questions, prepend the previous
    question to the query. Write the table to eval/results/retrieval_summary.md.
 6. Timeline: build on the sample file from Sat 31 Oct, index the full corpus Wed 4 Nov, numbers Thu 5 Nov.
