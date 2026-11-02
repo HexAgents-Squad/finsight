@@ -29,6 +29,9 @@ RefusalRule = Literal["R1", "R2", "R3", "R4", "R5", "R6", "R7"]
 REFUSAL_RULES: tuple[str, ...] = ("R1", "R2", "R3", "R4", "R5", "R6", "R7")
 FiscalPeriod = Literal["FY", "Q1", "Q2", "Q3"]
 NOT_REPORTED = "not reported"
+GOLD_ID_PATTERN = r"^[A-G]\d{2}$"                # category letter + 2 digits, e.g. "B07"
+MIN_QUESTION_CHARS = 10                         # catches placeholders like "tbd" or "?"
+DEFAULT_TOLERANCE_PCT = 1.0                     # week0 §2.4 example; a question can set its own
 
 # docs/spec.md §7 "Allowed unit values"
 ALLOWED_UNITS: frozenset[str] = frozenset({"USD", "USD thousands", "USD millions", "USD billions", "USD per share",
@@ -69,6 +72,13 @@ def corpus_scope(path: Path = COMPANIES_FILE) -> CorpusScope:
 STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
 
+def not_blank(v: str) -> str:
+    """Pydantic validator: min_length alone lets whitespace-only text through."""
+    if not v.strip():
+        raise ValueError("must not be blank")
+    return v
+
+
 class GoldSource(BaseModel):
     """Where the evidence for an answer lives: one Item of one filing (used for recall@k)."""
     model_config = STRICT
@@ -88,15 +98,15 @@ class GoldItem(BaseModel):
     """One gold question (docs/week0_plan.txt §2.4)."""
     model_config = STRICT
 
-    id: str = Field(pattern=r"^[A-G]\d{2}$")
+    id: str = Field(pattern=GOLD_ID_PATTERN)
     category: Category
-    question: str = Field(min_length=10)
+    question: str = Field(min_length=MIN_QUESTION_CHARS)
     companies: list[str] = []
     fiscal_years: list[int] = []
     gold_answer: str = Field(min_length=1)
     gold_value: float | None = None
     unit: str | None = None
-    tolerance_pct: float = Field(default=1.0, ge=0, le=100)
+    tolerance_pct: float = Field(default=DEFAULT_TOLERANCE_PCT, ge=0, le=100)
     gold_sources: list[GoldSource] = []
     must_refuse: bool = False
     refusal_rule: RefusalRule | None = None
@@ -105,12 +115,7 @@ class GoldItem(BaseModel):
     verified_by: str | None = None
     notes: str | None = None
 
-    @field_validator("question", "gold_answer", "written_by")
-    @classmethod
-    def _not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("must not be blank")
-        return v
+    _not_blank = field_validator("question", "gold_answer", "written_by")(not_blank)
 
     @property
     def is_trap(self) -> bool:
@@ -121,6 +126,13 @@ class GoldItem(BaseModel):
 # ----------------------------------------------------------------------------------------------- rules
 def _norm(name: str | None) -> str:
     return " ".join((name or "").split()).casefold()
+
+
+def two_person_problems(written_by: str, verified_by: str | None) -> list[str]:
+    """The verifier must be a different person (names compared ignoring case and spacing)."""
+    if verified_by and _norm(verified_by) == _norm(written_by):
+        return ["two-person rule: verified_by must be a different person than written_by"]
+    return []
 
 
 def source_problems(src: GoldSource, scope: CorpusScope) -> list[str]:
@@ -223,9 +235,7 @@ def item_problems(item: GoldItem, scope: CorpusScope | None = None) -> list[str]
     if item.category != "multi_turn" and item.previous_turn_id:
         out.append("only multi_turn (F) questions may set previous_turn_id")
 
-    # --- two-person rule
-    if item.verified_by and _norm(item.verified_by) == _norm(item.written_by):
-        out.append("two-person rule: verified_by must be a different person than written_by")
+    out.extend(two_person_problems(item.written_by, item.verified_by))
     return out
 
 
