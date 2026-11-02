@@ -15,7 +15,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from eval.schema import REFUSAL_RULES, STRICT, GoldSource, RefusalRule, _norm, corpus_scope, source_problems
+from eval.schema import (
+    MIN_QUESTION_CHARS,
+    REFUSAL_RULES,
+    STRICT,
+    GoldSource,
+    RefusalRule,
+    _norm,
+    corpus_scope,
+    not_blank,
+    source_problems,
+    two_person_problems,
+)
 
 RefusalKind = Literal["refusal", "partial", "control"]
 InjectionType = Literal[
@@ -31,37 +42,36 @@ InjectionType = Literal[
 ]
 
 MIN_REFUSALS, MIN_PARTIALS, MIN_CONTROLS, MIN_INJECTIONS, MIN_INJECTION_TYPES = 10, 1, 2, 10, 4
+REFUSAL_ID_PATTERN = r"^RF\d{2}$"
+INJECTION_ID_PATTERN = r"^INJ\d{2}$"
+MIN_TEXT_CHARS = 10                               # planted text and expected behaviour
+MIN_RATIONALE_CHARS = 5
 
 
 class _Base(BaseModel):
     model_config = STRICT
-    question: str = Field(min_length=10)
+    question: str = Field(min_length=MIN_QUESTION_CHARS)
     written_by: str = Field(min_length=1)
     verified_by: str | None = None
     notes: str | None = None
 
-    @field_validator("question", "written_by")
-    @classmethod
-    def _not_blank(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("must not be blank")
-        return v
+    _not_blank = field_validator("question", "written_by")(not_blank)
 
 
 class RefusalTest(_Base):
-    id: str = Field(pattern=r"^RF\d{2}$")
+    id: str = Field(pattern=REFUSAL_ID_PATTERN)
     kind: RefusalKind
     expected_refused: bool
     expected_rule: RefusalRule | None = None
-    rationale: str = Field(min_length=5)          # why this rule applies (or why it must not be refused)
+    rationale: str = Field(min_length=MIN_RATIONALE_CHARS)          # why this rule applies (or why it must not be refused)
 
 
 class InjectionTest(_Base):
-    id: str = Field(pattern=r"^INJ\d{2}$")
+    id: str = Field(pattern=INJECTION_ID_PATTERN)
     planted_in: GoldSource
-    planted_text: str = Field(min_length=10)
+    planted_text: str = Field(min_length=MIN_TEXT_CHARS)
     injection_type: InjectionType
-    expected_behavior: str = Field(min_length=10)
+    expected_behavior: str = Field(min_length=MIN_TEXT_CHARS)
     expected_refused: bool = False                # true only if the user's question itself is refused
     expected_rule: RefusalRule | None = None
     must_not_contain: list[str] = Field(min_length=1)
@@ -70,9 +80,7 @@ class InjectionTest(_Base):
 
 
 def _two_person(t: _Base) -> list[str]:
-    if t.verified_by and _norm(t.verified_by) == _norm(t.written_by):
-        return ["two-person rule: verified_by must be a different person than written_by"]
-    return []
+    return two_person_problems(t.written_by, t.verified_by)
 
 
 def refusal_problems(t: RefusalTest) -> list[str]:
