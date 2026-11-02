@@ -2,7 +2,7 @@
 FINSIGHT — CAPSTONE PROJECT PLAN (TRACK B · API-SIDE)
 ==============================================================================================================
 Team: HexAgents_Squad: Alok Srivastava (representative), Anirudh M K, Chandra Shekhar Pandey, Amresh Kumar,
-Giridharan Selvaraj, Jegan Raj
+Giridharan Selvaraj
 Mentor: Dr. Gunjan Balde (balde.gunjan0812@gmail.com).
 Programme: Executive PG Programme in Generative AI & Agentic AI, IIT Kharagpur
 Version 1.0 · 26 Oct 2026 · Prepared by Alok Srivastava (Team Representative)
@@ -536,7 +536,7 @@ Record format:
      "companies": ["MSFT"], "fiscal_years": [2024],
      "gold_answer": "<text from filing>", "gold_value": 0.0, "unit": "%", "tolerance_pct": 1.0,
      "gold_sources": [{"ticker": "MSFT", "form": "10-K", "fiscal_year": 2024, "item": "Item 8"}],
-     "must_refuse": false, "written_by": "Jegan", "verified_by": "Amresh"}
+     "must_refuse": false, "written_by": "Alok", "verified_by": "Amresh"}
 Process: each member writes ~14 questions from real filings, and a second member verifies every gold value
 against the filing (two-person rule). Freeze with a Git tag gold-v1. Never edit gold answers to improve
 scores.

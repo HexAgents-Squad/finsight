@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Version** | v0.2 (draft for team review), 30 Oct 2026 |
-| **Owner** | Alok Srivastava (WP1) · backup: Jegan Raj |
+| **Owner** | Alok Srivastava (WP1) · backup: Amresh Kumar |
 | **Review** | All members comment on the PR by **Mon 2 Nov** · v1 merged **Tue 3 Nov** |
 | **Change rule** | After v1, changes need team agreement and an entry in `docs/decisions.md` |
 
