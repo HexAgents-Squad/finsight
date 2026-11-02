@@ -13,10 +13,10 @@ Default assignment. Swap freely to match strengths, but every WP must have exact
 +-----+----------------------------------------+------------------------------+-----------------+------------+
 | WP  | What (plan item)                       | Owner                        | Backup          | Size       |
 +=====+========================================+==============================+=================+============+
-| WP1 | Specification + refusal policy +       | Alok                         | Jegan           | S          |
+| WP1 | Specification + refusal policy +       | Alok                         | Amresh          | S          |
 |     | answer format (item 1)                 |                              |                 |            |
 +-----+----------------------------------------+------------------------------+-----------------+------------+
-| WP2 | Corpus: download 10-K/10-Q for 20      | Chandra Shekhar              | Jegan           | L          |
+| WP2 | Corpus: download 10-K/10-Q for 20      | Chandra Shekhar              | Alok            | L          |
 |     | companies + split into Item-level      |                              |                 |            |
 |     | sections (item 2)                      |                              |                 |            |
 +-----+----------------------------------------+------------------------------+-----------------+------------+
@@ -39,14 +39,14 @@ Default assignment. Swap freely to match strengths, but every WP must have exact
 |     | (requirements, .env.example, README)   |                              |                 |            |
 |     | (item 7)                               |                              |                 |            |
 +-----+----------------------------------------+------------------------------+-----------------+------------+
-| WP8 | Eval tooling: gold-set validator,      | Jegan                        | Alok            | M          |
+| WP8 | Eval tooling: gold-set validator,      | Alok                         | Amresh          | M          |
 |     | recall@k harness shared with WP5,      |                              |                 |            |
 |     | refusal + prompt-injection test list   |                              |                 |            |
 |     | (supports items 1, 4, 5)               |                              |                 |            |
 +-----+----------------------------------------+------------------------------+-----------------+------------+
 
 Why this split: WP2 (parsing) is the biggest risk, so it gets a full owner plus a backup. Amresh takes WP3 and
-WP6 together because the fact-lookup tool is the XBRL work. Jegan's WP8 feeds WP1, WP4 and WP5, so evaluation
+WP6 together because the fact-lookup tool is the XBRL work. WP8 feeds WP1, WP4 and WP5, so evaluation
 is ready before any agent code.
 
 1.1 Task dependencies
@@ -72,7 +72,7 @@ No dependency (can start on Day 1): writing gold questions (uses the SEC website
 local model setup, the refusal and prompt-injection test lists.
 
 Critical path: WP2 download → WP2 parse → WP5 index → recall@k. A slip in WP2 delays the Week 0 numbers, so
-the 2-company sample on Sat 31 Oct is mandatory and the backup (Jegan) checks in with Chandra Shekhar daily.
+the 2-company sample on Sat 31 Oct is mandatory and the backup (Alok) checks in with Chandra Shekhar daily.
 
 2. How the pieces fit: agree these interfaces on Day 1
 ======================================================
@@ -141,8 +141,8 @@ Each person writes from real filings on SEC EDGAR, in the sector they own, so co
 | Writer     | Sector focus | A    | B     | C      | D multi- | E       | F multi-   | G      | Total | Verified   |
 |            |              | fact | ratio | period | co       | qualit. | turn       | refuse |       | by         |
 +============+==============+======+=======+========+==========+=========+============+========+=======+============+
-| Alok       | Mixed +      | –    | –     | –      | –        | –       | 3          | 10     | 13    | Anirudh    |
-|            | policy       |      |       |        |          |         |            |        |       |            |
+| Alok       | Cross-sector | 3    | 3     | 2      | 2        | 2       | 3          | 10     | 25    | Anirudh    |
+|            | + policy     |      |       |        |          |         |            |        |       |            |
 +------------+--------------+------+-------+--------+----------+---------+------------+--------+-------+------------+
 | Anirudh    | Big Tech     | 3    | 3     | 3      | 2        | 3       | –          | –      | 14    | Chandra    |
 |            |              |      |       |        |          |         |            |        |       | Shekhar    |
@@ -153,10 +153,8 @@ Each person writes from real filings on SEC EDGAR, in the sector they own, so co
 | Amresh     | Healthcare & | 3    | 3     | 2      | 2        | 2       | 1          | –      | 13    | Giridharan |
 |            | pharma       |      |       |        |          |         |            |        |       |            |
 +------------+--------------+------+-------+--------+----------+---------+------------+--------+-------+------------+
-| Giridharan | Consumer &   | 3    | 3     | 3      | 2        | 2       | 1          | –      | 14    | Jegan      |
+| Giridharan | Consumer &   | 3    | 3     | 3      | 2        | 2       | 1          | –      | 14    | Alok       |
 |            | retail       |      |       |        |          |         |            |        |       |            |
-+------------+--------------+------+-------+--------+----------+---------+------------+--------+-------+------------+
-| Jegan      | Cross-sector | 3    | 3     | 2      | 2        | 2       | –          | –      | 12    | Alok       |
 +------------+--------------+------+-------+--------+----------+---------+------------+--------+-------+------------+
 | Total      |              | 15   | 15    | 12     | 10       | 12      | 6          | 10     | 80    |            |
 +------------+--------------+------+-------+--------+----------+---------+------------+--------+-------+------------+
@@ -174,7 +172,7 @@ Writing rules (summary):
    gold_answer "not reported").
 6. Verification: the verifier re-opens the filing, checks every number and source, then sets verified_by.
    Disagreements go to the group; nobody edits someone else's question silently.
-7. Collect in a shared Google Sheet first (easier for 6 people), then Alok converts it to gold_set.jsonl
+7. Collect in a shared Google Sheet first (easier for 5 people), then Alok converts it to gold_set.jsonl
    with eval/sheet_to_jsonl.py and runs eval/validate_gold.py.
 
 Freeze: Thu 5 Nov EOD → validator passes in --final mode → git tag gold-v1 → no edits afterwards (corrections
@@ -204,7 +202,7 @@ only through a reviewed PR that bumps the version).
 |     |        | downloaded · WP5: BM25 + dense on sample                                                    |
 +-----+--------+---------------------------------------------------------------------------------------------+
 | Tue | 3 Nov  | All gold questions written (EOD) · WP2: all sections parsed + corpus stats (count must be   |
-|     |        | 500–2,000) · WP1: spec v1 incl. refusal policy (with Jegan's test list)                     |
+|     |        | 500–2,000) · WP1: spec v1 incl. refusal policy (with the WP8 test list)                     |
 +-----+--------+---------------------------------------------------------------------------------------------+
 | Wed | 4 Nov  | Cross-verification of gold questions (pairs in §3) · WP5: index full corpus · WP6:          |
 |     |        | compare_periods + search_filings wrapper on WP5                                             |
@@ -265,18 +263,18 @@ only through a reviewed PR that bumps the version).
 - Everyone must understand and be able to explain the code they own; we each present our part on 5 Dec.
 
 Jira tasks to create (owner / backup / due)
-1. WP1 – Spec and refusal policy (docs/spec.md)                         Alok / Jegan            Tue 3 Nov
-2. WP2 – Download SEC filings and split into Item sections              Chandra Shekhar / Jegan Tue 3 Nov
+1. WP1 – Spec and refusal policy (docs/spec.md)                         Alok / Amresh           Tue 3 Nov
+2. WP2 – Download SEC filings and split into Item sections              Chandra Shekhar / Alok  Tue 3 Nov
        sub-task: 2-company sample file in data/sample/                                          Sat 31 Oct
 3. WP3 – Cache XBRL facts + concept map                                 Amresh / Chandra Shekhar Fri 30 Oct
 4. WP4 – Gold set: 80 questions written, verified, frozen (gold-v1)     Alok (coordinator)      Thu 5 Nov
-       sub-tasks, one per writer: Anirudh 14, Chandra Shekhar 14, Amresh 13, Giridharan 14, Jegan 12,
-       Alok 13 (first 5 by Sat 31 Oct, all by Tue 3 Nov, verification Wed 4 Nov)
+       sub-tasks, one per writer: Anirudh 14, Chandra Shekhar 14, Amresh 13, Giridharan 14,
+       Alok 25 (first 5 by Sat 31 Oct, all by Tue 3 Nov, verification Wed 4 Nov)
 5. WP5 – BM25 + dense retrieval + recall@k                              Anirudh / Giridharan    Thu 5 Nov
 6. WP6 – Tools: calculator, financial facts, compare_periods,
          search_filings + unit tests                                    Amresh / Anirudh        Wed 4 Nov
 7. WP7 – Local model (Ollama) + OpenAI-compatible client + dev setup    Giridharan / Amresh     Fri 30 Oct
-8. WP8 – Eval tooling + refusal and prompt-injection test sets          Jegan / Alok            Thu 5 Nov
+8. WP8 – Eval tooling + refusal and prompt-injection test sets          Alok / Amresh           Thu 5 Nov
 9. Week 0 review call + mentor update                                   Alok                    Fri 6 Nov
 
 7. Risks this week
@@ -308,7 +306,7 @@ Jira tasks to create (owner / backup / due)
 8. How to do each task (step by step)
 =====================================
 
-WP1 – Specification + refusal policy  (Alok, backup Jegan)
+WP1 – Specification + refusal policy  (Alok, backup Amresh)
 ----------------------------------------------------------
 Output: config/companies.yaml, docs/spec.md
 1. Thu 29 Oct: commit config/companies.yaml: 20 tickers with sectors, 10-K fiscal years 2023–2025, and the
@@ -327,10 +325,10 @@ Output: config/companies.yaml, docs/spec.md
    - Answer format (JSON): answer, values, citations, calculations, verified, refused, notes
    - Limits (10 agent steps, token budget, timeout) and the human-in-the-loop disclaimer
    - Known data limitations (fill in from WP2/WP3 findings on Tue 3 Nov)
-3. Fri 30 Oct: v0.1 as a PR → everyone comments by Mon 2 Nov → v1 merged Tue 3 Nov (include Jegan's
+3. Fri 30 Oct: v0.1 as a PR → everyone comments by Mon 2 Nov → v1 merged Tue 3 Nov (include the WP8
    refusal test list).
 
-WP2 – Corpus: download + split into Item sections  (Chandra Shekhar, backup Jegan)
+WP2 – Corpus: download + split into Item sections  (Chandra Shekhar, backup Alok)
 ---------------------------------------------------------------------------------
 Output: ingest/01_download.py, ingest/02_parse_sections.py, data/raw/manifest.jsonl,
         data/sections/sections.jsonl, data/sections/parse_report.csv, data/sample/sections_sample.jsonl
@@ -442,7 +440,7 @@ Output: retrieval/chunking.py, bm25.py, dense.py, hybrid.py, ingest/03_chunk.py,
    Expect ~55–60k chunks: first measure chunks/second. If local Ollama embeddings would take hours, use a
    small sentence-transformers model (e.g. BAAI/bge-small-en-v1.5) behind the same embed() function for now.
 4. Hybrid: Reciprocal Rank Fusion of the top 50 from BM25 and the top 50 from dense (score = Σ 1/(60+rank)).
-5. Evaluation (with Jegan): for every answerable gold question, a hit = a retrieved chunk with the same
+5. Evaluation (with Alok): for every answerable gold question, a hit = a retrieved chunk with the same
    ticker, fiscal year, fiscal period and Item as a gold source (eval/retrieval_eval.py). Report recall@1/5/10 and MRR for BM25, dense and hybrid,
    both without filters and with company + year filters. For follow-up questions, prepend the previous
    question to the query. Write the table to eval/results/retrieval_summary.md.
@@ -486,7 +484,7 @@ Output: requirements.txt, .env.example, core/settings.py, core/llm.py, scripts/s
    stronger machine) and the smoke test by Fri 30 Oct.
 6. README: "Setup in 15 minutes" (clone, venv, pip install, copy .env.example, Ollama, smoke test, pytest).
 
-WP8 – Eval tooling + refusal and prompt-injection test sets  (Jegan, backup Alok)
+WP8 – Eval tooling + refusal and prompt-injection test sets  (Alok, backup Amresh)
 --------------------------------------------------------------------------------
 Output: eval/schema.py, eval/validate_gold.py, sheet→jsonl converter, eval/retrieval_eval.py (with Anirudh),
         eval/refusal_tests.jsonl, eval/injection_tests.jsonl, .github/workflows/ci.yml
