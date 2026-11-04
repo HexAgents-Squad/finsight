@@ -82,6 +82,12 @@ USER = [{"role": "user", "content": "Which company filed?"}]
     '```JSON\n{"ticker": "MSFT", "year": 2024}\n```',
     'Sure! Here it is:\n```\n{"ticker": "MSFT", "year": 2024}\n```\nAnything else?',
     'Here you go: {"ticker": "MSFT", "year": 2024} Hope that helps.',
+    # cases that broke the first version (code review on #6)
+    '{"ticker": "MSFT", "year": 2024, "note": "the filing quotes ```ls``` verbatim"}',
+    '```python\nx = {"a": 1}\n```\n```json\n{"ticker": "MSFT", "year": 2024}\n```',
+    'Use the {ticker} field. {"ticker": "MSFT", "year": 2024}',
+    '{"ticker": "MSFT", "year": 2024} (note: {x})',
+    '{"ticker": "MSFT", "year": 2024}\n{"ticker": "AAPL", "year": 2023}',
 ])
 def test_extract_json_finds_the_object(text):
     assert Filing.model_validate_json(extract_json(text)) == Filing(ticker="MSFT", year=2024)
@@ -231,3 +237,79 @@ def test_get_settings_is_read_once(monkeypatch):
         assert get_settings() is get_settings()
     finally:
         get_settings.cache_clear()
+
+
+# --- added after the code and output reviews on #6 -------------------------------------------------------
+
+def test_extract_json_returns_the_reply_when_nothing_decodes():
+    assert extract_json("  I cannot answer that.  ") == "I cannot answer that."
+
+
+def test_failed_requests_and_missing_usage_are_counted():
+    llm = client(status_error(openai.AuthenticationError, 401),
+                 SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))], usage=None))
+    with pytest.raises(FinSightError):
+        run(llm.chat(USER))
+    assert run(llm.chat(USER)) == "ok"
+    assert llm.usage.calls == 2 and llm.usage.total_tokens == 0 and llm.usage.seconds > 0
+
+
+def test_embedding_usage_and_reset():
+    llm = client(EMBED_BATCH_SIZE=2)
+    run(llm.embed(["a", "b", "c"]))
+    assert llm.usage.embed_calls == 2 and llm.usage.embed_seconds > 0
+    llm.usage.reset()
+    assert (llm.usage.embed_calls, llm.usage.calls, llm.usage.embed_seconds) == (0, 0, 0.0)
+
+
+class Closable:
+    def __init__(self):
+        self.closed = 0
+
+    async def close(self):
+        self.closed += 1
+
+
+def test_async_with_closes_each_http_client_once():
+    chat_client, embed_client = Closable(), Closable()
+
+    async def use():
+        async with LLMClient(settings(), chat_client=chat_client, embed_client=embed_client) as llm:
+            return llm
+
+    run(use())
+    assert (chat_client.closed, embed_client.closed) == (1, 1)
+    shared = Closable()
+    run(LLMClient(settings(), chat_client=shared, embed_client=shared).aclose())
+    assert shared.closed == 1
+
+
+def test_real_clients_close_cleanly_across_event_loops():
+    llm = LLMClient(settings())
+    run(llm.aclose())
+    assert llm.client.is_closed() and llm.embed_client.is_closed()
+
+
+@pytest.mark.parametrize("field", ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "SEC_USER_AGENT"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_required_settings_fail_in_settings_not_in_the_openai_client(field, value):
+    with pytest.raises(ValueError, match=field):
+        settings(**{field: value})
+
+
+@pytest.mark.parametrize("typed", ["Sentence-Transformers", " sentence-transformers ", "OPENAI"])
+def test_embed_backend_name_is_normalised(typed):
+    assert settings(EMBED_BACKEND=typed).EMBED_BACKEND == typed.strip().lower()
+
+
+def test_env_file_is_the_repo_root_whatever_the_working_directory():
+    from pathlib import Path
+
+    from core.settings import ENV_FILE
+    assert ENV_FILE.is_absolute() and ENV_FILE == Path(__file__).resolve().parents[1] / ".env"
+    assert Settings.model_config["env_file"] == ENV_FILE
+
+
+def test_blank_embeddings_endpoint_in_env_example_falls_back_to_chat_endpoint():
+    llm = LLMClient(settings(EMBED_BASE_URL="", EMBED_API_KEY=""))
+    assert str(llm.embed_client.base_url).startswith("http://llm.test/v1") and llm.embed_client.api_key == "key"

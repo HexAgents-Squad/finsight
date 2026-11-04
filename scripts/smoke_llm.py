@@ -46,7 +46,11 @@ async def main() -> int:
     embed_model = settings.EMBED_MODEL if settings.EMBED_BACKEND == "openai" else settings.EMBED_LOCAL_MODEL_NAME
     print(f"   Embeddings:   {settings.EMBED_BACKEND} ({embed_model})")
 
-    llm = LLMClient(settings)
+    async with LLMClient(settings) as llm:
+        return await run_checks(llm)
+
+
+async def run_checks(llm: LLMClient) -> int:
     try:
         print("\n[1/3] chat")
         t, tok = time.perf_counter(), llm.usage.total_tokens
@@ -55,9 +59,8 @@ async def main() -> int:
         step(llm, "chat", t, tok)
 
         print("\n[2/3] embed")
-        t = time.perf_counter()
         vectors = await llm.embed(["Apple Inc. fiscal 2024 10-K net sales.", "Microsoft fiscal 2024 revenue."])
-        print(f"   {len(vectors)} vectors, {len(vectors[0])} dimensions, {time.perf_counter() - t:.1f} s")
+        print(f"   {len(vectors)} vectors, {len(vectors[0])} dimensions, {llm.usage.embed_seconds:.1f} s")
 
         print("\n[3/3] chat_json")
         t, tok = time.perf_counter(), llm.usage.total_tokens
@@ -74,7 +77,8 @@ async def main() -> int:
 
     u = llm.usage
     print(f"\nOK: {u.calls} chat calls, {u.total_tokens} tokens "
-          f"({u.prompt_tokens} prompt + {u.completion_tokens} completion), {u.seconds:.1f} s in chat calls")
+          f"({u.prompt_tokens} prompt + {u.completion_tokens} completion), {u.seconds:.1f} s in chat calls; "
+          f"{u.embed_calls} embedding request(s), {u.embed_seconds:.1f} s")
     return 0
 
 
