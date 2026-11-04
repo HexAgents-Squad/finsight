@@ -7,9 +7,10 @@ from 8 Nov), so switching provider means editing `.env` only.
     chat_json(messages, Schema) -> Schema instance (extract JSON, validate, re-prompt with the error)
     embed(texts) -> one vector per text (OpenAI-compatible endpoint or local sentence-transformers)
 
-All three are async; from synchronous code (e.g. an indexing script) use `asyncio.run(client.embed(texts))`.
-Every chat call adds to `client.usage` (calls, tokens, JSON retries, seconds), so the agent can enforce
-MAX_TOKENS_PER_QUERY and the evaluation can report cost and latency.
+All three are async. Use the client as `async with LLMClient(settings) as llm:` (or call `await llm.aclose()`)
+so its HTTP connections close before the event loop ends. Every call adds to `client.usage` (chat calls,
+tokens, JSON retries, seconds; embedding requests and seconds), so the agent can enforce MAX_TOKENS_PER_QUERY
+and the evaluation can report cost and latency.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any, TypeVar
 
 import openai
@@ -37,38 +38,56 @@ JSON_SYSTEM_PROMPT = (
     "You are a precise data extraction engine. You must ALWAYS and ONLY return valid JSON "
     "matching the requested schema. Do not include conversational filler, greetings, or explanations."
 )
-CODE_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
-JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+CODE_FENCE = re.compile(r"```[A-Za-z]*\s*(.*?)```", re.DOTALL)     # any language tag, e.g. ```json
+OBJECT_START = re.compile(r"\{")
 MAX_ERROR_CHARS = 2_000          # validation errors sent back to the model are cut to this length
 
 
 @dataclass
 class Usage:
-    """Running totals for one client (create one client per query, or call reset())."""
+    """Running totals for one client (create one client per query, or call reset()). Failed requests count
+    too: they cost time, and the agent's budget has to see them."""
 
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     json_retries: int = 0
     seconds: float = 0.0
+    embed_calls: int = 0
+    embed_seconds: float = 0.0
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
     def reset(self) -> None:
-        self.calls = self.prompt_tokens = self.completion_tokens = self.json_retries = 0
-        self.seconds = 0.0
+        for f in fields(self):
+            setattr(self, f.name, f.default)
+
+
+def _is_object(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), dict)
+    except ValueError:
+        return False
 
 
 def extract_json(reply: str) -> str:
-    """The JSON object in a model reply: the inside of a ``` fence if there is one, else the outermost {...}."""
-    fence = CODE_FENCE.search(reply)
-    text = (fence.group(1) if fence else reply).strip()
-    if not (text.startswith("{") and text.endswith("}")):
-        found = JSON_OBJECT.search(text)
-        if found:
-            text = found.group(0)
+    """The JSON object in a model reply, tried in this order: the whole reply, each ``` fence, then the first
+    position where a complete JSON object decodes (so braces in prose and backticks inside JSON strings do not
+    break it). If nothing decodes, the stripped reply is returned so validation reports the real error."""
+    text = reply.strip()
+    for candidate in [text, *(m.group(1).strip() for m in CODE_FENCE.finditer(reply))]:
+        if _is_object(candidate):
+            return candidate
+    decoder = json.JSONDecoder()
+    for start in OBJECT_START.finditer(reply):
+        try:
+            obj, end = decoder.raw_decode(reply, start.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            return reply[start.start():end]
     return text
 
 
@@ -119,6 +138,20 @@ class LLMClient(AbstractLLMClient):
         self._st_model: Any = None
         self._st_lock = asyncio.Lock()
 
+    async def aclose(self) -> None:
+        """Close the HTTP connections. Call it (or use `async with LLMClient(...)`) before the event loop
+        ends, otherwise pooled connections fail later with 'Event loop is closed' (seen on Windows)."""
+        for client in {id(c): c for c in (self.client, self.embed_client)}.values():
+            close = getattr(client, "close", None)
+            if close is not None:
+                await close()
+
+    async def __aenter__(self) -> LLMClient:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
     async def chat(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None) -> str:
         """One completion for a message list (system, previous turns, tool results, user)."""
         target_model = model or self.settings.LLM_MODEL
@@ -130,8 +163,8 @@ class LLMClient(AbstractLLMClient):
         except openai.APIError as err:
             raise _api_error(err, target_model) from err
         finally:
+            self.usage.calls += 1
             self.usage.seconds += time.perf_counter() - start
-        self.usage.calls += 1
         if response.usage:
             self.usage.prompt_tokens += response.usage.prompt_tokens or 0
             self.usage.completion_tokens += response.usage.completion_tokens or 0
@@ -172,12 +205,19 @@ class LLMClient(AbstractLLMClient):
             raise TypeError("embed() takes a list of texts; wrap a single text as [text]")
         if not texts:
             return []
-        if self.settings.EMBED_BACKEND == "sentence-transformers":
-            return await self._embed_local(texts)
+        start = time.perf_counter()
+        try:
+            if self.settings.EMBED_BACKEND == "sentence-transformers":
+                return await self._embed_local(texts)
+            return await self._embed_remote(texts)
+        finally:
+            self.usage.embed_seconds += time.perf_counter() - start
 
+    async def _embed_remote(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
         size = self.settings.EMBED_BATCH_SIZE
         for i in range(0, len(texts), size):
+            self.usage.embed_calls += 1
             try:
                 response = await self.embed_client.embeddings.create(
                     model=self.settings.EMBED_MODEL, input=texts[i:i + size]
@@ -188,13 +228,16 @@ class LLMClient(AbstractLLMClient):
         return vectors
 
     async def _embed_local(self, texts: list[str]) -> list[list[float]]:
-        async with self._st_lock:                        # load the model once, off the event loop
+        # One model, loaded once off the event loop; encodes run one at a time (CPU-bound, and parallel
+        # encodes on the same model would only multiply memory).
+        async with self._st_lock:
             if self._st_model is None:
                 from sentence_transformers import SentenceTransformer
                 self._st_model = await asyncio.to_thread(SentenceTransformer, self.settings.EMBED_LOCAL_MODEL_NAME)
-        vectors = await asyncio.to_thread(
-            self._st_model.encode, texts, batch_size=self.settings.EMBED_BATCH_SIZE
-        )
+            self.usage.embed_calls += 1
+            vectors = await asyncio.to_thread(
+                self._st_model.encode, texts, batch_size=self.settings.EMBED_BATCH_SIZE
+            )
         return vectors.tolist()
 
     @staticmethod
