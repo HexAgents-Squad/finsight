@@ -8,6 +8,9 @@ Mentor: Dr. Gunjan Balde
 
 The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt). What FinSight answers, refuses and returns is defined in [docs/spec.md](docs/spec.md); the corpus scope is [config/companies.yaml](config/companies.yaml).
 
+## Setup in 15 minutes
+Python 3.11/3.12 venv → `pip install -r requirements.txt` → install Ollama and pull `llama3.2:3b` + `nomic-embed-text` → copy `.env.example` to `.env` → `python scripts/smoke_llm.py` → `pytest -q`. Step by step: [LOCAL_SETUP.md](LOCAL_SETUP.md).
+
 ## Folder structure
 ```
 config/        companies.yaml (corpus scope), concept_map.yaml (metric → XBRL tags)

@@ -1,75 +1,82 @@
-import sys
+"""Smoke test for core/llm.py against the endpoint in .env: one chat call, one embedding batch and one
+JSON call, with tokens and seconds for each. Run: python scripts/smoke_llm.py   (exit 0 = all passed)
+"""
+from __future__ import annotations
+
 import asyncio
 import logging
+import sys
+import time
 from pathlib import Path
 
-# Add project root to python execution path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pydantic import BaseModel, Field
-from core.config import get_settings
-from core.llm import LLMClient
-from core.exceptions import FinSightError
+from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
-# Configure standard structured execution logs
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+from core.exceptions import FinSightError  # noqa: E402
+from core.llm import LLMClient  # noqa: E402
+from core.settings import get_settings  # noqa: E402
+
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
 
 class FilingExtractTest(BaseModel):
     ticker: str = Field(..., description="Stock ticker symbol")
     year: int = Field(..., description="Reporting fiscal year")
     summary: str = Field(..., description="One-sentence financial summary")
 
-async def main() -> None:
-    print("🚀 Initializing FinSight WP7 Enterprise Smoke Test...")
-    
+
+def step(llm: LLMClient, label: str, started: float, tokens_before: int) -> None:
+    print(f"   {label}: {time.perf_counter() - started:.1f} s, {llm.usage.total_tokens - tokens_before} tokens")
+
+
+async def main() -> int:
+    # Windows consoles default to cp1252; never crash on a character the console cannot show
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+    print("FinSight WP7 smoke test")
     try:
         settings = get_settings()
-        print(f"✅ Configuration loaded successfully:")
-        print(f"   • LLM Endpoint: {settings.LLM_BASE_URL} ({settings.LLM_MODEL})")
-        print(f"   • Embedding Backend: {settings.EMBED_BACKEND}")
-        if settings.EMBED_BACKEND.lower() == "sentence-transformers":
-            print(f"   • Local Embedding Model: {settings.EMBED_LOCAL_MODEL_NAME}")
-        else:
-            print(f"   • API Embedding Model: {settings.EMBED_MODEL}")
-        print(f"   • SEC User-Agent: {settings.SEC_USER_AGENT}")
-    except Exception as e:
-        print(f"❌ Configuration validation failed: {e}")
-        sys.exit(1)
+    except ValidationError as err:
+        print(f"FAILED: settings are incomplete. Copy .env.example to .env and fill it in.\n{err}")
+        return 1
+    print(f"   LLM endpoint: {settings.LLM_BASE_URL} ({settings.LLM_MODEL})")
+    embed_model = settings.EMBED_MODEL if settings.EMBED_BACKEND == "openai" else settings.EMBED_LOCAL_MODEL_NAME
+    print(f"   Embeddings:   {settings.EMBED_BACKEND} ({embed_model})")
 
-    # Dependency Injection: Injecting settings into LLMClient
-    llm = LLMClient(settings=settings)
-
+    llm = LLMClient(settings)
     try:
-        # 1. Test Async Chat
-        print("\n[1/3] Testing async chat completion...")
-        reply = await llm.chat(prompt="Respond with 'OPERATIONAL' if you are online.")
-        print(f"✅ Chat Response: {reply}")
+        print("\n[1/3] chat")
+        t, tok = time.perf_counter(), llm.usage.total_tokens
+        reply = await llm.chat([{"role": "user", "content": "Reply with the single word OPERATIONAL."}])
+        print(f"   reply: {reply}")
+        step(llm, "chat", t, tok)
 
-        # 2. Test Dual-Backend Embeddings
-        print(f"\n[2/3] Testing embedding generation (Backend: {settings.EMBED_BACKEND})...")
-        vector = await llm.embed(text="Apple Inc. Q4 2023 10-K filing net sales analysis.")
-        print(f"✅ Embedding generated successfully. Dimensions: {len(vector)}")
+        print("\n[2/3] embed")
+        t = time.perf_counter()
+        vectors = await llm.embed(["Apple Inc. fiscal 2024 10-K net sales.", "Microsoft fiscal 2024 revenue."])
+        print(f"   {len(vectors)} vectors, {len(vectors[0])} dimensions, {time.perf_counter() - t:.1f} s")
 
-        # 3. Test Structured chat_json with Metrics & Self-Correction
-        print("\n[3/3] Testing chat_json with validation, retries & metrics...")
-        messages = [{"role": "user", "content": "Extract details: Microsoft Corporation filed its FY2023 annual report."}]
-        result = await llm.chat_json(messages=messages, response_model=FilingExtractTest)
-        
-        print(f"✅ Structured Output Validated:")
-        print(result["data"].model_dump_json(indent=2))
-        print(f"📊 Execution Metrics: {result['metadata']}")
+        print("\n[3/3] chat_json")
+        t, tok = time.perf_counter(), llm.usage.total_tokens
+        result = await llm.chat_json(
+            [{"role": "user", "content": "Extract details: Microsoft Corporation filed its FY2023 annual report."}],
+            FilingExtractTest,
+        )
+        print(f"   {result.model_dump_json()}")
+        step(llm, "chat_json", t, tok)
+        print(f"   JSON retries: {llm.usage.json_retries}")
+    except FinSightError as err:
+        print(f"\nFAILED [{err.error_type}]: {err.message}")
+        return 1
 
-        print("\n🎉 All WP7 enterprise smoke tests passed successfully!")
+    u = llm.usage
+    print(f"\nOK: {u.calls} chat calls, {u.total_tokens} tokens "
+          f"({u.prompt_tokens} prompt + {u.completion_tokens} completion), {u.seconds:.1f} s in chat calls")
+    return 0
 
-    except FinSightError as fe:
-        print(f"\n❌ FinSight Error [{fe.error_type}]: {fe.message}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Unexpected Error: {e}")
-        sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

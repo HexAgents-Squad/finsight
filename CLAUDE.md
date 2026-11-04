@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FinSight is an IIT Kharagpur capstone (Track B · API-side): a multi-agent copilot that answers questions about US companies' SEC 10-K/10-Q filings, with citations and verified calculations, running on a hosted ≤8B chat model plus an embeddings endpoint. Fine-tuning and larger models are not allowed. Quality has to come from retrieval, tools, orchestration and evaluation.
 
-**The repo is at an early stage.** It contains the scope file, the spec, the decision log, the CI workflow and the test/lint configuration; no application code, `requirements.txt` or Makefile exists yet. The design lives in two documents. Read them before adding anything:
+**The repo is at an early stage.** It contains the scope file, the spec, the decision log, the CI workflow, the test/lint configuration, the evaluation tooling (`eval/`) and the LLM client (`core/`); no agent, retrieval or ingest code or Makefile exists yet. The design lives in two documents. Read them before adding anything:
 - [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt): full plan (spec, data, retrieval, agents, eval, responsible AI, deployment).
 - [docs/week0_plan.txt](docs/week0_plan.txt): Week 0 work packages (WP1–WP8), the interface contracts between them, and step-by-step how-tos.
 
@@ -14,9 +14,9 @@ The commands and file paths below are the **planned** ones. Check that a file ex
 
 ## Planned commands
 
-- Setup: Python 3.11/3.12 venv, `pip install -r requirements.txt`, copy `.env.example` to `.env`, then `ollama pull llama3.2:3b`.
+- Setup (exists, see `LOCAL_SETUP.md`): Python 3.11/3.12 venv, `pip install -r requirements.txt`, copy `.env.example` to `.env`, then `ollama pull llama3.2:3b` and `ollama pull nomic-embed-text`.
 - LLM smoke test: `python scripts/smoke_llm.py`
-- Dev tools (exist): `pip install -r requirements-dev.txt` (pydantic, pyyaml, pytest, ruff); config in `pyproject.toml`.
+- Dev tools (exist): `pip install -r requirements-dev.txt` (pydantic, pyyaml, openai, pydantic-settings, pytest, ruff); config in `pyproject.toml`.
 - Tests (exist): `pytest` (single test: `pytest tests/test_companies_config.py::test_name`). Tests must run offline in seconds, using synthetic fixtures (e.g. `tests/factories.py`) and, later, a fake retriever.
 - Lint (exists): `ruff check .`
 - Gold-set validation: `python eval/validate_gold.py` (add `--final` before freezing). Safety test sets: `python eval/validate_test_sets.py`.
@@ -29,7 +29,7 @@ The commands and file paths below are the **planned** ones. Check that a file ex
 Streamlit UI → FastAPI /ask (rate limit + cache) → LangGraph app
   Planner → [Research agent (search_filings) + Data agent (get_financial_fact) + Analyst (calculate, writes answer)] → Critic → answer contract JSON
 ```
-- **core/llm.py** is the only LLM access point: `chat()`, `chat_json(messages, PydanticSchema)` (validate, then re-prompt with the error, at most 2 retries, counting retries, tokens and latency), and `embed()` (OpenAI-compatible endpoint or local sentence-transformers). It is configured only through `.env`: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBED_*`, `SEC_USER_AGENT`, `MAX_AGENT_STEPS`, `MAX_TOKENS_PER_QUERY`. Ollama stands in until the official endpoint keys arrive on 8 Nov. Switching to the endpoint must mean editing `.env` only, so always use the `openai` client and never a provider-specific SDK.
+- **core/llm.py** (exists) is the only LLM access point, async: `chat(messages)`, `chat_json(messages, PydanticSchema)` → validated object (validate, then re-prompt with the error, at most `LLM_JSON_RETRIES`=2 retries), and `embed(texts)` → one vector per text (OpenAI-compatible endpoint or local sentence-transformers). Calls, tokens, JSON retries and seconds accumulate in `client.usage`. Settings come from `core/settings.py` (`get_settings()`), configured only through `.env`: `LLM_*`, `EMBED_*`, `SEC_USER_AGENT`, `MAX_AGENT_STEPS`, `MAX_TOKENS_PER_QUERY`. Ollama stands in until the official endpoint keys arrive on 8 Nov. Switching to the endpoint must mean editing `.env` only, so always use the `openai` client and never a provider-specific SDK.
 - **Retrieval**: BM25 (rank_bm25) plus dense (Chroma, cosine), fused with RRF (`Σ 1/(60+rank)`, top 50 from each), then a cross-encoder rerank of the top 20–30 down to 5. Metadata filters (ticker, fiscal_year, form, item) are the biggest accuracy win. There are three chunking variants, C1 fixed, C2 section-aware and C3 table-aware, and all three are kept for comparison. Each indexed chunk text starts with a context header such as `[AAPL 10-K FY2024 · Item 7 · MD&A]`. Chunk IDs are deterministic (doc_id + variant + number). Indexing is idempotent: delete and recreate the collection rather than appending.
 - **Tools** (signatures fixed in week0_plan §2.3): `search_filings`, `get_financial_fact`, `calculate`, `compare_periods`. Tools return structured error or "not found" results and never raise into the agent, so the planner can replan. `calculate` accepts only whitelisted operations (ratio, percent, growth, difference, sum, cagr) and never `eval()`s model text.
 - **Agent robustness**: every control-flow LLM output is Pydantic-validated JSON. There is a hard cap of 10 steps per query, repeated identical tool calls are detected, and each query has a token budget (~12k) and a 60 s timeout. The Critic checks that every number appears in a tool result or a cited chunk, recomputes every calculation, checks that company and year match the question, and enforces the refusal policy. On failure it sends the answer back once, then the system answers "could not verify".
