@@ -28,6 +28,7 @@ TIMEOUT_S = 60
 MAX_ATTEMPTS = 4
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 BACKOFF_BASE_S = 2.0               # waits 2, 4, 8 s between attempts
+MAX_RETRY_AFTER_S = 60.0           # never wait longer than this, whatever Retry-After says
 PLACEHOLDER_CONTACT = "example.com"
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")
 
@@ -101,17 +102,29 @@ class SecClient:
                 self._sleep(wait)
             self._last_request = self._clock()
             self.requests += 1
-            response = self.session.get(url, timeout=TIMEOUT_S)
+            try:
+                response = self.session.get(url, timeout=TIMEOUT_S)
+            except requests.RequestException:        # connection reset, timeout, truncated body
+                if attempt == MAX_ATTEMPTS:
+                    raise
+                self._sleep(BACKOFF_BASE_S ** attempt)
+                continue
             if response.status_code == 200:
                 return response
             if response.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS:
-                self._sleep(BACKOFF_BASE_S ** attempt)
+                self._sleep(retry_after(response) or BACKOFF_BASE_S ** attempt)
                 continue
             response.raise_for_status()
         raise RuntimeError(f"unreachable: {url}")
 
     def json(self, url: str) -> Any:
         return self.get(url).json()
+
+
+def retry_after(response: Any) -> float | None:
+    """Seconds the server asked us to wait (Retry-After header in seconds), capped; None if absent."""
+    value = (getattr(response, "headers", None) or {}).get("Retry-After", "")
+    return min(float(value), MAX_RETRY_AFTER_S) if str(value).strip().isdigit() else None
 
 
 def submissions_url(cik: str) -> str:

@@ -184,3 +184,75 @@ def test_client_retries_429_and_5xx_then_gives_up_on_others():
     with pytest.raises(RuntimeError, match="404"):
         client.get("u")
     assert client.requests == 1
+
+
+# --- added after code review -----------------------------------------------------------------------------
+
+class FlakySession(FakeSession):
+    """Raises a network error on the first call, then answers normally."""
+
+    def __init__(self, error, *statuses):
+        super().__init__(*statuses)
+        self.error = error
+
+    def get(self, url, timeout):
+        if self.error:
+            error, self.error = self.error, None
+            raise error
+        return super().get(url, timeout)
+
+
+def test_network_errors_are_retried():
+    import requests
+    clock = FakeClock()
+    client = SecClient("Team you@x.org", session=FlakySession(requests.ConnectionError("reset"), 200),
+                       sleep=clock.sleep, clock=clock.time)
+    assert client.get("u").status_code == 200 and client.requests == 2
+
+
+def test_retry_after_header_is_honoured_and_capped():
+    from ingest.edgar import MAX_RETRY_AFTER_S, retry_after
+    assert retry_after(SimpleNamespace(headers={"Retry-After": "7"})) == 7.0
+    assert retry_after(SimpleNamespace(headers={"Retry-After": "9999"})) == MAX_RETRY_AFTER_S
+    assert retry_after(SimpleNamespace(headers={})) is None
+
+
+def load_download_script():
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "ingest" / "01_download.py"
+    spec = importlib.util.spec_from_file_location("download_script", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_manifest_merge_keeps_other_tickers_and_writes_lf(tmp_path):
+    script = load_download_script()
+    manifest = tmp_path / "manifest.jsonl"
+    rec = {"form": "10-K", "fiscal_year": 2024, "fiscal_period": "FY"}
+    script.write_manifest([{**rec, "ticker": "AAPL"}, {**rec, "ticker": "JPM"}], {"AAPL", "JPM"}, manifest)
+    assert script.write_manifest([{**rec, "ticker": "AAPL", "new": True}], {"AAPL"}, manifest) == 2
+    lines = manifest.read_bytes().split(b"\n")
+    assert b"\r" not in manifest.read_bytes() and b'"new": true' in lines[0] and b"JPM" in lines[1]
+
+
+def test_missing_filing_triggers_one_facts_refresh(tmp_path, monkeypatch):
+    import json
+    script = load_download_script()
+    monkeypatch.setattr(script, "XBRL_DIR", tmp_path)
+    stale = facts(("K23", 2023, "FY"))                      # cached before the 2024 10-K was filed
+    fresh = facts(("K23", 2023, "FY"), ("K24", 2024, "FY"))
+    (tmp_path / "AAPL.json").write_text(json.dumps(stale))
+    fetched = []
+
+    def fake_download(client, url, path, refresh=False):
+        fetched.append(refresh)
+        if refresh:
+            path.write_text(json.dumps(fresh))
+    monkeypatch.setattr(script, "download", fake_download)
+    rows = filing_rows({"filings": {"recent": page(("K24", "10-K", "2024-09-28", "2024-11-01", "k.htm"),
+                                                   ("K23", "10-K", "2023-09-30", "2023-11-03", "k.htm"))}}, [])
+    selection = script.select_with_fresh_labels(None, APPLE, rows, SCOPE, refresh=False)
+    assert fetched == [False, True]
+    assert {f.accession_no for f in selection.filings} == {"K23", "K24"}

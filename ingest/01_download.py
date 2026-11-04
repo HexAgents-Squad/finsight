@@ -4,6 +4,7 @@ Usage:
     python ingest/01_download.py                      # all companies in config/companies.yaml
     python ingest/01_download.py --tickers AAPL JPM   # a subset
     python ingest/01_download.py --dry-run            # show the selection, download no filings
+    python ingest/01_download.py --refresh-facts      # also re-download the cached XBRL company facts
 
 Output (git-ignored; files already on disk are not downloaded again):
     data/xbrl/<TICKER>.json                    XBRL company facts (source of the fiscal-year labels; shared with WP3)
@@ -29,8 +30,11 @@ from pydantic import ValidationError  # noqa: E402
 from core.settings import get_settings  # noqa: E402
 from ingest import DATA_DIR, MANIFEST_FILE, RAW_DIR, XBRL_DIR  # noqa: E402
 from ingest.edgar import (  # noqa: E402
+    Company,
     Filing,
+    Scope,
     SecClient,
+    Selection,
     check_user_agent,
     companyfacts_url,
     filing_folder_url,
@@ -45,10 +49,10 @@ from ingest.edgar import (  # noqa: E402
 )
 
 
-def download(client: SecClient, url: str, path: Path) -> None:
-    """Fetch `url` into `path` unless it is already there (written via a temp file, so an interrupted run
-    never leaves a truncated file that later runs would trust)."""
-    if path.exists():
+def download(client: SecClient, url: str, path: Path, refresh: bool = False) -> None:
+    """Fetch `url` into `path` unless it is already there (or `refresh`). Written via a temp file, so an
+    interrupted run never leaves a truncated file that later runs would trust."""
+    if path.exists() and not refresh:
         return
     tmp = path.with_suffix(path.suffix + ".part")
     tmp.write_bytes(client.get(url).content)
@@ -63,25 +67,41 @@ def annual_report_exhibit(client: SecClient, filing: Filing, folder: Path) -> st
         return cache.read_text(encoding="utf-8").strip() or None
     index = client.json(f"{filing_folder_url(filing.cik, filing.accession_no)}/index.json")
     name = find_annual_report(index.get("directory", {}).get("item", []), filing.primary_document)
-    cache.write_text(name or "", encoding="utf-8")
+    cache.write_text(name or "", encoding="utf-8", newline="\n")
     return name
 
 
-def write_manifest(records: list[dict], replaced_tickers: set[str]) -> int:
+def write_manifest(records: list[dict], replaced_tickers: set[str], path: Path = MANIFEST_FILE) -> int:
     """Rewrite the manifest: this run's records plus earlier records of tickers not in this run."""
     kept = []
-    if MANIFEST_FILE.exists():
-        kept = [r for r in map(json.loads, MANIFEST_FILE.read_text(encoding="utf-8").splitlines())
+    if path.exists():
+        kept = [r for r in map(json.loads, path.read_text(encoding="utf-8").splitlines())
                 if r["ticker"] not in replaced_tickers]
     rows = sorted(kept + records, key=lambda r: (r["ticker"], r["form"], r["fiscal_year"], r["fiscal_period"]))
-    MANIFEST_FILE.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8", newline="\n")
     return len(rows)
+
+
+def select_with_fresh_labels(client: SecClient, company: Company, rows: list[dict], scope: Scope,
+                             refresh: bool) -> Selection:
+    """Select the company's filings. If one is missing, the cached XBRL facts may predate it: download
+    them again once and select again."""
+    facts_path = XBRL_DIR / f"{company.ticker}.json"
+    download(client, companyfacts_url(company.cik), facts_path, refresh=refresh)
+    labels = fiscal_labels(json.loads(facts_path.read_text(encoding="utf-8")))
+    selection = select_filings(company, rows, labels, scope)
+    if selection.missing and not refresh:
+        return select_with_fresh_labels(client, company, rows, scope, refresh=True)
+    return selection
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tickers", nargs="*", help="only these tickers (default: all in config/companies.yaml)")
     ap.add_argument("--dry-run", action="store_true", help="print the selection; download no filing documents")
+    ap.add_argument("--refresh-facts", action="store_true",
+                    help="download the XBRL company facts again even if cached (done automatically for a "
+                         "company with a missing filing)")
     args = ap.parse_args(argv)
 
     try:
@@ -107,16 +127,13 @@ def main(argv: list[str] | None = None) -> int:
     for company in companies:
         folder = RAW_DIR / company.ticker
         folder.mkdir(parents=True, exist_ok=True)
-        facts_path = XBRL_DIR / f"{company.ticker}.json"
-        download(client, companyfacts_url(company.cik), facts_path)
-        labels = fiscal_labels(json.loads(facts_path.read_text(encoding="utf-8")))
-
         submissions = client.json(submissions_url(company.cik))
         older = [client.json(f"https://data.sec.gov/submissions/{name}")
                  for name in older_page_names(submissions, scope.earliest_year)]
         (folder / "submissions.json").write_text(json.dumps({"recent": submissions, "older_pages": older}),
-                                                 encoding="utf-8")
-        selection = select_filings(company, filing_rows(submissions, older), labels, scope)
+                                                 encoding="utf-8", newline="\n")
+        selection = select_with_fresh_labels(client, company, filing_rows(submissions, older), scope,
+                                             refresh=args.refresh_facts)
         problems += [f"{company.ticker}: missing {m}" for m in selection.missing]
         if selection.missing:          # unlabelled filings only matter when they could be the missing ones
             problems += [f"{company.ticker}: (hint) no XBRL fiscal label for {u}" for u in selection.unlabelled]
@@ -126,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
             exhibit_name = exhibit_path = None
             if not args.dry_run:
                 download(client, filing.source_url, path)
-                exhibit_name = annual_report_exhibit(client, filing, folder)
+                # Exhibit 13 is the annual report to shareholders; 10-Qs have none
+                exhibit_name = annual_report_exhibit(client, filing, folder) if filing.form == "10-K" else None
                 if exhibit_name:
                     exhibit_file = folder / f"{filing.stem}_EX13.htm"
                     download(client, f"{filing_folder_url(filing.cik, filing.accession_no)}/{exhibit_name}",
