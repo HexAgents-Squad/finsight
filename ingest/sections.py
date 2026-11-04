@@ -31,10 +31,10 @@ MIN_SECTION_CHARS = 300          # shorter Items ("Not applicable", "[Reserved]"
 MIN_ITEMS_FOR_HEADINGS = 4       # fewer Item headings than this = the filing does not use them
 STUB_CHARS = 3_000               # an MD&A / financial-statement Item shorter than this is only a pointer
 MIN_MDNA_CHARS = 20_000          # financial statements start at least this far after the MD&A heading
-ITEM15_KEEP_CHARS = 20_000       # an Item 15 longer than this has a report appended after the exhibit list
 HEADING_MAX_CHARS = 160          # a heading line is short; longer lines must start with the Item's title
 REGION_HEADING_MAX_CHARS = 150
-TITLE_PREFIX_CHARS = 10          # how much of an Item title a bare "Item N" line's next line must match
+TITLE_WORDS = 3                  # a bare "Item N" line is a heading only if the next line starts with this many
+                                 # whole words of the Item's title
 
 TENK_TITLES = {
     "1": "Business", "1A": "Risk Factors", "1B": "Unresolved Staff Comments", "1C": "Cybersecurity",
@@ -70,7 +70,12 @@ ITEM_LINE = re.compile(r"^\s*(?:part\s+(i{1,3}|iv)\b[\s.,:\-–—]*)?item[\s\xa
                        re.IGNORECASE)
 PART_LINE = re.compile(r"^\s*part\s+(i{1,3}|iv)\b\.?\s*(?:[-–—:]\s*)?(?:financial information|other information)?\s*$",
                        re.IGNORECASE)
-TOC_PAGE_NUMBER = re.compile(r"\|\s*\d{1,3}\s*$")
+# Table-of-contents rows end in a page reference: "23", "23-25", "F-1", or "N/A"/"None" for an Item not in use
+TOC_PAGE_NUMBER = re.compile(r"\|\s*(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?|[A-Z]-\d{1,3}|n/?a|none)\s*$", re.IGNORECASE)
+WORD = re.compile(r"[a-z0-9']+")
+MIN_TOC_ROWS = 3                 # a block under a heading with this many page-reference rows is a TOC
+TOC_LOOKAHEAD_LINES = 6          # how many lines after a region heading are checked for TOC rows
+TOC_SUBHEADING = re.compile(r"^(?:part\s+i{1,3}\b.*|table\s+of\s+contents|page)$", re.IGNORECASE)
 NOT_A_TITLE = re.compile(r"^(?:of|and|in|to|above|below|is|are)\b|^\d", re.IGNORECASE)
 # 10-Q item titles are unique, so they tell the Part even when a TOC leaves the running Part wrong
 TENQ_PART_BY_TITLE = [
@@ -96,8 +101,12 @@ FS_HEADING = re.compile(r"^(?:report\s+of\s+independent\s+registered\s+public\s+
 RISK_FACTORS_HEADING = re.compile(r"^risk\s+factors$", re.IGNORECASE)
 RISK_FACTORS_END = re.compile(r"^(?:controls\s+and\s+procedures|report\s+of\s+independent\s+registered"
                               r"|(?:condensed\s+)?consolidated\s+(?:statements?|balance\s+sheets?)\b"
-                              r"|financial\s+statements|glossary|managing\s+global\s+risk|climate\s+change"
-                              r"|net\s+zero|human\s+capital)", re.IGNORECASE)
+                              r"|financial\s+statements|glossary|managing\s+global\s+risk|sustainability"
+                              r"|human\s+capital)", re.IGNORECASE)
+# A relocated financial-statements region (Citi) is followed by other 10-K sections and the exhibit index;
+# those end it (whole heading lines only, so phrases inside the notes do not)
+STATEMENTS_END = re.compile(r"^(?:properties|supervision,?\s+(?:and\s+)?regulation\b.*|unregistered\s+sales\b.*"
+                            r"|exhibit\s+index|exhibits?|legal\s+proceedings)$", re.IGNORECASE)
 RISK_KEY = {"10-K": "Item 1A", "10-Q": "Part II Item 1A"}
 # The signature page (heading + its standard legend) ends a filing's text; without this the last Item, or a
 # relocated Item 8, would carry the signatures and anything printed after them
@@ -167,7 +176,7 @@ def find_headings(lines: list[str], form: str) -> list[tuple[int, str]]:
             nxt = next((ln.strip() for ln in lines[i + 1:i + 4] if ln.strip()), "")
             titles = [TENK_TITLES.get(item, "")] if form == "10-K" else [
                 t for (_, it), t in TENQ_TITLES.items() if it == item]
-            if not any(t and _norm_quote(nxt).startswith(_norm_quote(t)[:TITLE_PREFIX_CHARS]) for t in titles):
+            if not any(t and starts_with_title(nxt, t) for t in titles):
                 continue
             rest = nxt
         if NOT_A_TITLE.match(_norm_quote(rest)):
@@ -184,26 +193,37 @@ def find_headings(lines: list[str], form: str) -> list[tuple[int, str]]:
             if (part, item) not in TENQ_TITLES:
                 continue
             title, key = TENQ_TITLES[(part, item)], f"Part {part} Item {item}"
-        if len(line) > HEADING_MAX_CHARS and not _norm_quote(rest).startswith(_norm_quote(title)[:TITLE_PREFIX_CHARS]):
+        if len(line) > HEADING_MAX_CHARS and not starts_with_title(rest, title):
             continue                         # long line: a heading only if it starts with the Item's own title
         out.append((i, key))
     return out
 
 
+def starts_with_title(text: str, title: str) -> bool:
+    """True if `text` begins with the first TITLE_WORDS whole words of `title` ("Financial Instruments" is not
+    "Financial Statements and Supplementary Data")."""
+    words, title_words = WORD.findall(_norm_quote(text)), WORD.findall(_norm_quote(title))
+    n = min(TITLE_WORDS, len(title_words))
+    return n > 0 and words[:n] == title_words[:n]
+
+
 def heading_offsets(text: str, pattern: re.Pattern) -> list[int]:
-    """Character offsets of short lines matching `pattern` (region headings such as "Management's Discussion")."""
-    pos, out = 0, []
-    for line in text.split("\n"):
+    """Character offsets of short lines matching `pattern` (region headings such as "Management's Discussion").
+    Lines inside a table of contents (the row itself, or MIN_TOC_ROWS page-reference rows among the next
+    lines) are not headings."""
+    lines, pos, out = text.split("\n"), 0, []
+    for n, line in enumerate(lines):
         stripped = line.strip()
-        if len(stripped) < REGION_HEADING_MAX_CHARS and pattern.match(stripped) and not TOC_PAGE_NUMBER.search(line):
-            out.append(pos)
+        if len(stripped) < REGION_HEADING_MAX_CHARS and pattern.match(stripped) and not is_toc_row(line):
+            following = [ln for ln in lines[n + 1:n + 1 + TOC_LOOKAHEAD_LINES] if ln.strip()]
+            if sum(map(is_toc_row, following)) < MIN_TOC_ROWS:
+                out.append(pos)
         pos += len(line) + 1
     return out
 
 
 def split_items(text: str, form: str) -> tuple[dict[str, str], str]:
-    """({Item key: text}, unassigned text). Unassigned = text before the first Item (cover page) and anything a
-    long Item 15 carries after its exhibit list (a bank's appended annual report, NVIDIA's statements)."""
+    """({Item key: text}, unassigned text before the first Item, i.e. the cover page)."""
     lines = text.split("\n")
     offsets, pos = [], 0
     for line in lines:
@@ -221,15 +241,22 @@ def split_items(text: str, form: str) -> tuple[dict[str, str], str]:
     unassigned = text[:starts[0][0]] if starts else text
     for n, (start, key) in enumerate(starts):
         end = starts[n + 1][0] if n + 1 < len(starts) else len(text)
-        body = text[start:end].strip()
-        if form == "10-K" and key == "Item 15" and len(body) > ITEM15_KEEP_CHARS:
-            region_starts = [p for p in heading_offsets(body, MDNA_HEADING) + heading_offsets(body, FS_HEADING)
-                             if p > MIN_SECTION_CHARS]
-            cut = min(region_starts + [ITEM15_KEEP_CHARS])
-            unassigned += "\n\n" + body[cut:]
-            body = body[:cut].strip()
-        sections[key] = body
+        sections[key] = text[start:end].strip()
     return sections, unassigned
+
+
+def split_last_item(sections: dict[str, str]) -> str:
+    """When the MD&A or the statements are not under their Items, a bank's annual report (JPM) or NVIDIA's
+    statements follow the exhibit list in Item 15: cut Item 15 at the first MD&A / statements heading and
+    return the rest as unassigned text for relocation. Item 15 is left alone when nothing follows it."""
+    body = sections.get("Item 15", "")
+    starts = [p for p in heading_offsets(body, MDNA_HEADING) + heading_offsets(body, FS_HEADING)
+              if p > MIN_SECTION_CHARS]
+    if not starts:
+        return ""
+    cut = min(starts)
+    sections["Item 15"] = body[:cut].strip()
+    return body[cut:]
 
 
 # ----------------------------------------------------------------------------------------------- relocation
@@ -246,6 +273,25 @@ class ParsedFiling:
     headings_found: int
     relocated: list[str] = field(default_factory=list)     # Item keys taken from outside their heading
     unassigned_chars: int = 0
+
+
+def is_toc_row(line: str) -> bool:
+    return bool(TOC_PAGE_NUMBER.search(line))
+
+
+def drop_leading_toc(text: str) -> str:
+    """Remove a table of contents printed right under a section's heading (JPM and Wells Fargo 10-Qs: the TOC
+    entry is the only 'Item 2' heading, so the section starts with the rest of the TOC). The heading line is
+    kept; the block is removed only if it has at least MIN_TOC_ROWS rows ending in a page reference."""
+    lines = text.split("\n")
+    end, rows = 1, 0
+    while end < len(lines) and (not lines[end].strip() or is_toc_row(lines[end]) or PART_LINE.match(lines[end])
+                                or TOC_SUBHEADING.match(lines[end].strip())):
+        rows += is_toc_row(lines[end])
+        end += 1
+    if rows < MIN_TOC_ROWS:
+        return text
+    return "\n".join(lines[:1] + lines[end:]).strip()
 
 
 def carve_region(text: str, start_heading: re.Pattern, end_heading: re.Pattern) -> tuple[str, str] | None:
@@ -271,12 +317,14 @@ def _regions(unassigned: str, exhibit_text: str | None) -> list[tuple[str, str, 
 
 
 def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> ParsedFiling:
+    mdna_key, fs_key = MDNA_KEY[form], FS_KEY[form]
     sections, unassigned = split_items(main_text, form)
     headings_found = len(sections)
     if headings_found < MIN_ITEMS_FOR_HEADINGS:          # no usable Item headings: everything is unassigned
         sections, unassigned = {}, main_text
+    if form == "10-K" and any(len(sections.get(k, "")) < STUB_CHARS for k in (mdna_key, fs_key)):
+        unassigned += "\n\n" + split_last_item(sections)
     result = {key: Section(key, body) for key, body in sections.items()}
-    mdna_key, fs_key = MDNA_KEY[form], FS_KEY[form]
     relocated: list[str] = []
     used: dict[str, int] = {}                            # chars taken from each region
 
@@ -328,15 +376,24 @@ def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> 
             result[risk_key] = Section(risk_key, risk_text, location)
             relocated.append(risk_key)
 
-    signature_chars = 0
+    trimmed_chars = 0                                    # cut off sections below, counted as unassigned
+    if fs_key in relocated:                              # other 10-K sections after relocated statements (Citi)
+        body = result[fs_key].text
+        ends = [p for p in heading_offsets(body, STATEMENTS_END) if p > MIN_MDNA_CHARS]
+        if ends:
+            trimmed_chars += len(body) - ends[0]
+            result[fs_key] = Section(fs_key, body[:ends[0]].rstrip(), result[fs_key].location)
     for key, section in result.items():
+        body = drop_leading_toc(section.text)
+        trimmed_chars += len(section.text) - len(body)
+        section = result[key] = Section(key, body, section.location)
         page = SIGNATURE_PAGE.search(section.text)
         if page:
-            signature_chars += len(section.text) - page.start()
+            trimmed_chars += len(section.text) - page.start()
             result[key] = Section(key, section.text[:page.start()].rstrip(), section.location)
 
     kept = [s for s in result.values() if len(s.text) >= MIN_SECTION_CHARS]
-    total_unassigned = len(unassigned) - used.get(MAIN_DOCUMENT, 0) + signature_chars
+    total_unassigned = len(unassigned) - used.get(MAIN_DOCUMENT, 0) + trimmed_chars
     if exhibit_text:
         total_unassigned += len(exhibit_text) - used.get(EXHIBIT, 0)
     return ParsedFiling(kept, headings_found, relocated, max(total_unassigned, 0))
@@ -388,6 +445,11 @@ def corpus_problems(docs: list[dict], expected_10k: int) -> list[str]:
     tenk = {(d["ticker"], d["fiscal_year"]) for d in docs if d["form"] == "10-K"}
     if len(tenk) != expected_10k:
         out.append(f"{len(tenk)} 10-Ks have sections; expected {expected_10k}")
+    toc_like = sorted(d["doc_id"] for d in docs if "text" in d
+                      and sum(1 for line in d["text"].split("\n") if ITEM_LINE.match(line) and is_toc_row(line))
+                      >= MIN_TOC_ROWS)
+    if toc_like:
+        out.append(f"documents containing table-of-contents rows: {toc_like}")
     for key in ("Item 7", "Item 8"):
         long_enough = {(d["ticker"], d["fiscal_year"]) for d in docs
                        if d["form"] == "10-K" and d["item"] == key and d["n_chars"] > MIN_CORE_ITEM_CHARS}

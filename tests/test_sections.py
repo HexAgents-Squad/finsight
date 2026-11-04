@@ -262,3 +262,70 @@ def test_the_word_signatures_alone_does_not_cut():
     item1 = body("business") + "<p>Signatures</p><p>We collect electronic signatures from customers.</p>"
     parsed = parse_filing(html_to_text(tenk_html({**STANDARD, "1": item1})), "10-K")
     assert "electronic signatures" in next(s.text for s in parsed.sections if s.key == "Item 1")
+
+
+# --- regressions from the code review on real filings ----------------------------------------------------
+
+def test_running_header_whose_next_line_only_shares_a_word_is_not_a_heading():
+    # MSFT FY2023: a bare "Item 8" page header followed by the note "Financial Instruments" split Item 8
+    item8 = (body("statements", 3_000) + "<p>Item 8</p><p>Financial Instruments</p>" + body("notes", 3_000))
+    sections, _ = split_items(html_to_text(tenk_html({**STANDARD, "8": item8}, toc=False)), "10-K")
+    assert "statements" in sections["Item 8"] and "notes" in sections["Item 8"]
+    assert "statements" not in sections["Item 7A"]
+
+
+@pytest.mark.parametrize("page", ["N/A", "None", "F-1", "12-14", "23"])
+def test_toc_rows_with_any_page_reference_are_ignored(page):
+    # PFE: "Item 4. | Mine Safety Disclosures | N/A" rows won when the real Item was short
+    toc = f"<table><tr><td>Item 4.</td><td>Mine Safety Disclosures</td><td>{page}</td></tr></table>"
+    html = tenk_html({**STANDARD, "4": "Not applicable."}).replace("<body>", "<body>" + toc, 1)
+    assert "Item 4" not in {s.key for s in parse_filing(html_to_text(html), "10-K").sections}
+
+
+def test_item_15_of_a_normal_filer_is_not_cut():
+    # KO: its exhibit list names "Consolidated Statements of Income"; nothing is relocated, so keep all of it
+    item15 = ("<p>(a) Financial statements:</p><p>Consolidated Statements of Income</p><p>" + body("exhibit", BIG)
+              + "</p><p>Exhibit 99.9 last entry of the list</p>")
+    parsed = parse_filing(html_to_text(tenk_html({**STANDARD, "15": item15})), "10-K")
+    item = next(s for s in parsed.sections if s.key == "Item 15")
+    assert "last entry of the list" in item.text and parsed.relocated == []
+
+
+def test_relocated_statements_end_before_trailing_10k_sections():
+    # Citi: Properties, regulation and the exhibit index follow the statements in the same report
+    html = ("<p>Management's Discussion and Analysis</p><p>" + body("mdna", BIG) + "</p><p>Consolidated Statement of "
+            "Income</p><p>" + body("fs", BIG) + "</p><p>SUPERVISION, REGULATION AND OTHER</p><p>" + body("reg", 3_000)
+            + "</p><p>Exhibit Index</p><p>" + body("exhibitlist") + "</p>")
+    parsed = parse_filing(html_to_text(html), "10-K")
+    item8 = next(s for s in parsed.sections if s.key == "Item 8")
+    assert "fs fs" in item8.text and "reg" not in item8.text and "exhibitlist" not in item8.text
+
+
+def test_risk_factors_subheadings_do_not_end_the_section():
+    # Citi: "Climate Change Presents Various ... Risks" is a risk factor, not the end of the risk factors
+    report = ("<p>Management's Discussion and Analysis</p><p>" + body("overview", BIG) + "</p><p>RISK FACTORS</p><p>"
+              + body("riska", 2_000) + "</p><p>Climate Change Presents Various Risks</p><p>" + body("riskb", 2_000)
+              + "</p><p>SUSTAINABILITY</p><p>" + body("tail", 2_000) + "</p><p>Consolidated Statement of Income</p>"
+              "<p>" + body("fs", BIG) + "</p>")
+    parsed = parse_filing(html_to_text(report), "10-K")
+    item1a = next(s for s in parsed.sections if s.key == "Item 1A")
+    assert "riska" in item1a.text and "riskb" in item1a.text and "tail" not in item1a.text
+
+
+def test_toc_under_a_heading_is_removed_and_toc_headings_are_skipped():
+    # JPM/WFC 10-Q: the TOC entry is the only "Item 2" heading; JPM 10-K: the annual report's own contents list
+    from ingest.sections import drop_leading_toc
+    text = ("Item 2. Management's Discussion and Analysis\nExecutive Overview | 3\nResults | 9\n"
+            "Item 3. Market Risk | 201\nPart II - Other information\nItem 1. Legal Proceedings | 202\n\nBody text.")
+    assert drop_leading_toc(text) == "Item 2. Management's Discussion and Analysis\nBody text."
+    html = ("<p>Management's discussion and analysis:</p><p>Overview | 1</p><p>Results | 5</p><p>Liquidity | 9</p>"
+            "<p>Management's discussion and analysis</p><p>" + body("realmdna", BIG) + "</p>"
+            "<p>Consolidated statements of income</p><p>" + body("fs", BIG) + "</p>")
+    item7 = next(s for s in parse_filing(html_to_text(html), "10-K").sections if s.key == "Item 7")
+    assert "Overview | 1" not in item7.text and "realmdna" in item7.text
+
+
+def test_corpus_check_flags_documents_holding_toc_rows():
+    docs = [doc(f"T{i}", 2024, item) for i in range(300) for item in ("Item 7", "Item 8")]
+    docs[0] = {**docs[0], "text": "Item 1. Business | 3\nItem 1A. Risk Factors | 9\nItem 7. MD&A | 30\nreal text"}
+    assert any("table-of-contents rows" in p and docs[0]["doc_id"] in p for p in corpus_problems(docs, 300))
