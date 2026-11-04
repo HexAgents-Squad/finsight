@@ -2,7 +2,8 @@
 # The full application dependencies live in requirements.txt (WP7); keep this file small so CI stays fast.
 pydantic>=2.6,<3
 pyyaml>=6.0
-openai>=1.20             # core/llm.py tests use fake clients, but import the SDK
+openai>=1.55             # core/llm.py tests use fake clients, but import the SDK (<1.55 breaks with httpx 0.28)
+httpx>=0.27              # tests build openai error objects from httpx requests
 pydantic-settings>=2.2
 pytest>=8.0
 ruff==0.17.2           # pinned: a new ruff release can add lint rules and turn CI red without a code change
