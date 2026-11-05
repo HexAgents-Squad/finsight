@@ -8,10 +8,11 @@ Usage:
 
 Input : data/sections/sections.jsonl (ingest/02_parse_sections.py)
 Output: data/chunks/chunks_<variant>.jsonl, one chunk per line (retrieval/common.py Chunk)
-Checks (exit 1 if one fails): every section has at least one chunk; chunk IDs are unique; no chunk is
-empty; text chunks stay within their size limit (tables may be larger only in C3, up to TABLE_MAX_CHARS
-per part); chunking twice gives identical chunks (deterministic IDs).
-Exit codes: 0 = ok, 1 = a check failed, 2 = input missing.
+Checks, run before anything is written (exit 1 and no file written if one fails): every section has at least
+one chunk; chunk IDs are unique; no chunk is empty; text chunks stay within their size limit; C3 table parts
+stay within TABLE_MAX_CHARS unless a single row is longer. (Determinism across processes is tested in
+tests/test_chunking.py.)
+Exit codes: 0 = ok, 1 = a check failed, 2 = input missing or empty.
 """
 from __future__ import annotations
 
@@ -27,12 +28,13 @@ from ingest import SECTIONS_DIR  # noqa: E402
 from retrieval import CHUNKS_DIR  # noqa: E402
 from retrieval.chunking import (  # noqa: E402
     C1_SIZE,
+    CELL_SEPARATOR,
     PACK_OVERLAP,
     PACK_SIZE,
+    TABLE_HEADER_LINES,
     TABLE_MAX_CHARS,
     VARIANTS,
     chunk_corpus,
-    chunk_document,
 )
 from retrieval.common import Chunk, chunks_path, write_chunks  # noqa: E402
 
@@ -52,14 +54,18 @@ def problems(docs: list[dict], chunks: list[Chunk], variant: str) -> list[str]:
         out.append(f"{variant}: {len(empty)} empty chunks, e.g. {empty[:3]}")
     too_long = [c.chunk_id for c in chunks if len(c.text) > MAX_TEXT_CHARS[variant] and c.kind == "text"]
     too_long += [c.chunk_id for c in chunks if c.kind == "table" and len(c.text) > TABLE_MAX_CHARS
-                 and "\n" in c.text.split("\n", 3)[-1]]          # a single row longer than the cap is allowed
+                 and len(_table_rows(c.text)) > 1]               # a single row longer than the cap is allowed
     if too_long:
         out.append(f"{variant}: {len(too_long)} chunks over the size limit, e.g. {too_long[:3]}")
-    sample = docs[: max(1, len(docs) // 50)]
-    if [c for d in sample for c in chunk_document(d, variant)] != [c for c in chunks if c.doc_id in
-                                                                   {d["doc_id"] for d in sample}]:
-        out.append(f"{variant}: chunking is not deterministic")
     return out
+
+
+def _table_rows(text: str) -> list[str]:
+    """Body rows of a table part: what follows the caption (if any) and the TABLE_HEADER_LINES header lines.
+    Table lines contain the cell separator; the caption is the plain-text lines before the first of them."""
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if CELL_SEPARATOR in ln), 0)
+    return lines[first + TABLE_HEADER_LINES:]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,23 +79,30 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {args.sections} not found; run ingest/02_parse_sections.py first", file=sys.stderr)
         return 2
     docs = [json.loads(line) for line in args.sections.read_text(encoding="utf-8").splitlines() if line.strip()]
-    found = []
+    if not docs:
+        print(f"ERROR: {args.sections} holds no sections", file=sys.stderr)
+        return 2
+    found, built = [], {}
     print(f"{len(docs)} sections from {args.sections}")
     print(f"{'variant':8}{'chunks':>9}{'tables':>8}{'mean chars':>12}{'max chars':>11}{'seconds':>9}")
     for variant in args.variants:
         start = time.perf_counter()
         chunks = chunk_corpus(docs, variant)
         seconds = time.perf_counter() - start
-        write_chunks(chunks, chunks_path(variant, args.out_dir))
+        built[variant] = chunks
         sizes = [len(c.text) for c in chunks]
         print(f"{variant:8}{len(chunks):>9,}{sum(c.kind == 'table' for c in chunks):>8,}"
               f"{statistics.mean(sizes):>12,.0f}{max(sizes):>11,}{seconds:>9.1f}")
         found += problems(docs, chunks, variant)
     for p in found:
         print(f"CHECK FAILED: {p}")
-    if not found:
-        print(f"OK: chunks written to {args.out_dir}")
-    return 1 if found else 0
+    if found:
+        print("no chunk file written")               # 04_index.py must never index chunks that failed a check
+        return 1
+    for variant, chunks in built.items():
+        write_chunks(chunks, chunks_path(variant, args.out_dir))
+    print(f"OK: chunks written to {args.out_dir}")
+    return 0
 
 
 if __name__ == "__main__":

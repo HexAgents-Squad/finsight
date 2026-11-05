@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,10 @@ from retrieval import CHUNKS_DIR
 
 FORMS = frozenset({"10-K", "10-Q"})
 FISCAL_PERIODS = frozenset({"FY", "Q1", "Q2", "Q3"})
+# EDGAR electronic filings start in 1993; the range catches two-digit years ("24") that would match nothing
+MIN_FISCAL_YEAR, MAX_FISCAL_YEAR = 1993, 2100
+TICKER = re.compile(r"[A-Z][A-Z0-9.\-]{0,9}")                    # e.g. "C", "GOOGL", "BRK.B"
+ITEM_NAME = re.compile(r"(?:Part I{1,2} )?Item \d{1,2}[A-Z]?")      # "Item 1A", "Part II Item 1A"
 
 
 @dataclass(frozen=True)
@@ -63,28 +68,42 @@ def read_chunks(path: Path) -> list[Chunk]:
 
 @dataclass(frozen=True)
 class Filters:
-    """Metadata filters for search_filings (week0 §2.3). Unset fields do not filter."""
+    """Metadata filters for search_filings (week0 §2.3). Unset fields (None) do not filter.
+
+    Every construction path is validated and normalised (`__post_init__`), because the retrievers compare
+    values exactly: tickers, forms and periods are upper-cased, Item names whitespace- and case-normalised
+    ("part i  item 2" -> "Part I Item 2"). A wrong type or value, or an empty string, is a ValueError, never
+    a silently empty (or silently unfiltered) search.
+    """
     ticker: str | None = None
     fiscal_year: int | None = None
     fiscal_period: str | None = None
     form: str | None = None
     item: str | None = None
 
+    def __post_init__(self) -> None:
+        year = self.fiscal_year
+        if year is not None and (not isinstance(year, int) or isinstance(year, bool)
+                                 or not MIN_FISCAL_YEAR <= year <= MAX_FISCAL_YEAR):
+            raise ValueError(f"fiscal_year must be an int from {MIN_FISCAL_YEAR} to {MAX_FISCAL_YEAR}, "
+                             f"not {year!r}")
+        rules = {"ticker": (_upper, TICKER.fullmatch), "fiscal_period": (_upper, FISCAL_PERIODS.__contains__),
+                 "form": (_upper, FORMS.__contains__), "item": (_item_name, ITEM_NAME.fullmatch)}
+        for name, (normalise, valid) in rules.items():
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise ValueError(f"{name} must be a string, not {value!r}")
+            clean = normalise(value)
+            if not valid(clean):
+                raise ValueError(f"invalid {name} {value!r}")
+            object.__setattr__(self, name, clean)     # frozen dataclass: set the normalised value once
+
     @classmethod
     def of(cls, ticker: str | None = None, fiscal_year: int | None = None, fiscal_period: str | None = None,
            form: str | None = None, item: str | None = None) -> Filters:
-        """Validated, normalised filters: tickers and periods are upper-cased, Item names whitespace-normalised
-        ("item  7" -> "Item 7"); a wrong type or value is a ValueError, never a silent empty result."""
-        if fiscal_year is not None and (not isinstance(fiscal_year, int) or isinstance(fiscal_year, bool)):
-            raise ValueError(f"fiscal_year must be an int, not {fiscal_year!r}")
-        ticker = ticker.strip().upper() if ticker else None
-        fiscal_period = fiscal_period.strip().upper() if fiscal_period else None
-        form = form.strip().upper() if form else None
-        if fiscal_period is not None and fiscal_period not in FISCAL_PERIODS:
-            raise ValueError(f"fiscal_period must be one of {sorted(FISCAL_PERIODS)}, not {fiscal_period!r}")
-        if form is not None and form not in FORMS:
-            raise ValueError(f"form must be one of {sorted(FORMS)}, not {form!r}")
-        item = _item_name(item) if item else None
+        """Same as Filters(...); kept so call sites read as `Filters.of(ticker=..., fiscal_year=...)`."""
         return cls(ticker, fiscal_year, fiscal_period, form, item)
 
     def active(self) -> dict[str, Any]:
@@ -92,6 +111,10 @@ class Filters:
 
     def matches(self, chunk: Chunk) -> bool:
         return all(getattr(chunk, k) == v for k, v in self.active().items())
+
+
+def _upper(value: str) -> str:
+    return value.strip().upper()
 
 
 def _item_name(item: str) -> str:

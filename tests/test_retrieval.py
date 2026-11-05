@@ -1,10 +1,13 @@
 """retrieval/: filters, BM25, dense (fake and real Chroma) and RRF hybrid search (offline)."""
+from dataclasses import replace
+from types import SimpleNamespace
+
 import pytest
 
 from retrieval.bm25 import INDEX_FORMAT, BM25Index, tokenize
 from retrieval.common import NO_FILTERS, Chunk, Filters, SearchResult
 from retrieval.dense import DenseIndex, Embedder, build_collection, where_clause
-from retrieval.hybrid import RRF_K, HybridIndex, rrf
+from retrieval.hybrid import CANDIDATES, RRF_K, HybridIndex, rrf
 
 
 def chunk(n, text, ticker="AAPL", year=2024, item="Item 7", period="FY", form="10-K", kind="text"):
@@ -29,13 +32,28 @@ def test_filters_are_normalised():
     assert Filters.of(item="item 1a").item == "Item 1A"
 
 
+def test_direct_construction_is_normalised_too():
+    assert Filters(ticker="aapl", item="item 8") == Filters.of(ticker="AAPL", item="Item 8")
+    assert Filters(ticker="aapl").active() == {"ticker": "AAPL"}
+
+
 @pytest.mark.parametrize("kwargs, error", [({"fiscal_year": "2024"}, "must be an int"),
                                            ({"fiscal_year": True}, "must be an int"),
-                                           ({"fiscal_period": "Q4"}, "fiscal_period"),
-                                           ({"form": "8-K"}, "form")])
-def test_bad_filters_are_errors_not_empty_results(kwargs, error):
+                                           ({"fiscal_year": 24}, "must be an int from 1993"),
+                                           ({"fiscal_period": "Q4"}, "invalid fiscal_period"),
+                                           ({"form": "8-K"}, "invalid form"),
+                                           ({"ticker": ""}, "invalid ticker"),
+                                           ({"ticker": "  "}, "invalid ticker"),
+                                           ({"ticker": "AA PL"}, "invalid ticker"),
+                                           ({"ticker": 123}, "ticker must be a string"),
+                                           ({"item": " "}, "invalid item"),
+                                           ({"item": "MD&A"}, "invalid item"),
+                                           ({"form": ["10-K"]}, "form must be a string")])
+def test_bad_filters_are_errors_not_empty_or_unfiltered_results(kwargs, error):
     with pytest.raises(ValueError, match=error):
         Filters.of(**kwargs)
+    with pytest.raises(ValueError, match=error):
+        Filters(**kwargs)
 
 
 # --- BM25 ------------------------------------------------------------------------------------------------------
@@ -43,6 +61,15 @@ def test_bad_filters_are_errors_not_empty_results(kwargs, error):
 def test_tokenizer_keeps_numbers_whatever_their_format():
     assert tokenize("Net sales were $391,035 million (up 2.0%) in FY2024") == \
         ["net", "sales", "were", "391035", "million", "up", "2.0", "in", "fy", "2024"]
+
+
+@pytest.mark.parametrize("text, tokens", [("FY2023,2024", ["fy", "2023", "2024"]),   # a list, not one number
+                                          ("1,234.5", ["1234.5"]),
+                                          ("12,3456", ["12", "3456"]),
+                                          ("1,234,567 and 2023,2024,2025", ["1234567", "and", "2023", "2024",
+                                                                            "2025"])])
+def test_tokenizer_joins_only_real_thousands_separators(text, tokens):
+    assert tokenize(text) == tokens
 
 
 def test_bm25_ranks_the_matching_chunk_first_and_uses_the_header():
@@ -109,6 +136,9 @@ class FakeCollection:
     def count(self):
         return len(self.rows)
 
+    def get(self, include):
+        return {"ids": list(self.rows)}
+
     def query(self, query_embeddings, n_results, where, include):
         q = query_embeddings[0]
         ok = [(cid, v) for cid, (v, meta) in self.rows.items() if _matches(meta, where)]
@@ -169,16 +199,60 @@ def test_dense_refuses_a_different_model_or_a_stale_collection():
         DenseIndex(col, CHUNKS[:-1], EMBEDDER)
 
 
+def test_dense_refuses_chunks_with_other_ids_even_at_the_same_count():
+    col = build_collection(FakeClient(), CHUNKS, EMBEDDER)
+    renamed = [replace(c, chunk_id=c.chunk_id + "x") if i == 0 else c for i, c in enumerate(CHUNKS)]
+    with pytest.raises(ValueError, match="1 unknown, 1 missing"):
+        DenseIndex(col, renamed, EMBEDDER)
+
+
+def test_embedder_close_is_safe_twice_and_closes_the_client(monkeypatch):
+    import core.llm
+    import core.settings
+    from retrieval.dense import embedder_from_settings
+
+    class FakeLLM:
+        closed = 0
+
+        def __init__(self, settings):
+            pass
+
+        async def embed(self, texts):
+            return [[1.0] for _ in texts]
+
+        async def aclose(self):
+            FakeLLM.closed += 1
+
+    settings = SimpleNamespace(EMBED_BACKEND="sentence-transformers", EMBED_LOCAL_MODEL_NAME="m", EMBED_MODEL="x")
+    monkeypatch.setattr(core.llm, "LLMClient", FakeLLM)
+    monkeypatch.setattr(core.settings, "get_settings", lambda: settings)
+    emb = embedder_from_settings()
+    assert emb.model_id == "sentence-transformers:m" and emb.embed(["a", "b"]) == [[1.0], [1.0]]
+    emb.close()
+    emb.close()
+    assert FakeLLM.closed == 1
+
+
+def embed_with_bias(texts):
+    """[sales, interest, 1]: the constant keeps every vector non-zero, so cosine is defined for all chunks."""
+    return [[*v, 1.0] for v in fake_embed(texts)]
+
+
 def test_real_chroma_roundtrip(tmp_path):
     pytest.importorskip("chromadb")
     from retrieval.dense import open_client
+    embedder = Embedder(embed_with_bias, "fake:bias")
     client = open_client(tmp_path)
-    build_collection(client, CHUNKS, EMBEDDER)
-    col = build_collection(client, CHUNKS, EMBEDDER)
-    assert col.count() == len(CHUNKS)
-    hits = DenseIndex(col, CHUNKS, EMBEDDER).search("net sales", k=2, filters=Filters.of(ticker="AAPL",
-                                                                                           fiscal_year=2025))
-    assert {h.chunk_id for h in hits} == {CHUNKS[3].chunk_id, CHUNKS[4].chunk_id}
+    build_collection(client, CHUNKS, embedder)
+    col = build_collection(client, CHUNKS, embedder)                 # rebuild: still one vector per chunk
+    assert col.count() == len(CHUNKS) and col.metadata["hnsw:space"] == "cosine"
+    dense = DenseIndex(col, CHUNKS, embedder)
+    hits = dense.search("interest", k=2)
+    # cosine: [0,1,1]·[0,1,1] -> 1.0 (JPM); [0,1,1] vs [0,0,1] -> 1/√2 (the R&D chunk); an l2 space would give 0
+    assert [h.chunk_id for h in hits] == [CHUNKS[2].chunk_id, CHUNKS[1].chunk_id]
+    assert [h.score for h in hits] == pytest.approx([1.0, 2 ** -0.5], abs=1e-4)
+    filtered = dense.search("net sales", k=5, filters=Filters.of(ticker="AAPL", fiscal_year=2025))
+    assert {h.chunk_id for h in filtered} == {CHUNKS[3].chunk_id, CHUNKS[4].chunk_id}
 
 
 # --- hybrid ----------------------------------------------------------------------------------------------------
@@ -207,4 +281,12 @@ def test_hybrid_asks_both_retrievers_for_candidates_with_the_same_filters():
     bm25, dense = Recorder([hit("a"), hit("b")]), Recorder([hit("b")])
     f = Filters.of(ticker="AAPL")
     assert [h.chunk_id for h in HybridIndex(bm25, dense).search("q", k=1, filters=f)] == ["b"]
-    assert bm25.calls == dense.calls == [("q", 50, f)]
+    assert bm25.calls == dense.calls == [("q", CANDIDATES, f)]
+    HybridIndex(bm25, dense).search("q", k=CANDIDATES + 5)
+    assert bm25.calls[-1][1] == CANDIDATES + 5                  # never fewer candidates than results asked for
+
+
+@pytest.mark.parametrize("candidates", [0, -1, True, 2.5])
+def test_hybrid_rejects_bad_candidate_counts(candidates):
+    with pytest.raises(ValueError, match="candidates must be a positive int"):
+        HybridIndex(Recorder([]), Recorder([]), candidates)

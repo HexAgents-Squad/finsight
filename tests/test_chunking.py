@@ -1,9 +1,13 @@
 """retrieval/chunking.py: the three chunking variants, context headers and deterministic IDs (offline)."""
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
 from ingest import SAMPLE_DIR
+from retrieval import ROOT
 from retrieval.chunking import (
     C1_OVERLAP,
     C1_SIZE,
@@ -101,15 +105,60 @@ def test_a_table_over_the_cap_is_split_by_rows_repeating_its_header():
     assert body == rows.split("\n")                       # every row kept once, in order
 
 
+HEAD = "h1 | a\nh2 | b"                                      # TABLE_HEADER_LINES header lines, 13 chars
+
+
+@pytest.mark.parametrize("second_row, first_part_rows", [(1993, 2), (1994, 1)])
+def test_table_split_counts_every_line_break_against_the_cap(second_row, first_part_rows):
+    # head (13) + "\n" + row (1992) + "\n" + row (1993) is exactly TABLE_MAX_CHARS; one more char moves the
+    # second row to the next part
+    rows = ["r" * 1992, "s" * second_row, "x | 1"]
+    parts = split_table("\n".join([HEAD, *rows]))
+    assert len(parts) == 2 and all(len(p) <= TABLE_MAX_CHARS for p in parts)
+    assert parts[0] == "\n".join([HEAD, *rows[:first_part_rows]])
+    assert len(parts[0]) == (TABLE_MAX_CHARS if second_row == 1993 else len(HEAD) + 1 + 1992)
+    assert [ln for p in parts for ln in p.split("\n")[2:]] == rows       # every row once, in order
+
+
+def test_an_oversized_table_with_only_header_lines_is_kept_whole():
+    table = "a | " + "x" * 2500 + "\nb | " + "y" * 2500
+    assert split_table(table) == [table]
+    assert split_table(table, "CAPTION") == ["CAPTION\n" + table]
+
+
 def test_unknown_variant_is_an_error():
     with pytest.raises(ValueError, match="unknown chunking variant"):
         chunk_document(doc("x"), "C9")
 
 
+SAMPLE = SAMPLE_DIR / "sections_sample.jsonl"
+TEXT_LIMIT = {"C1": C1_SIZE, "C2": PACK_SIZE + PACK_OVERLAP + 1, "C3": PACK_SIZE + PACK_OVERLAP + 1}
+
+
+def sample_docs():
+    return [json.loads(line) for line in SAMPLE.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sample_corpus(variant):
-    docs = [json.loads(line) for line in (SAMPLE_DIR / "sections_sample.jsonl").read_text(encoding="utf-8").splitlines()]
+    docs = sample_docs()
     chunks = chunk_corpus(docs, variant)
     ids = [c.chunk_id for c in chunks]
     assert len(ids) == len(set(ids)) and {c.doc_id for c in chunks} == {d["doc_id"] for d in docs}
     assert all(c.text.strip() for c in chunks)
+    assert all(len(c.text) <= TEXT_LIMIT[variant] for c in chunks if c.kind == "text")
+    assert all(len(c.text) <= TABLE_MAX_CHARS for c in chunks if c.kind == "table")
+    for d in docs:                                       # no text lost: every word of a section is in its chunks
+        words = set(" ".join(c.text for c in chunks if c.doc_id == d["doc_id"]).split())
+        assert set(d["text"].split()) <= words, d["doc_id"]
+
+
+def test_chunking_is_identical_across_processes():
+    """IDs must not depend on hash randomisation or other per-process state (they key the Chroma vectors)."""
+    script = ("import hashlib, json, sys; from retrieval.chunking import VARIANTS, chunk_corpus; "
+              f"docs = [json.loads(x) for x in open({str(SAMPLE)!r}, encoding='utf-8') if x.strip()]; "
+              "print(hashlib.sha256(repr([chunk_corpus(docs, v) for v in VARIANTS]).encode()).hexdigest())")
+    digests = {subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True,
+                              cwd=ROOT, env={**os.environ, "PYTHONHASHSEED": seed}).stdout.strip()
+               for seed in ("1", "2")}
+    assert len(digests) == 1

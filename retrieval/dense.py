@@ -36,12 +36,17 @@ def embedder_from_settings() -> Embedder:
     settings = get_settings()
     model = (settings.EMBED_LOCAL_MODEL_NAME if settings.EMBED_BACKEND == "sentence-transformers"
              else settings.EMBED_MODEL)
+    client = LLMClient(settings)                 # first, so a settings error cannot leak an event loop
     loop = asyncio.new_event_loop()
-    client = LLMClient(settings)
 
     def close() -> None:
-        loop.run_until_complete(client.aclose())
-        loop.close()
+        """Safe to call more than once; the loop is closed even if closing the client fails."""
+        if loop.is_closed():
+            return
+        try:
+            loop.run_until_complete(client.aclose())
+        finally:
+            loop.close()
 
     return Embedder(lambda texts: loop.run_until_complete(client.embed(texts)),
                     f"{settings.EMBED_BACKEND}:{model}", close)
@@ -101,11 +106,15 @@ class DenseIndex:
             raise ValueError(f"collection {collection.name} was embedded with {built_with!r} but the current "
                              f"embedder is {embedder.model_id!r}; set the same EMBED_* settings or rebuild "
                              f"the index")
-        if collection.count() != len(chunks):
-            raise ValueError(f"collection {collection.name} has {collection.count()} vectors but there are "
-                             f"{len(chunks)} chunks; run ingest/04_index.py again")
-        self.collection, self.embedder = collection, embedder
         self.by_id = {c.chunk_id: c for c in chunks}
+        # Why IDs, not just the count: chunks re-made with other IDs but the same count would otherwise pass here
+        # and fail with a KeyError mid-search. Listing the IDs takes ~1 s for 72k vectors, once per load.
+        stored = set(collection.get(include=[])["ids"])
+        if stored != self.by_id.keys():
+            raise ValueError(f"collection {collection.name} holds {len(stored)} vectors whose IDs do not match "
+                             f"the {len(chunks)} chunks ({len(stored - self.by_id.keys())} unknown, "
+                             f"{len(self.by_id.keys() - stored)} missing); run ingest/04_index.py again")
+        self.collection, self.embedder = collection, embedder
 
     def search(self, query: str, k: int = 5, filters: Filters = NO_FILTERS) -> list[SearchResult]:
         """The k chunks nearest to `query` among those matching `filters`; score = cosine similarity."""

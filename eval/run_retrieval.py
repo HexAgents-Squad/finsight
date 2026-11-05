@@ -1,20 +1,22 @@
 """WP5 step 5: recall@k and MRR of every retriever on the frozen gold set (gold-v1).
 
 Usage:
-    python eval/run_retrieval.py                          # every variant with an index, all retrievers
+    python eval/run_retrieval.py                          # all variants and retrievers (needs every index)
     python eval/run_retrieval.py --variants C3 --retrievers bm25 hybrid
+    python eval/run_retrieval.py --index-dir /tmp/idx --chunks-dir /tmp/chunks --out-dir /tmp/results
 
 For each chunk variant (C1/C2/C3), retriever (bm25, dense, hybrid) and filter setting it runs every answerable
 gold question and writes the ranked chunks to eval/results/runs/<variant>_<retriever>_<filters>.jsonl in the
 format eval/retrieval_eval.py scores. Queries come from retrieval_eval.build_query (a follow-up carries the
 previous question). Filter settings:
     none          the question only;
-    company+year  metadata filters from the gold item's companies and fiscal years, as the planner will set
-                  them. An item about several companies or years gets one filtered search per (company, year),
+    company+year  metadata filters from the gold item's `companies` and `fiscal_years` (what the question
+                  names, as the planner will extract them; the gold values make this an upper bound). An item about several companies or years gets one filtered search per (company, year),
                   and the result lists are interleaved, as the agent issues one search per entity.
-The tables are written to eval/results/retrieval_summary.md between the GENERATED markers; text outside the
-markers (the interpretation) is kept.
-Exit codes: 0 = done, 1 = gold set invalid, 2 = an index is missing.
+A full run (every variant and retriever) writes the tables to <out-dir>/retrieval_summary.md between the
+GENERATED markers, keeping the text outside them (the interpretation, which cites every row). A partial run
+writes its run files and prints its scores but leaves the summary alone, so it never replaces the full table.
+Exit codes: 0 = done, 1 = gold set invalid, 2 = an index, a chunk file or the settings are missing.
 """
 from __future__ import annotations
 
@@ -26,9 +28,12 @@ from itertools import zip_longest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from pydantic import ValidationError  # noqa: E402
+
 from eval.retrieval_eval import KS, build_query, hit_key, score_runs  # noqa: E402
 from eval.schema import GoldItem  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH, safe_console, validate_file  # noqa: E402
+from retrieval import CHROMA_DIR, CHUNKS_DIR, INDEX_DIR  # noqa: E402
 from retrieval.bm25 import BM25Index, index_path  # noqa: E402
 from retrieval.chunking import VARIANTS  # noqa: E402
 from retrieval.common import Filters, SearchResult, chunks_path, read_chunks  # noqa: E402
@@ -36,7 +41,8 @@ from retrieval.dense import Embedder, embedder_from_settings  # noqa: E402
 from retrieval.hybrid import HybridIndex, Retriever  # noqa: E402
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
-SUMMARY_FILE = RESULTS_DIR / "retrieval_summary.md"
+SUMMARY_NAME = "retrieval_summary.md"
+SUMMARY_FILE = RESULTS_DIR / SUMMARY_NAME
 RETRIEVERS = ("bm25", "dense", "hybrid")
 FILTER_SETTINGS = ("none", "company+year")
 TOP_K = max(KS)
@@ -77,15 +83,22 @@ def run(retriever: Retriever, items: list[GoldItem], setting: str) -> tuple[list
     return records, (time.perf_counter() - start) / max(len(answerable), 1)
 
 
-def load_retrievers(variant: str, wanted: list[str], embedder: Embedder | None) -> dict[str, Retriever]:
+def load_retrievers(variant: str, wanted: list[str], embedder: Embedder | None,
+                    index_dir: Path = INDEX_DIR, chunks_dir: Path = CHUNKS_DIR) -> dict[str, Retriever]:
+    """The wanted retrievers for one variant. A missing index or chunk file is a FileNotFoundError."""
     out: dict[str, Retriever] = {}
-    bm25 = BM25Index.load(index_path(variant))
+    bm25 = BM25Index.load(index_path(variant, index_dir))
     if "bm25" in wanted:
         out["bm25"] = bm25
     if embedder is not None:
-        from retrieval.dense import DenseIndex, collection_name, open_client
-        collection = open_client().get_collection(collection_name(variant))
-        dense = DenseIndex(collection, read_chunks(chunks_path(variant)), embedder)
+        from retrieval.dense import DenseIndex, collection_name, collection_names, open_client
+        client, name = open_client(index_dir / CHROMA_DIR.name), collection_name(variant)
+        # Why check first: Chroma's "not found" error type differs between versions (ValueError in 0.x,
+        # chromadb.errors.NotFoundError in 1.x), so test for the name instead of catching it.
+        if name not in collection_names(client):
+            raise FileNotFoundError(f"dense collection {name} not found in {index_dir / CHROMA_DIR.name}; "
+                                    f"run ingest/04_index.py")
+        dense = DenseIndex(client.get_collection(name), read_chunks(chunks_path(variant, chunks_dir)), embedder)
         if "dense" in wanted:
             out["dense"] = dense
         if "hybrid" in wanted:
@@ -99,6 +112,16 @@ def write_runs(path: Path, records: list[dict], retriever: str, setting: str) ->
         for r in records:
             f.write(json.dumps({"id": r["id"], "retriever": retriever, "filters": setting,
                                 "retrieved": r["retrieved"]}) + "\n")
+
+
+def best_row(rows: list[dict]) -> dict:
+    """Highest recall@5, then highest MRR; on a full tie the first row in run order (max keeps the first)."""
+    return max(rows, key=lambda r: (r["result"]["overall"]["recall@5"], r["result"]["overall"]["mrr"]))
+
+
+def run_file(out_dir: Path, variant: str, retriever: str, setting: str) -> Path:
+    """'company+year' is written 'company_year': a '+' in a file name needs quoting in some shells."""
+    return out_dir / "runs" / f"{variant}_{retriever}_{setting.replace('+', '_')}.jsonl"
 
 
 def tables(rows: list[dict], best: dict) -> str:
@@ -139,37 +162,48 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
     ap.add_argument("--retrievers", nargs="+", choices=RETRIEVERS, default=list(RETRIEVERS))
     ap.add_argument("--gold", type=Path, default=DEFAULT_PATH)
+    ap.add_argument("--index-dir", type=Path, default=INDEX_DIR)
+    ap.add_argument("--chunks-dir", type=Path, default=CHUNKS_DIR)
+    ap.add_argument("--out-dir", type=Path, default=RESULTS_DIR, help="run files and the summary go here")
     args = ap.parse_args(argv)
 
     rep = validate_file(args.gold)
     if not rep.ok:
         print(f"ERROR: gold set {args.gold} is invalid; run eval/validate_gold.py first", file=sys.stderr)
         return 1
-    # one embedder (the model is loaded once) for every variant's dense index
-    embedder = embedder_from_settings() if {"dense", "hybrid"} & set(args.retrievers) else None
+    embedder = None
     try:
-        rows = evaluate(args.variants, args.retrievers, rep.items, embedder)
+        # one embedder (the model is loaded once) for every variant's dense index
+        if {"dense", "hybrid"} & set(args.retrievers):
+            embedder = embedder_from_settings()
+        rows = evaluate(args.variants, args.retrievers, rep.items, embedder, args.index_dir, args.chunks_dir,
+                        args.out_dir)
+    except ValidationError as err:
+        print(f"ERROR: settings are incomplete; copy .env.example to .env and fill it in.\n{err}", file=sys.stderr)
+        return 2
     except (FileNotFoundError, ValueError) as err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 2
     finally:
         if embedder is not None:
             embedder.close()
-    best = max(rows, key=lambda r: (r["result"]["overall"]["recall@5"], r["result"]["overall"]["mrr"]))
-    write_summary(tables(rows, best))
-    print(f"tables written to {SUMMARY_FILE}")
+    if set(args.variants) != set(VARIANTS) or set(args.retrievers) != set(RETRIEVERS):
+        print(f"partial run: run files written to {args.out_dir / 'runs'}; {SUMMARY_NAME} left unchanged")
+        return 0
+    write_summary(tables(rows, best_row(rows)), args.out_dir / SUMMARY_NAME)
+    print(f"tables written to {args.out_dir / SUMMARY_NAME}")
     return 0
 
 
-def evaluate(variants: list[str], wanted: list[str], items: list[GoldItem], embedder: Embedder | None) -> list[dict]:
+def evaluate(variants: list[str], wanted: list[str], items: list[GoldItem], embedder: Embedder | None,
+             index_dir: Path = INDEX_DIR, chunks_dir: Path = CHUNKS_DIR, out_dir: Path = RESULTS_DIR) -> list[dict]:
     rows = []
     for variant in variants:
-        retrievers = load_retrievers(variant, wanted, embedder)
+        retrievers = load_retrievers(variant, wanted, embedder, index_dir, chunks_dir)
         for name, retriever in retrievers.items():
             for setting in FILTER_SETTINGS:
                 records, seconds = run(retriever, items, setting)
-                tag = setting.replace("+", "_")
-                write_runs(RESULTS_DIR / "runs" / f"{variant}_{name}_{tag}.jsonl", records, name, setting)
+                write_runs(run_file(out_dir, variant, name, setting), records, name, setting)
                 result = score_runs(items, {r["id"]: [hit_key(h) for h in r["retrieved"]] for r in records})
                 rows.append({"variant": variant, "retriever": name, "filters": setting, "result": result,
                              "seconds": seconds})

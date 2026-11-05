@@ -16,8 +16,10 @@ from rank_bm25 import BM25Okapi
 from retrieval import INDEX_DIR
 from retrieval.common import NO_FILTERS, Chunk, Filters, SearchResult
 
-TOKEN = re.compile(r"[a-z]+|\d+(?:,\d{3})*(?:\.\d+)?")
-INDEX_FORMAT = 2                      # bump when the pickled layout changes, so old files are rebuilt
+# Words; numbers with thousands separators only when every group has exactly three digits ("391,035"), so a
+# list such as "2023,2024" stays two numbers; other numbers with an optional decimal part ("107.6").
+TOKEN = re.compile(r"[a-z]+|\d{1,3}(?:,\d{3})+(?!\d)(?:\.\d+)?|\d+(?:\.\d+)?")
+INDEX_FORMAT = 3                      # bump when the pickled layout or the tokenizer changes, so old files are rebuilt
 FILTER_FIELDS = ("ticker", "fiscal_year", "fiscal_period", "form", "item")
 
 
@@ -80,4 +82,6 @@ class BM25Index:
             ids = list(range(len(self.chunks)))
             scores = self.bm25.get_scores(tokens)
         top = np.argsort(-scores, kind="stable")[:k]
+        # Why > 0: a chunk sharing no query term scores 0 and is not a result. (In a tiny corpus a term in
+        # exactly half the chunks gets IDF 0 under BM25Okapi and also scores 0; irrelevant at 50k+ chunks.)
         return [SearchResult.of(self.chunks[ids[i]], float(scores[i])) for i in top if scores[i] > 0]

@@ -86,9 +86,10 @@ def units(text: str) -> list[str]:
 
 
 def pack(parts: list[str], size: int, overlap: int) -> list[str]:
-    """Join consecutive units into chunks of at most `size` characters (plus the overlap). Each new chunk starts
-    with the last ~`overlap` characters of the previous one, cut at a word boundary, so a sentence split across
-    two chunks is still found whole in one of them."""
+    """Join consecutive units into chunks. Each new chunk starts with the last ~`overlap` characters of the
+    previous one, cut at a word boundary, so a sentence split across two chunks is still found whole in one of
+    them. With units of at most `size` characters (as units() makes them), a chunk is at most
+    `size` + `overlap` + 1 characters: the carried-over tail, a line break, and one unit."""
     chunks, current = [], ""
     for part in parts:
         if current and len(current) + 1 + len(part) > size:
@@ -123,7 +124,7 @@ def table_aware(text: str) -> Iterator[tuple[str, str]]:
             pending.append(para)
             continue
         caption = ""
-        if pending and len(pending[-1]) <= CAPTION_MAX_CHARS and not is_table(pending[-1]):
+        if pending and len(pending[-1]) <= CAPTION_MAX_CHARS:   # pending holds only non-table paragraphs
             caption = pending.pop()              # the statement title stays with its table
         yield from (("text", c) for c in pack(units("\n\n".join(pending)), PACK_SIZE, PACK_OVERLAP))
         pending = []
@@ -132,19 +133,24 @@ def table_aware(text: str) -> Iterator[tuple[str, str]]:
 
 
 def split_table(table: str, caption: str = "") -> list[str]:
+    """The table (with its caption) as one chunk, or, above TABLE_MAX_CHARS, split by rows into parts that each
+    repeat the caption and header lines, so every part still says what its numbers are. A part exceeds the cap
+    only when the head plus a single row already does (a row is never cut). Every row appears in exactly one
+    part; a table with no rows below its header stays whole rather than being dropped."""
     whole = f"{caption}\n{table}" if caption else table
-    if len(whole) <= TABLE_MAX_CHARS:
-        return [whole]
     lines = table.split("\n")
+    body = lines[TABLE_HEADER_LINES:]
+    if len(whole) <= TABLE_MAX_CHARS or not body:
+        return [whole]
     head = "\n".join(([caption] if caption else []) + lines[:TABLE_HEADER_LINES])
-    parts, current = [], []
-    for line in lines[TABLE_HEADER_LINES:]:
-        if current and len(head) + sum(len(x) + 1 for x in current) + len(line) > TABLE_MAX_CHARS:
+    parts, current, size = [], [], len(head)
+    for line in body:
+        if current and size + 1 + len(line) > TABLE_MAX_CHARS:     # +1: the line break before the row
             parts.append(head + "\n" + "\n".join(current))
-            current = []
+            current, size = [], len(head)
         current.append(line)
-    if current:
-        parts.append(head + "\n" + "\n".join(current))
+        size += 1 + len(line)
+    parts.append(head + "\n" + "\n".join(current))
     return parts
 
 

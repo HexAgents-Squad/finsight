@@ -54,6 +54,9 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 2
+    if empty := [v for v, chunks in chunk_sets.items() if not chunks]:
+        print(f"ERROR: no chunks for {empty} in {args.chunks_dir}; run ingest/03_chunk.py", file=sys.stderr)
+        return 2
     for variant, chunks in chunk_sets.items():
         start = time.perf_counter()
         BM25Index(chunks).save(index_path(variant, args.index_dir))
