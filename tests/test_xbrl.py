@@ -6,15 +6,20 @@ import pytest
 
 from ingest.xbrl import (
     CONCEPT_MAP_FILE,
+    STATEMENT_LINE_WORDS,
     Concept,
+    Fact,
     Gap,
     Metric,
     display_forms,
     find_fact,
     gap_problems,
+    implausible,
+    is_rounding_of,
     load_concept_map,
     load_gaps,
     value_in_text,
+    value_on_statement_line,
 )
 
 M = 1_000_000
@@ -65,6 +70,39 @@ def test_restated_value_uses_the_latest_filing_and_keeps_the_original():
     assert (f.value, f.original_value, f.restated, f.accession_no) == (105_856, 101_887, True, "LATER")
 
 
+def test_unrestated_value_cites_the_filing_that_first_reported_it():
+    # the FY2025 10-K repeats FY2024 unchanged: cite the FY2024 10-K (the corpus filing), with its SEC folder
+    data = facts(Revenues=[annual(391_035 * M, FY24, 2024, filed="2024-11-01", accn="0000320193-24-000123"),
+                           annual(391_035 * M, FY24, 2025, filed="2025-10-31", accn="0000320193-25-000079")])
+    f = find_fact(data, "AAPL", metric("Revenues"), 2024, cik="0000320193")
+    assert (f.accession_no, f.original_accession_no, f.restated) == ("0000320193-24-000123",) * 2 + (False,)
+    assert f.url == "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/"
+    assert find_fact(data, "AAPL", metric("Revenues"), 2024).url is None
+
+
+def test_a_rounded_repeat_is_not_a_restatement():
+    # Citi: a later 10-K repeats FY2023 total assets 2,411,834 as 2,412,000 (a summary table); a real change is kept
+    rounded = facts(Assets=[row(2_411_834 * M, "2023-12-31", 2023, "FY", filed="2024-02-23", accn="ORIG"),
+                            row(2_412_000 * M, "2023-12-31", 2024, "FY", filed="2025-02-21", accn="LATER")])
+    f = find_fact(rounded, "C", metric("Assets", period="instant"), 2023)
+    assert (f.value, f.restated, f.accession_no) == (2_411_834, False, "ORIG")
+    changed = facts(Assets=[row(2_411_834 * M, "2023-12-31", 2023, "FY", filed="2024-02-23", accn="ORIG"),
+                            row(2_411_900 * M, "2023-12-31", 2024, "FY", filed="2025-02-21", accn="LATER")])
+    f = find_fact(changed, "C", metric("Assets", period="instant"), 2023)
+    assert (f.value, f.restated, f.original_accession_no) == (2_411_900, True, "ORIG")
+
+
+@pytest.mark.parametrize("value, exact, rounding", [
+    (2_412_000, 2_411_834, True),
+    (2_411_800, 2_411_834, True),
+    (2_000_000, 2_411_834, False),       # keeps fewer than 3 significant digits: a different value
+    (2_411_834, 2_411_834, False),       # unchanged
+    (6.1, 6.08, False),                  # per share: a split or restatement, never a rounding
+])
+def test_is_rounding_of(value, exact, rounding):
+    assert is_rounding_of(value, exact) is rounding
+
+
 def test_amendment_is_the_most_recently_filed_value():
     data = facts(NetIncomeLoss=[annual(10 * M, FY24, 2024, filed="2024-11-01"),
                                 annual(12 * M, FY24, 2024, form="10-K/A", filed="2025-01-15")])
@@ -92,6 +130,14 @@ def test_quarter_defaults_to_three_months_and_year_to_date_on_request():
     assert (six.value, six.duration, six.fiscal_period) == (219_659, "6M", "Q2")
     with pytest.raises(ValueError, match="Q4 is never derived"):
         find_fact(data, "AAPL", metric("Revenues"), 2025, "Q4")
+
+
+@pytest.mark.parametrize("fiscal_period, duration", [("FY", "3M"), ("Q1", "6M"), ("Q2", "9M"), ("Q3", "12M"),
+                                                     ("Q2", "4M")])
+def test_a_duration_the_period_cannot_have_is_an_error(fiscal_period, duration):
+    # FY + 3M would be a standalone Q4 (never derived); Q3 + 12M the prior fiscal year
+    with pytest.raises(ValueError, match="not valid"):
+        find_fact(facts(Revenues=Q2), "AAPL", metric("Revenues"), 2025, fiscal_period, duration)
 
 
 def test_cash_flow_metrics_report_year_to_date_in_10qs():
@@ -129,6 +175,14 @@ def test_concepts_are_tried_in_order():
                  RevenueFromContractWithCustomerExcludingAssessedTax=[annual(642_637 * M, FY24, 2024)])
     m = metric("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")
     assert find_fact(data, "WMT", m, 2024).value == 648_125
+
+
+def test_rd_uses_the_income_statement_line_before_the_in_process_line():
+    # JNJ tags its separate acquired in-process R&D line as ResearchAndDevelopmentExpense (1,841) and the
+    # income-statement R&D line as the "excluding acquired in-process cost" concept (17,232)
+    data = facts(ResearchAndDevelopmentExpense=[annual(1_841 * M, FY24, 2024)],
+                 ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost=[annual(17_232 * M, FY24, 2024)])
+    assert find_fact(data, "JNJ", load_concept_map()["rd_expense"], 2024).value == 17_232
 
 
 def test_sector_specific_concept():
@@ -185,6 +239,7 @@ def test_concept_map_covers_the_plan_metrics():
     assert metrics["capex"].quarterly_ytd_only and not metrics["revenue"].quarterly_ytd_only
     gaps = load_gaps()
     assert {g.metric for g in gaps} <= PLAN_METRICS
+    assert set(STATEMENT_LINE_WORDS) == PLAN_METRICS                     # every metric can be spot-checked
 
 
 def test_concept_map_rejects_unknown_keys(tmp_path):
@@ -197,13 +252,31 @@ def test_concept_map_rejects_unknown_keys(tmp_path):
         load_concept_map(path)
 
 
-def test_gap_problems():
+def test_gap_problems_are_checked_year_by_year():
     gaps = [Gap("operating_income", frozenset({"JPM"}), frozenset({"FY", "Q1"}), "no line")]
-    assert gap_problems({("operating_income", "JPM", "FY"), ("operating_income", "JPM", "Q1")}, gaps) == []
-    assert gap_problems({("operating_income", "JPM", "FY"), ("operating_income", "JPM", "Q1"),
-                         ("revenue", "AAPL", "FY")}, gaps) == ["undeclared gap: revenue not found for AAPL FY"]
-    assert gap_problems({("operating_income", "JPM", "FY")}, gaps) == [
-        "stale gap entry: operating_income for JPM Q1 is now reported"]
+    periods = [(2024, "FY"), (2025, "FY"), (2025, "Q1")]
+    every = {("operating_income", "JPM", 2024, "FY"), ("operating_income", "JPM", 2025, "FY"),
+             ("operating_income", "JPM", 2025, "Q1")}
+    assert gap_problems(every, gaps, periods) == []
+    assert gap_problems(every | {("revenue", "AAPL", 2024, "FY")}, gaps, periods) == [
+        "undeclared gap: revenue not found for AAPL FY2024 FY"]
+    # reported for one year only: the gap is stale for that year, not hidden by the other year's gap
+    assert gap_problems(every - {("operating_income", "JPM", 2024, "FY")}, gaps, periods) == [
+        "stale gap entry: operating_income for JPM FY2024 FY is now reported"]
+
+
+def fact(metric_name, period, duration, value, concept="C"):
+    return Fact("JNJ", metric_name, 2025, period, duration, value, "USD millions", concept, "l", None, "e", "a",
+                "10-K", "f", None, False, value, "a")
+
+
+def test_implausible_annual_values_are_reported():
+    # JNJ before the R&D fix: FY 109 (the in-process line) against about 3,600 a quarter
+    wrong = [fact("rd_expense", "FY", "12M", 109, "InProcess"), fact("rd_expense", "Q1", "3M", 3_225)]
+    assert implausible(wrong) == ["implausible: JNJ rd_expense FY2025 = 109 but Q1 3M = 3,225 (InProcess vs C)"]
+    right = [fact("rd_expense", "FY", "12M", 14_665), fact("rd_expense", "Q1", "3M", 3_225),
+             fact("capex", "FY", "12M", 10), fact("capex", "Q3", "9M", 900)]     # capex: lumpy, not checked
+    assert implausible(right) == []
 
 
 @pytest.mark.parametrize("value, unit, text, found", [
@@ -216,6 +289,17 @@ def test_gap_problems():
 ])
 def test_value_in_text(value, unit, text, found):
     assert value_in_text(value, unit, text) is found
+
+
+@pytest.mark.parametrize("metric_name, value, unit, line, found", [
+    ("revenue", 391_035.0, "USD millions", "Total net sales | 391,035 | 383,285", True),
+    ("revenue", 391_035.0, "USD millions", "Total assets | 391,035", False),   # the value, on another line item
+    ("operating_cash_flow", 118_548.0, "USD millions", "Net cash from operations | 118,548 | 87,582", True),
+    ("operating_income", 9_137.0, "USD millions", "Operating earnings | 9,137 | 12,757", True),
+    ("eps_diluted", 6.74, "USD per share", "Earnings per Common Share Assuming Dilution | 6.74 | 0.14", True),
+])
+def test_value_on_statement_line(metric_name, value, unit, line, found):
+    assert value_on_statement_line(value, unit, metric_name, "Revenue\n391,035\n" + line) is found
 
 
 def test_display_forms():

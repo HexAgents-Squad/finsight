@@ -10,8 +10,10 @@ label, and later filings repeat (and sometimes restate) earlier periods, so a va
    Balance-sheet items are instants (no start date; duration None). Q4 is never derived (spec §4.2).
    If the concept is missing from its own filing, the dates come from a concept every filing has (net income,
    total assets) in that same labelled filing, so the period is still the company's label, never a calendar guess.
-2. The VALUE is the most recently filed row for exactly that period, from any 10-K/10-Q or amendment
-   (spec §7.7: restated or amended figures use the latest filed value; `restated` says if it changed).
+2. The VALUE is the most recently filed row for exactly that period that changed it, from any 10-K/10-Q or
+   amendment (spec §7.7: restated or amended figures use the latest filed value; `restated` says so and
+   `original_value` keeps the first). A later repeat that merely rounds the figure is not a restatement. The
+   citation is the filing that carries the value: the original filing unless the value was restated.
 
 Currency is scaled to the unit the statements use ("USD millions" for all 20 companies, checked in WP3);
 per-share values stay "USD per share". A metric not reported is None, never a substitute (spec §7.5).
@@ -44,6 +46,15 @@ PERIOD_ANCHOR_DURATION = "NetIncomeLoss"
 PERIOD_ANCHOR_INSTANT = "Assets"
 DEFAULT_DURATION = {"FY": "12M", "Q1": "3M", "Q2": "3M", "Q3": "3M"}          # spec §4.2 / week0 §2.3
 YTD_DURATION = {"FY": "12M", "Q1": "3M", "Q2": "6M", "Q3": "9M"}
+# The durations a fiscal period can have. Anything else would return a different period (FY + 3M = a standalone
+# Q4, which spec §4.2 forbids; Q3 + 12M = the prior fiscal year), so it is an error.
+VALID_DURATIONS = {"FY": frozenset({"12M"}), "Q1": frozenset({"3M"}), "Q2": frozenset({"3M", "6M"}),
+                   "Q3": frozenset({"3M", "9M"})}
+# A later filing that repeats a figure rounded (e.g. a summary table: 2,411,834 -> 2,412,000) has not restated it.
+# Only roundings that keep a few significant digits count, so a real change is never mistaken for one.
+ROUNDING_DIGITS = range(1, 10)              # rounded to 10^1 .. 10^9 of the reported unit
+ROUNDING_MIN_SIGNIFICANT_DIGITS = 3
+SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data"
 CURRENCY_UNIT = "USD millions"         # all 20 companies present their statements in millions (ADR-011)
 CURRENCY_SCALE = 1_000_000
 PER_SHARE_UNIT = "USD per share"
@@ -70,7 +81,7 @@ class Metric:
     period: str                         # "duration" (income / cash flow) or "instant" (balance sheet)
     kind: str                           # "currency" or "per_share"
     concepts: tuple[Concept, ...]       # tried in order; only concepts that mean the same thing
-    # Cash-flow statements in 10-Qs are year-to-date only (6M at Q2, 9M at Q3): a 3-month figure is not reported
+    # Cash-flow statements in 10-Qs are year-to-date (6M at Q2, 9M at Q3); only MSFT, AMZN and KO also report 3M
     quarterly_ytd_only: bool = False
 
     def quarterly_duration(self, fiscal_period: str) -> str:
@@ -91,11 +102,15 @@ class Fact:
     label: str
     period_start: str | None
     period_end: str
+    # The filing to cite (week0 §2.3): the one that first reported the period (the indexed corpus filing), or,
+    # when the value was restated, the later filing that carries the cited value
     accession_no: str
     form: str
     filed: str
-    restated: bool                      # the latest filed value differs from the one first reported
+    url: str | None                     # SEC folder of that filing (None if no CIK was given)
+    restated: bool                      # a later filing changed the value (not just rounded it)
     original_value: float               # as first reported, in `unit` (what the original filing's text shows)
+    original_accession_no: str
 
 
 def load_concept_map(path: Path = CONCEPT_MAP_FILE) -> dict[str, Metric]:
@@ -157,12 +172,26 @@ def labelled_period(rows: list[dict], fiscal_year: int, fiscal_period: str, dura
 
 
 def select_row(rows: list[dict], period: Period) -> tuple[dict, dict] | None:
-    """Step 2: (latest filed row, first filed row) for exactly `period`, from any 10-K/10-Q or amendment."""
+    """Step 2: (row to use, first filed row) for exactly `period`, from any 10-K/10-Q or amendment. The row to use
+    is the latest filed one that changed the value; if no later filing changed it (or only rounded it), the
+    first filed row, so the citation points at the filing that reported the period."""
     start, end = period
     same = [r for r in rows if r["end"] == end and r.get("start") == start and r.get("form") in ALL_FORMS]
     if not same:
         return None
-    return max(same, key=lambda r: (r["filed"], r["accn"])), min(same, key=lambda r: (r["filed"], r["accn"]))
+    first = min(same, key=lambda r: (r["filed"], r["accn"]))
+    changed = [r for r in same if r["val"] != first["val"] and not is_rounding_of(r["val"], first["val"])]
+    return (max(changed, key=lambda r: (r["filed"], r["accn"])) if changed else first), first
+
+
+def is_rounding_of(value: float, exact: float) -> bool:
+    """True if `value` is `exact` rounded to a power of ten (a summary table repeating 2,411,834 as 2,412,000)."""
+    return value != exact and any(value == round(exact, -digits) for digits in ROUNDING_DIGITS
+                                  if 10 ** (digits + ROUNDING_MIN_SIGNIFICANT_DIGITS - 1) <= abs(exact))
+
+
+def filing_url(cik: str | None, accession_no: str) -> str | None:
+    return f"{SEC_ARCHIVES}/{int(cik)}/{accession_no.replace('-', '')}/" if cik else None
 
 
 def fiscal_period_dates(company_facts: dict, fiscal_year: int, fiscal_period: str,
@@ -181,17 +210,25 @@ def _reported_for(company_facts: dict, concept: str, kind: str, row: dict) -> bo
 
 
 def find_fact(company_facts: dict, ticker: str, metric: Metric, fiscal_year: int, fiscal_period: str = "FY",
-              duration: str | None = None, sector: str | None = None) -> Fact | None:
-    """The reported value of `metric`, or None if the company does not report it for that period. `duration`
-    defaults to 12M for FY and 3M for quarters; balance-sheet metrics are instants whatever is asked. `sector`
-    (config/companies.yaml) enables sector-specific concepts such as banks' "long-term debt"."""
+              duration: str | None = None, sector: str | None = None, cik: str | None = None) -> Fact | None:
+    """The reported value of `metric`, or None if the company does not report it for that period.
+
+    `duration` defaults to 12M for FY and 3M for quarters and must suit the period (VALID_DURATIONS, else
+    ValueError); balance-sheet metrics are instants whatever is asked. Cash-flow metrics are reported
+    year-to-date in 10-Qs (a 3M figure only by a few companies): when the 3M figure is None,
+    `metric.quarterly_duration(fiscal_period)` gives the duration that exists (the answer then says it is
+    year-to-date, spec §4.2). `sector` (config/companies.yaml) enables sector-specific concepts such as banks'
+    "long-term debt"; `cik` is used for the filing URL."""
     fiscal_period = fiscal_period.upper()
-    if fiscal_period not in DEFAULT_DURATION:
-        raise ValueError(f"fiscal_period must be one of {sorted(DEFAULT_DURATION)}; Q4 is never derived")
+    if fiscal_period not in VALID_DURATIONS:
+        raise ValueError(f"fiscal_period must be one of {sorted(VALID_DURATIONS)}; Q4 is never derived")
     if metric.period == "instant":
         duration = None
     elif duration is None:
         duration = DEFAULT_DURATION[fiscal_period]
+    elif duration not in VALID_DURATIONS[fiscal_period]:
+        raise ValueError(f"duration {duration!r} is not valid for {fiscal_period}; use one of "
+                         f"{sorted(VALID_DURATIONS[fiscal_period])} (Q4 is never derived)")
     scale = CURRENCY_SCALE if metric.kind == "currency" else 1
     anchor_period = fiscal_period_dates(company_facts, fiscal_year, fiscal_period, duration)
     candidates = [c for c in metric.concepts if not c.sectors or sector in c.sectors]
@@ -209,7 +246,8 @@ def find_fact(company_facts: dict, ticker: str, metric: Metric, fiscal_year: int
                 continue
             return Fact(ticker, metric.name, fiscal_year, fiscal_period, duration, row["val"] / scale,
                         OUTPUT_UNITS[metric.kind], concept.name, concept.label, row.get("start"), row["end"],
-                        row["accn"], row["form"], row["filed"], row["val"] != first["val"], first["val"] / scale)
+                        row["accn"], row["form"], row["filed"], filing_url(cik, row["accn"]),
+                        row is not first, first["val"] / scale, first["accn"])
     return None
 
 
@@ -230,12 +268,38 @@ def load_gaps(path: Path = CONCEPT_MAP_FILE) -> list[Gap]:
                 frozenset(spec.get("periods", ("FY", *QUARTERS))), spec["reason"]) for name, spec in raw.items()]
 
 
-def gap_problems(missing: set[tuple[str, str, str]], gaps: list[Gap]) -> list[str]:
-    """Compare real coverage with the declared gaps. `missing` holds (metric, ticker, fiscal_period) for every
-    in-scope period without a value. Undeclared gaps and declared gaps that now have values are both problems."""
-    declared = {(g.metric, t, p) for g in gaps for t in g.tickers for p in g.periods}
-    out = [f"undeclared gap: {m} not found for {t} {p}" for m, t, p in sorted(missing - declared)]
-    out += [f"stale gap entry: {m} for {t} {p} is now reported" for m, t, p in sorted(declared - missing)]
+def gap_problems(missing: set[tuple[str, str, int, str]], gaps: list[Gap],
+                 periods: list[tuple[int, str]]) -> list[str]:
+    """Compare real coverage with the declared gaps, year by year. `missing` holds (metric, ticker, fiscal_year,
+    fiscal_period) for every in-scope period without a value; `periods` lists the in-scope (fiscal_year,
+    fiscal_period). Undeclared gaps and declared gaps that now have values are both problems."""
+    declared = {(g.metric, t, y, p) for g in gaps for t in g.tickers for y, p in periods if p in g.periods}
+    out = [f"undeclared gap: {m} not found for {t} FY{y} {p}" for m, t, y, p in sorted(missing - declared)]
+    out += [f"stale gap entry: {m} for {t} FY{y} {p} is now reported" for m, t, y, p in sorted(declared - missing)]
+    return out
+
+
+# Metrics that are positive and accrue steadily through the year, so a fiscal year's value must be in proportion
+# to the same year's quarterly values. A concept that holds a different line item (JNJ's in-process R&D tagged as
+# R&D: 109 for the year vs about 3,600 a quarter) fails this.
+PLAUSIBILITY_METRICS = frozenset({"revenue", "gross_profit", "rd_expense"})
+DURATION_MONTHS = {"3M": 3, "6M": 6, "9M": 9, "12M": 12}
+PLAUSIBLE_ANNUALISED_RATIO = (0.5, 2.0)      # annual value / (quarterly value scaled to 12 months)
+
+
+def implausible(facts: list[Fact]) -> list[str]:
+    """Annual values out of proportion with the same fiscal year's quarterly values (see PLAUSIBILITY_METRICS)."""
+    annual = {(f.ticker, f.metric, f.fiscal_year): f for f in facts if f.fiscal_period == "FY"}
+    low, high = PLAUSIBLE_ANNUALISED_RATIO
+    out = []
+    for f in facts:
+        year = annual.get((f.ticker, f.metric, f.fiscal_year))
+        if f.metric not in PLAUSIBILITY_METRICS or f.fiscal_period == "FY" or year is None or f.value <= 0:
+            continue
+        ratio = year.value / (f.value * DURATION_MONTHS["12M"] / DURATION_MONTHS[f.duration])
+        if not low <= ratio <= high:
+            out.append(f"implausible: {f.ticker} {f.metric} FY{f.fiscal_year} = {year.value:,.0f} but "
+                       f"{f.fiscal_period} {f.duration} = {f.value:,.0f} ({year.concept} vs {f.concept})")
     return out
 
 
@@ -255,3 +319,29 @@ def display_forms(value: float, unit: str) -> list[str]:
 def value_in_text(value: float, unit: str, text: str) -> bool:
     """True if the value appears in `text` as a whole number (not inside a longer one, e.g. 1,391,035)."""
     return any(re.search(rf"(?<![\d,.]){re.escape(form)}(?![\d]|,\d)", text) for form in display_forms(value, unit))
+
+
+# Spot check: words that a statement line carrying the metric contains ("Total net sales | 391,035"), so a number
+# elsewhere in the filing that merely equals the value does not count as a match
+STATEMENT_LINE_WORDS = {name: re.compile(words, re.IGNORECASE) for name, words in {
+    "revenue": r"revenue|sales",
+    "operating_income": r"operating (?:income|profit|loss|earnings)|(?:income|earnings) from operations",
+    "net_income": r"net (?:income|earnings|loss)",
+    "gross_profit": r"gross (?:profit|margin)",
+    "rd_expense": r"research",
+    "capex": r"property|productive assets|capital expenditure",
+    "operating_cash_flow": r"operating activities|cash from operations",
+    # PFE prints its diluted figures under a "diluted" heading, on lines named "... common shareholders"
+    "eps_diluted": r"dilut|common shareholders",
+    "total_assets": r"total assets",
+    "total_liabilities": r"total liabilities",
+    "stockholders_equity": r"equity",
+    "cash": r"cash",
+    "long_term_debt": r"debt|borrowings",
+}.items()}
+
+
+def value_on_statement_line(value: float, unit: str, metric: str, text: str) -> bool:
+    """True if `value` appears on a line of `text` that carries the metric's words (STATEMENT_LINE_WORDS)."""
+    words = STATEMENT_LINE_WORDS[metric]
+    return any(words.search(line) and value_in_text(value, unit, line) for line in text.splitlines())

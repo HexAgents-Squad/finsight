@@ -6,7 +6,8 @@
 #   period           duration (income statement / cash flow) or instant (balance sheet)
 #   kind             currency (scaled to USD millions) or per_share (USD per share)
 #   sectors          use the concept only for these sectors (config/companies.yaml)
-#   quarterly_ytd_only  10-Qs report it year-to-date only (cash flow): Q2 = 6M, Q3 = 9M; no 3M figure
+#   quarterly_ytd_only  every 10-Q reports it year-to-date (cash flow): Q2 = 6M, Q3 = 9M; only a few companies
+#                    (MSFT, AMZN, KO) also report a 3-month figure
 #   unless_reported  use the concept only for periods where none of these concepts is reported (proves it equals
 #                    the metric, e.g. equity incl. minority interest = equity when there is no minority interest)
 schema_version: 1
@@ -37,19 +38,21 @@ metrics:
   rd_expense:
     period: duration
     concepts:
-      - {concept: ResearchAndDevelopmentExpense, label: research and development expense}
-      # PFE, ABBV: the income-statement R&D line excludes acquired in-process R&D, shown on its own line
+      # JNJ, PFE, ABBV: the income-statement R&D line excludes acquired in-process R&D, shown on its own line. It
+      # comes first because JNJ also tags that separate in-process line as ResearchAndDevelopmentExpense
+      # (FY2024: 1,841 vs the R&D line's 17,232); no other company tags both.
       - {concept: ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost, label: research and development expense}
+      - {concept: ResearchAndDevelopmentExpense, label: research and development expense}
   capex:
     period: duration
-    quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M) only
+    quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M)
     concepts:
       - {concept: PaymentsToAcquirePropertyPlantAndEquipment, label: purchases of property and equipment}
       # AMZN, NVDA: their capital-expenditure line also covers other productive assets
       - {concept: PaymentsToAcquireProductiveAssets, label: "purchases of property, equipment and other productive assets"}
   operating_cash_flow:
     period: duration
-    quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M) only
+    quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M)
     concepts:
       - {concept: NetCashProvidedByUsedInOperatingActivities, label: net cash provided by operating activities}
       # MRK FY2023: equal to the total when no discontinued operations are reported
@@ -93,7 +96,7 @@ metrics:
     concepts:
       - {concept: LongTermDebtNoncurrent, label: long-term debt}
       # GOOGL, KO, ABBV: the balance-sheet long-term debt line includes finance-lease obligations
-      - {concept: LongTermDebtAndCapitalLeaseObligations, label: long-term debt (including finance lease obligations)}
+      - {concept: LongTermDebtAndCapitalLeaseObligations, label: long-term debt}
       # banks present one long-term debt line without a current portion (BAC, WFC, C: LongTermDebt; JPM: the
       # concept including current maturities); for other companies these would add the current portion
       - {concept: LongTermDebt, label: long-term debt, sectors: [financials]}
@@ -127,7 +130,9 @@ gaps:
     reason: no total-liabilities line on the balance sheet; never derived from other lines
   stockholders_equity:
     tickers: [UNH, PG]
-    reason: only equity including minority interests is tagged, a different quantity
+    reason: >-
+      only equity including minority (noncontrolling) interests is tagged, and both companies report a minority
+      interest, so it is a different quantity
   long_term_debt:
     tickers: [GS]
     reason: secured and unsecured long-term borrowings are reported separately, with no total line

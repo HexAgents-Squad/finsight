@@ -8,9 +8,11 @@ Input : data/xbrl/<TICKER>.json (SEC company facts; ingest/01_download.py caches
         data/sections/sections.jsonl (optional, for the spot checks)
 Output: data/xbrl/facts_table.csv   one row per (company, metric, fiscal period, duration) found
         data/xbrl/coverage.csv      metric x company x period: the line item found, or empty for a gap
-        data/xbrl/spot_check.csv    every annual and quarterly value searched in the filing's own text
+        data/xbrl/spot_check.csv    every value searched in the financial statements of the filing that first
+                                    reported it, on a line carrying the metric's words
 Checks (exit 1 if one fails): at least MIN_METRICS metrics mapped; real coverage equals the gaps declared in
-config/concept_map.yaml; at least MIN_SPOT_CHECK_SHARE of the values found in the original filing text.
+config/concept_map.yaml, year by year; annual values in proportion with the same year's quarterly values; at least
+MIN_SPOT_CHECK_SHARE of the values found on their statement line.
 Exit codes: 0 = all checks pass, 1 = a check failed, 2 = setup error. Selection rules: ingest/xbrl.py.
 """
 from __future__ import annotations
@@ -29,10 +31,27 @@ from pydantic import ValidationError  # noqa: E402
 from core.settings import get_settings  # noqa: E402
 from ingest import SECTIONS_DIR, XBRL_DIR  # noqa: E402
 from ingest.edgar import SecClient, check_user_agent, companyfacts_url, load_scope  # noqa: E402
-from ingest.xbrl import QUARTERS, find_fact, gap_problems, load_concept_map, load_gaps, value_in_text  # noqa: E402
+from ingest.xbrl import (  # noqa: E402
+    QUARTERS,
+    find_fact,
+    gap_problems,
+    implausible,
+    load_concept_map,
+    load_gaps,
+    value_on_statement_line,
+)
 
 MIN_METRICS = 10                    # Jira UPGRAD-26 acceptance: at least 10 metrics mapped
-MIN_SPOT_CHECK_SHARE = 0.95         # share of values that must appear verbatim in the original filing text
+MIN_SPOT_CHECK_SHARE = 0.95         # share of values that must appear on their line of the original statements
+# Where the financial statements are (data/sections): 10-K Item 8, or Item 15 for filers that put them after the
+# exhibits list; 10-Q Part I Item 1
+STATEMENT_ITEMS = frozenset({"Item 8", "Item 15", "Part I Item 1"})
+# Checked misses, with the reason (each value was confirmed by hand in the filing), so a reader knows why they miss
+KNOWN_TEXT_MISSES = {
+    ("PG", "rd_expense"): "the 10-K states R&D only in words, rounded to $0.1 billion (\"$2.0 billion\")",
+    ("MRK", "total_assets"): "the balance sheet prints the total-assets row without a label",
+    ("MRK", "eps_diluted"): "printed under an 'Assuming Dilution' heading, on the line 'Net Income | 0.14'",
+}
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -63,14 +82,15 @@ def ensure_facts(tickers_ciks: list[tuple[str, str]], refresh: bool) -> str | No
     return None
 
 
-def filing_texts() -> dict[tuple[str, str, int, str], str]:
-    """(ticker, form, fiscal_year, fiscal_period) -> all section text of that filing, for the spot checks."""
-    texts: dict[tuple[str, str, int, str], list[str]] = defaultdict(list)
+def statement_texts() -> dict[str, str]:
+    """accession number -> the financial-statement sections of that filing, for the spot checks."""
+    texts: dict[str, list[str]] = defaultdict(list)
     path = SECTIONS_DIR / "sections.jsonl"
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             d = json.loads(line)
-            texts[(d["ticker"], d["form"], d["fiscal_year"], d["fiscal_period"])].append(d["text"])
+            if d["item"] in STATEMENT_ITEMS:
+                texts[d["accession_no"]].append(d["text"])
     return {k: "\n".join(v) for k, v in texts.items()}
 
 
@@ -86,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
 
     periods = [(y, "FY") for y in sorted(scope.tenk_years)]
     periods += [(y, q) for y in sorted(scope.tenq_years) for q in QUARTERS if q in scope.tenq_periods]
-    texts = filing_texts()
+    texts = statement_texts()
     facts, coverage, spot, missing = [], [], [], set()
     for company in scope.companies:
         company_facts = json.loads((XBRL_DIR / f"{company.ticker}.json").read_text(encoding="utf-8"))
@@ -96,25 +116,29 @@ def main(argv: list[str] | None = None) -> int:
                 # quarterly durations to tabulate: the 3M default and, for duration metrics, the year-to-date figure
                 durations = [None] if period == "FY" or metric.period == "instant" else sorted(
                     {metric.quarterly_duration(period), "3M"})
-                found = [f for d in durations
-                         if (f := find_fact(company_facts, company.ticker, metric, year, period, d, company.sector))]
+                found = [f for d in durations if (f := find_fact(company_facts, company.ticker, metric, year, period,
+                                                                  d, company.sector, company.cik))]
                 key = f"FY{year}" + ("" if period == "FY" else period)
                 row[key] = "; ".join(f"{f.duration or 'instant'}: {f.label}" for f in found)
                 if not found:
                     missing.add((metric.name, company.ticker, year, period))
+                facts += found
                 for fact in found:
-                    facts.append(asdict(fact))
-                    form = "10-K" if period == "FY" else "10-Q"
-                    text = texts.get((company.ticker, form, year, period))
+                    # the original value, in the filing that first reported it (usually the period's own filing)
+                    text = texts.get(fact.original_accession_no)
                     if text is not None:
+                        found_on_line = value_on_statement_line(fact.original_value, fact.unit, metric.name, text)
                         spot.append({"ticker": company.ticker, "metric": metric.name, "fiscal_year": year,
                                      "fiscal_period": period, "duration": fact.duration,
                                      "original_value": fact.original_value, "unit": fact.unit,
-                                     "found_in_filing_text": value_in_text(fact.original_value, fact.unit, text)})
+                                     "accession_no": fact.original_accession_no,
+                                     "found_on_statement_line": found_on_line,
+                                     "note": "" if found_on_line else KNOWN_TEXT_MISSES.get(
+                                         (company.ticker, metric.name), "UNEXPLAINED")})
             coverage.append(row)
 
     XBRL_DIR.mkdir(parents=True, exist_ok=True)
-    write_csv(XBRL_DIR / "facts_table.csv", facts)
+    write_csv(XBRL_DIR / "facts_table.csv", [asdict(f) for f in facts])
     write_csv(XBRL_DIR / "coverage.csv", coverage)
     if spot:
         write_csv(XBRL_DIR / "spot_check.csv", spot)
@@ -130,20 +154,26 @@ def main(argv: list[str] | None = None) -> int:
     problems = []
     if len(metrics) < MIN_METRICS:
         problems.append(f"{len(metrics)} metrics mapped; at least {MIN_METRICS} required")
-    problems += gap_problems({(m, t, p) for m, t, _y, p in missing}, gaps)
+    problems += gap_problems(missing, gaps, periods)
+    problems += implausible(facts)
     if spot:
-        matched = sum(s["found_in_filing_text"] for s in spot)
+        matched = sum(s["found_on_statement_line"] for s in spot)
         share = matched / len(spot)
-        print(f"spot check: {matched}/{len(spot)} values ({share:.1%}) appear verbatim in the original filing text "
-              f"-> data/xbrl/spot_check.csv")
+        print(f"spot check: {matched}/{len(spot)} values ({share:.1%}) found on their line of the original financial "
+              f"statements -> data/xbrl/spot_check.csv")
+        for s in spot:
+            if not s["found_on_statement_line"]:
+                print(f"  not found: {s['ticker']} {s['metric']} FY{s['fiscal_year']} {s['fiscal_period']} "
+                      f"{s['duration'] or 'instant'} {s['original_value']:,} {s['note']}".rstrip())
         if share < MIN_SPOT_CHECK_SHARE:
-            problems.append(f"only {share:.1%} of values found in the filing text (need {MIN_SPOT_CHECK_SHARE:.0%})")
+            problems.append(f"only {share:.1%} of values found on their statement line "
+                            f"(need {MIN_SPOT_CHECK_SHARE:.0%})")
     else:
         print("spot check skipped: data/sections/sections.jsonl not found (run ingest/02_parse_sections.py)")
     for p in problems:
         print(f"CHECK FAILED: {p}")
     if not problems:
-        print("OK: all checks pass (metrics mapped, coverage equals the declared gaps, spot check)")
+        print("OK: all checks pass (metrics mapped, coverage equals the declared gaps, plausibility, spot check)")
     return 1 if problems else 0
 
 
