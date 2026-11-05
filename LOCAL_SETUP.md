@@ -60,7 +60,7 @@ The tests run offline in seconds (the LLM client is tested against fake clients)
 ## Building the data (needed for retrieval and the tools)
 Each step writes git-ignored files under `data/` and can be re-run; the outputs are deterministic.
 ```bash
-python ingest/01_download.py          # 120 filings + XBRL company facts from SEC EDGAR (~10 min; needs SEC_USER_AGENT)
+python ingest/01_download.py          # 120 filings + XBRL company facts from SEC EDGAR (several minutes; needs SEC_USER_AGENT)
 python ingest/02_parse_sections.py    # 1,260 Item sections -> data/sections/sections.jsonl (~9 min)
 python ingest/05_xbrl_facts.py        # 1,303 facts + coverage and spot checks -> data/xbrl/*.csv (seconds)
 python ingest/03_chunk.py             # chunk variants C1/C2/C3 -> data/chunks/ (seconds)
