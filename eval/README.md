@@ -47,6 +47,10 @@ python eval/retrieval_eval.py --runs eval/results/runs_c2_hybrid_filtered.jsonl 
 ```
 Build queries with `retrieval_eval.build_query()` so follow-up questions include the previous turn, exactly as the agent will.
 
+Reading the numbers:
+- recall@k is the share of an item's gold sources found. Items with two sources (two companies, or a period comparison citing each year's own 10-K) score at most 0.5 at recall@1.
+- Gold sources name where a figure is printed in the statements (Item 8, 10-Q Part I Item 1). Most figures are repeated in the MD&A (Item 7), and retrieving only that copy counts as a miss, so say so next to the recall table.
+
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
 python eval/validate_test_sets.py            # CI runs this on every PR
