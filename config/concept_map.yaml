@@ -1,0 +1,133 @@
+# Metric name used by the agent -> candidate US-GAAP XBRL concepts, tried in order (ingest/xbrl.py).
+# Rules (week0_plan WP3 step 5, spec §7.5): a candidate must mean the SAME thing as the metric. When a company does
+# not report a metric, the answer is "not reported"; never substitute a different quantity. Gaps are listed at the
+# bottom and in docs/decisions.md (ADR-011). Each concept carries the line-item label the answer should use.
+#
+#   period           duration (income statement / cash flow) or instant (balance sheet)
+#   kind             currency (scaled to USD millions) or per_share (USD per share)
+#   sectors          use the concept only for these sectors (config/companies.yaml)
+#   quarterly_ytd_only  10-Qs report it year-to-date only (cash flow): Q2 = 6M, Q3 = 9M; no 3M figure
+#   unless_reported  use the concept only for periods where none of these concepts is reported (proves it equals
+#                    the metric, e.g. equity incl. minority interest = equity when there is no minority interest)
+schema_version: 1
+metrics:
+  revenue:
+    period: duration
+    concepts:
+      - {concept: Revenues, label: total net revenue, sectors: [financials]}   # JPM, BAC, C: net of interest expense
+      - {concept: RevenuesNetOfInterestExpense, label: total net revenue}      # WFC, GS
+      # "Revenues" before contract revenue: Walmart and Costco tag both, and Revenues is the total (incl. membership)
+      - {concept: Revenues, label: total revenues}
+      - {concept: RevenueFromContractWithCustomerExcludingAssessedTax, label: total revenues}
+      - {concept: RevenueFromContractWithCustomerIncludingAssessedTax, label: total revenues}
+      - {concept: SalesRevenueNet, label: total revenues}
+  operating_income:
+    period: duration
+    concepts:
+      - {concept: OperatingIncomeLoss, label: operating income}
+  net_income:
+    period: duration
+    concepts:
+      # attributable to the company; ProfitLoss (incl. minority interests) is a different quantity
+      - {concept: NetIncomeLoss, label: net income}
+  gross_profit:
+    period: duration
+    concepts:
+      - {concept: GrossProfit, label: gross profit}
+  rd_expense:
+    period: duration
+    concepts:
+      - {concept: ResearchAndDevelopmentExpense, label: research and development expense}
+      # PFE, ABBV: the income-statement R&D line excludes acquired in-process R&D, shown on its own line
+      - {concept: ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost, label: research and development expense}
+  capex:
+    period: duration
+    quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M) only
+    concepts:
+      - {concept: PaymentsToAcquirePropertyPlantAndEquipment, label: purchases of property and equipment}
+      # AMZN, NVDA: their capital-expenditure line also covers other productive assets
+      - {concept: PaymentsToAcquireProductiveAssets, label: "purchases of property, equipment and other productive assets"}
+  operating_cash_flow:
+    period: duration
+    quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M) only
+    concepts:
+      - {concept: NetCashProvidedByUsedInOperatingActivities, label: net cash provided by operating activities}
+      # MRK FY2023: equal to the total when no discontinued operations are reported
+      - concept: NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
+        label: net cash provided by operating activities
+        unless_reported: [CashProvidedByUsedInOperatingActivitiesDiscontinuedOperations]
+  eps_diluted:
+    period: duration
+    kind: per_share
+    concepts:
+      - {concept: EarningsPerShareDiluted, label: diluted earnings per share}
+  total_assets:
+    period: instant
+    concepts:
+      - {concept: Assets, label: total assets}
+  total_liabilities:
+    period: instant
+    concepts:
+      - {concept: Liabilities, label: total liabilities}
+  stockholders_equity:
+    period: instant
+    concepts:
+      - {concept: StockholdersEquity, label: total shareholders' equity}
+      # JNJ: the same quantity when the company reports no minority (noncontrolling) interest
+      - concept: StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest
+        label: total shareholders' equity
+        unless_reported: [MinorityInterest]
+  cash:
+    period: instant
+    concepts:
+      - {concept: CashAndCashEquivalentsAtCarryingValue, label: cash and cash equivalents}
+      - {concept: CashAndDueFromBanks, label: cash and due from banks, sectors: [financials]}
+      # PG: equal to cash and cash equivalents when no restricted cash is reported
+      - concept: CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+        label: cash and cash equivalents
+        unless_reported: [RestrictedCash, RestrictedCashCurrent, RestrictedCashNoncurrent,
+                          RestrictedCashAndCashEquivalentsAtCarryingValue, RestrictedCashAndCashEquivalentsCurrent,
+                          RestrictedCashAndCashEquivalentsNoncurrent]
+  long_term_debt:
+    period: instant
+    concepts:
+      - {concept: LongTermDebtNoncurrent, label: long-term debt}
+      # GOOGL, KO, ABBV: the balance-sheet long-term debt line includes finance-lease obligations
+      - {concept: LongTermDebtAndCapitalLeaseObligations, label: long-term debt (including finance lease obligations)}
+      # banks present one long-term debt line without a current portion (BAC, WFC, C: LongTermDebt; JPM: the
+      # concept including current maturities); for other companies these would add the current portion
+      - {concept: LongTermDebt, label: long-term debt, sectors: [financials]}
+      - concept: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities
+        label: long-term debt
+        sectors: [financials]
+
+# Known gaps: the company presents no such line item, so the answer is "not reported" (spec §7.5, ADR-011).
+# ingest/05_xbrl_facts.py fails if the real coverage differs from this list (an undeclared gap or a stale entry).
+# `periods` limits a gap to some periods (default: all FY2023-FY2025 and FY2025 Q1-Q3).
+gaps:
+  operating_income:
+    tickers: [JPM, BAC, WFC, C, GS, JNJ, PFE, MRK]
+    reason: banks and these pharma companies present no operating-income line
+  gross_profit:
+    tickers: [GOOGL, AMZN, META, JPM, BAC, WFC, C, GS, PFE, MRK, ABBV, UNH, WMT, COST, PG]
+    reason: only AAPL, MSFT, NVDA, JNJ and KO present a gross-profit line
+  rd_expense:
+    tickers: [AMZN, JPM, BAC, WFC, C, GS, UNH, WMT, COST, KO]
+    reason: no research-and-development line (AMZN's "technology and infrastructure" is a different quantity)
+  rd_expense_quarterly:
+    metric: rd_expense
+    tickers: [PG]
+    periods: [Q1, Q2, Q3]
+    reason: P&G reports R&D in its 10-K only, not in its 10-Q income statements
+  capex:
+    tickers: [JPM, BAC, WFC]
+    reason: no capital-expenditure line in these banks' cash-flow statements
+  total_liabilities:
+    tickers: [AMZN, MRK, ABBV, WMT, KO]
+    reason: no total-liabilities line on the balance sheet; never derived from other lines
+  stockholders_equity:
+    tickers: [UNH, PG]
+    reason: only equity including minority interests is tagged, a different quantity
+  long_term_debt:
+    tickers: [GS]
+    reason: secured and unsecured long-term borrowings are reported separately, with no total line
