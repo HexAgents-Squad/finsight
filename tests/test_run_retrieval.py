@@ -1,6 +1,7 @@
 """eval/run_retrieval.py: per-entity filters, interleaving, the summary's generated block, the output contract
 and the command line's exit codes (offline)."""
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
@@ -175,6 +176,8 @@ def test_a_summary_without_markers_is_exit_2(bm25_dirs, monkeypatch, capsys):
     (bm25_dirs / "out").mkdir()
     (bm25_dirs / "out" / SUMMARY_NAME).write_text("markers removed\n", encoding="utf-8")
     monkeypatch.setattr(run_retrieval, "evaluate", lambda *a, **k: [row("C1", "bm25", "none", 0.5, 0.4)])
+    # a full run builds the embedder first; a stub keeps the test independent of any .env
+    monkeypatch.setattr(run_retrieval, "embedder_from_settings", lambda: SimpleNamespace(close=lambda: None))
     assert cli(bm25_dirs) == 2
     assert "GENERATED markers" in capsys.readouterr().err
 
