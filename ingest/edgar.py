@@ -114,7 +114,8 @@ class SecClient:
             if response.status_code == requests.codes.ok:
                 return response
             if response.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS:
-                self._sleep(retry_after(response) or BACKOFF_BASE_S ** attempt)
+                wait = retry_after(response)          # 0 is a real answer ("retry now"), so test for None
+                self._sleep(BACKOFF_BASE_S ** attempt if wait is None else wait)
                 continue
             response.raise_for_status()
         raise RuntimeError(f"unreachable: {url}")

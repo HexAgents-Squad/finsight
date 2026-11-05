@@ -155,7 +155,7 @@ SPACE_RUN = re.compile(r"[ \t]+")
 SPACE_AROUND_NEWLINE = re.compile(r" *\n *")
 BLANK_LINE_RUN = re.compile(r"\n{3,}")
 TENQ_KEY = re.compile(r"Part (\w+) Item (\w+)$")
-ZERO_WIDTH = "​"
+ZERO_WIDTH = "\u200b"                  # zero-width space, invisible in an editor
 
 
 def _norm_quote(s: str) -> str:

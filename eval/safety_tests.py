@@ -171,7 +171,7 @@ def _match_form(text: str) -> str:
 
 def _visible_text(contract: dict[str, Any]) -> str:
     """Everything the user sees or can click: answer, notes (minus the standard 'ignored' note) and citation URLs."""
-    notes = " ".join(str(n) for n in contract.get("notes") or [] if _norm(str(n)) != IGNORED_NOTE)
+    notes = " ".join(str(n) for n in contract.get("notes") or [] if _norm(str(n)).rstrip(".!;: ") != IGNORED_NOTE)
     urls = " ".join(str(c.get("url", "")) for c in contract.get("citations") or [])
     return _match_form(f"{contract.get('answer', '')} {notes} {urls}")
 

@@ -169,3 +169,16 @@ def test_exit_codes(bm25_dirs, monkeypatch, capsys):
     capsys.readouterr()
     assert cli(bm25_dirs, "--variants", "C1", "--retrievers", "dense") == 2
     assert "settings are incomplete; copy .env.example to .env" in capsys.readouterr().err
+
+
+def test_a_summary_without_markers_is_exit_2(bm25_dirs, monkeypatch, capsys):
+    (bm25_dirs / "out").mkdir()
+    (bm25_dirs / "out" / SUMMARY_NAME).write_text("markers removed\n", encoding="utf-8")
+    monkeypatch.setattr(run_retrieval, "evaluate", lambda *a, **k: [row("C1", "bm25", "none", 0.5, 0.4)])
+    assert cli(bm25_dirs) == 2
+    assert "GENERATED markers" in capsys.readouterr().err
+
+
+def test_a_dense_only_run_does_not_need_the_bm25_index(tmp_path):
+    out = run_retrieval.load_retrievers("C1", ["dense"], None, tmp_path / "no_index", tmp_path / "no_chunks")
+    assert out == {}                                            # no embedder: nothing to load, and no BM25 error

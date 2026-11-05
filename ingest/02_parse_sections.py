@@ -2,16 +2,20 @@
 
 Usage:
     python ingest/02_parse_sections.py                         # all filings in data/raw/manifest.jsonl
-    python ingest/02_parse_sections.py --tickers AAPL          # a subset (debugging; skips the corpus checks)
+    python ingest/02_parse_sections.py --tickers AAPL --out-dir /tmp/sec   # a subset, for debugging
     python ingest/02_parse_sections.py --sample AAPL JPM       # also write the committed WP5 sample
 
 Input : data/raw/manifest.jsonl + the downloaded .htm files (ingest/01_download.py)
-Output: data/sections/sections.jsonl     1 line = 1 document = 1 Item of 1 filing (week0_plan §2.1)
+Output (in --out-dir, default data/sections; each file is written whole or not at all):
+        data/sections/sections.jsonl     1 line = 1 document = 1 Item of 1 filing (week0_plan §2.1)
         data/sections/parse_report.csv   per filing: Items found, kept, relocated, unassigned characters
         data/sections/corpus_stats.csv   per company and form: documents and characters
-        data/sample/sections_sample.jsonl  (--sample) the sample tickers' sections from the latest 10-K and
-                                           the latest 10-Q, small enough to commit
-Exit codes: 0 = corpus checks pass, 1 = a check failed (printed), 2 = no manifest.
+        data/sample/sections_sample.jsonl  (--sample, always this path; full runs only) the sample tickers'
+                                           sections from the latest 10-K and the latest 10-Q, small enough to commit
+A --tickers run skips the whole-corpus checks and must write to its own --out-dir, so it can never replace
+the full corpus with a subset.
+Exit codes: 0 = corpus checks pass, 1 = a check failed (printed), 2 = setup error (no manifest, unknown ticker,
+a subset run into data/sections, a downloaded file missing).
 The splitting rules are in ingest/sections.py.
 """
 from __future__ import annotations
@@ -30,14 +34,18 @@ from ingest.sections import FS_KEY, MDNA_KEY, corpus_problems, html_to_text, par
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8", newline="\n")
+    tmp = path.with_name(path.name + ".part")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8", newline="\n")
+    tmp.replace(path)                         # an interrupted run never leaves a half-written corpus
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
+    tmp = path.with_name(path.name + ".part")
+    with tmp.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+    tmp.replace(path)
 
 
 def sample_docs(docs: list[dict], tickers: set[str]) -> list[dict]:
@@ -53,8 +61,10 @@ def sample_docs(docs: list[dict], tickers: set[str]) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tickers", nargs="*", help="only these tickers (skips the whole-corpus checks)")
-    ap.add_argument("--sample", nargs="*", metavar="TICKER", help="write data/sample/sections_sample.jsonl")
+    ap.add_argument("--tickers", nargs="+", help="only these tickers (skips the whole-corpus checks; needs "
+                                                  "--out-dir)")
+    ap.add_argument("--sample", nargs="+", metavar="TICKER", help="write data/sample/sections_sample.jsonl")
+    ap.add_argument("--out-dir", type=Path, default=SECTIONS_DIR, help="where the three output files go")
     args = ap.parse_args(argv)
 
     if not MANIFEST_FILE.exists():
@@ -62,12 +72,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     manifest = [json.loads(line) for line in MANIFEST_FILE.read_text(encoding="utf-8").splitlines() if line]
     if args.tickers:
-        manifest = [m for m in manifest if m["ticker"] in {t.upper() for t in args.tickers}]
+        wanted = {t.strip().upper() for t in args.tickers}
+        if unknown := wanted - {m["ticker"] for m in manifest}:
+            print(f"ERROR: not in the manifest: {sorted(unknown)}", file=sys.stderr)
+            return 2
+        if args.out_dir.resolve() == SECTIONS_DIR.resolve():
+            print("ERROR: a --tickers run would replace the full corpus in data/sections; give --out-dir",
+                  file=sys.stderr)
+            return 2
+        if args.sample:                           # the committed sample must come from the full corpus
+            print("ERROR: --sample needs a full run (no --tickers)", file=sys.stderr)
+            return 2
+        manifest = [m for m in manifest if m["ticker"] in wanted]
 
     docs, report = [], []
     for m in manifest:
-        main_text = html_to_text((DATA_DIR / m["path"]).read_bytes())
-        exhibit_text = html_to_text((DATA_DIR / m["exhibit_path"]).read_bytes()) if m.get("exhibit_path") else None
+        try:
+            main_text = html_to_text((DATA_DIR / m["path"]).read_bytes())
+            exhibit_text = (html_to_text((DATA_DIR / m["exhibit_path"]).read_bytes()) if m.get("exhibit_path")
+                            else None)
+        except OSError as err:
+            print(f"ERROR: downloaded filing missing or unreadable ({err}); run ingest/01_download.py",
+                  file=sys.stderr)
+            return 2
         parsed = parse_filing(main_text, m["form"], exhibit_text)
         records = section_records(m, parsed)
         docs += records
@@ -85,18 +112,25 @@ def main(argv: list[str] | None = None) -> int:
               f"headings={parsed.headings_found:2d} kept={len(records):2d}"
               f"{'  relocated: ' + ', '.join(parsed.relocated) if parsed.relocated else ''}")
 
-    SECTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    write_jsonl(SECTIONS_DIR / "sections.jsonl", docs)
-    write_csv(SECTIONS_DIR / "parse_report.csv", report)
+    if not docs:                                   # nothing parsed: keep whatever corpus is there
+        print("ERROR: no section documents were parsed; nothing written", file=sys.stderr)
+        return 1
+    out = args.out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    write_jsonl(out / "sections.jsonl", docs)
+    write_csv(out / "parse_report.csv", report)
     stats: dict[tuple[str, str], Counter] = defaultdict(Counter)
     for d in docs:
         stats[(d["ticker"], d["form"])].update(documents=1, characters=d["n_chars"])
-    write_csv(SECTIONS_DIR / "corpus_stats.csv",
+    write_csv(out / "corpus_stats.csv",
               [{"ticker": t, "form": f, **c} for (t, f), c in sorted(stats.items())])
-    print(f"\n{len(docs)} section documents from {len(manifest)} filings -> data/sections/sections.jsonl")
+    print(f"\n{len(docs)} section documents from {len(manifest)} filings -> {out / 'sections.jsonl'}")
 
     if args.sample:
         sample = sample_docs(docs, {t.upper() for t in args.sample})
+        if not sample:
+            print(f"ERROR: no documents for sample tickers {args.sample}; sample not written", file=sys.stderr)
+            return 1
         write_jsonl(SAMPLE_DIR / "sections_sample.jsonl", sample)
         print(f"sample: {len(sample)} documents -> data/sample/sections_sample.jsonl")
 

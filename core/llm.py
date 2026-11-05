@@ -40,6 +40,7 @@ JSON_SYSTEM_PROMPT = (
 )
 CODE_FENCE = re.compile(r"```[A-Za-z]*\s*(.*?)```", re.DOTALL)     # any language tag, e.g. ```json
 OBJECT_START = re.compile(r"\{")
+FINISH_LENGTH = "length"          # finish_reason when a reply stopped at max_tokens
 MAX_ERROR_CHARS = 2_000          # validation errors sent back to the model are cut to this length
 
 
@@ -158,7 +159,8 @@ class LLMClient(AbstractLLMClient):
         start = time.perf_counter()
         try:
             response = await self.client.chat.completions.create(
-                model=target_model, messages=messages, temperature=temperature
+                model=target_model, messages=messages, temperature=temperature,
+                max_tokens=self.settings.LLM_MAX_COMPLETION_TOKENS,
             )
         except openai.APIError as err:
             raise _api_error(err, target_model) from err
@@ -169,6 +171,10 @@ class LLMClient(AbstractLLMClient):
             self.usage.prompt_tokens += response.usage.prompt_tokens or 0
             self.usage.completion_tokens += response.usage.completion_tokens or 0
 
+        if response.choices and getattr(response.choices[0], "finish_reason", None) == FINISH_LENGTH:
+            # Cut off at LLM_MAX_COMPLETION_TOKENS: half an answer (or half a JSON object) must not pass as whole
+            raise FinSightError(f"Reply from {target_model} hit the {self.settings.LLM_MAX_COMPLETION_TOKENS}-"
+                                f"token cap (LLM_MAX_COMPLETION_TOKENS)", error_type="TruncatedResponseError")
         content = response.choices[0].message.content if response.choices else None
         if not content or not content.strip():
             raise FinSightError(f"Empty reply from {target_model}", error_type="EmptyResponseError")
@@ -224,16 +230,26 @@ class LLMClient(AbstractLLMClient):
                 )
             except openai.APIError as err:
                 raise _api_error(err, self.settings.EMBED_MODEL) from err
+            batch = texts[i:i + size]
+            if len(response.data) != len(batch):        # a short reply would misalign every later vector
+                raise FinSightError(f"{self.settings.EMBED_MODEL} returned {len(response.data)} embeddings for "
+                                    f"{len(batch)} texts", error_type="EmbeddingCountError")
             vectors += [d.embedding for d in sorted(response.data, key=lambda d: d.index)]
         return vectors
 
     async def _embed_local(self, texts: list[str]) -> list[list[float]]:
         # One model, loaded once off the event loop; encodes run one at a time (CPU-bound, and parallel
-        # encodes on the same model would only multiply memory).
+        # encodes on the same model would only multiply memory). usage.embed_calls counts one per embed() call
+        # here, one per batch request for the remote backend.
         async with self._st_lock:
             if self._st_model is None:
-                from sentence_transformers import SentenceTransformer
-                self._st_model = await asyncio.to_thread(SentenceTransformer, self.settings.EMBED_LOCAL_MODEL_NAME)
+                name = self.settings.EMBED_LOCAL_MODEL_NAME
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    self._st_model = await asyncio.to_thread(SentenceTransformer, name)
+                except (ImportError, OSError) as err:  # package missing, or the first download failed
+                    raise FinSightError(f"local embedding model {name} unavailable: {err}",
+                                        error_type="EmbeddingModelError") from err
             self.usage.embed_calls += 1
             vectors = await asyncio.to_thread(
                 self._st_model.encode, texts, batch_size=self.settings.EMBED_BATCH_SIZE

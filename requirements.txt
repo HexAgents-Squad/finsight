@@ -1,4 +1,7 @@
 # Application dependencies. Dev tools (pytest, ruff) and their pinned versions come from requirements-dev.txt.
+# Upper bounds on the heavy libraries: their next major versions have changed APIs before (chromadb 0.x -> 1.x
+# changed how collections are listed and looked up). The full set is tested locally on Python 3.14 (openai 3.37,
+# chromadb 1.5.9, sentence-transformers 6.1, numpy 2.5); CI (Python 3.12) installs only requirements-dev.txt.
 -r requirements-dev.txt
 pydantic>=2.6.0
 pydantic-settings>=2.2.0
@@ -7,7 +10,7 @@ pyyaml>=6.0.1
 requests>=2.31.0
 beautifulsoup4>=4.12.3
 lxml>=5.1.0
-openai>=1.55.0
-rank-bm25>=0.2.2
-chromadb>=0.4.24
-sentence-transformers>=2.5.1
+openai>=1.55.0,<4
+rank-bm25>=0.2.2,<0.3
+chromadb>=1.0,<2
+sentence-transformers>=2.5.1,<7  # also installs torch (~200 MB on CPU)

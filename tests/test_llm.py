@@ -59,7 +59,9 @@ class FakeEmbeddings:
 
 
 def client(*outputs, **overrides) -> LLMClient:
-    return LLMClient(settings(**overrides), chat_client=FakeChat(*outputs), embed_client=FakeEmbeddings())
+    # the remote-embedding tests exercise the "openai" backend; the local backend is tested on its own
+    return LLMClient(settings(**{"EMBED_BACKEND": "openai", **overrides}), chat_client=FakeChat(*outputs),
+                     embed_client=FakeEmbeddings())
 
 
 def run(coro):
@@ -102,6 +104,7 @@ def test_chat_sends_the_messages_at_temperature_0_and_counts_usage():
     assert run(llm.chat(history)) == "OPERATIONAL"
     request = llm.client.requests[0]
     assert request["messages"] == history and request["temperature"] == 0.0 and request["model"] == "chat-model"
+    assert request["max_tokens"] == 1024                             # LLM_MAX_COMPLETION_TOKENS default
     assert (llm.usage.calls, llm.usage.prompt_tokens, llm.usage.completion_tokens) == (1, 7, 3)
 
 
@@ -214,7 +217,9 @@ def test_local_backend_loads_the_model_once(monkeypatch):
 
 def test_settings_defaults_and_validation():
     s = settings()
-    assert (s.MAX_AGENT_STEPS, s.MAX_TOKENS_PER_QUERY, s.LLM_JSON_RETRIES, s.EMBED_BACKEND) == (10, 12_000, 2, "openai")
+    assert (s.MAX_AGENT_STEPS, s.MAX_TOKENS_PER_QUERY, s.LLM_JSON_RETRIES, s.EMBED_BACKEND) == \
+        (10, 12_000, 2, "sentence-transformers")                       # the index's backend (ADR-013)
+    assert (s.QUERY_TIMEOUT_S, s.LLM_MAX_COMPLETION_TOKENS) == (60.0, 1024)
     with pytest.raises(ValueError):
         settings(EMBED_BACKEND="faiss")
     with pytest.raises(ValueError):
@@ -318,3 +323,41 @@ def test_blank_embeddings_endpoint_in_env_example_falls_back_to_chat_endpoint():
 def test_sec_settings_need_only_the_user_agent():
     # ingest/01 and ingest/05 must run with the LLM section of .env still empty
     assert SecSettings(_env_file=None, SEC_USER_AGENT=" team you@domain.com ").SEC_USER_AGENT == "team you@domain.com"
+
+
+# --- added after the Week 0 codebase review -------------------------------------------------------------
+
+def test_a_short_embeddings_reply_is_an_error_not_misaligned_vectors():
+    llm = client()
+
+    async def one_short(model, input):
+        return SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[1.0])])        # 1 vector for 2 texts
+
+    llm.embed_client.embeddings.create = one_short
+    with pytest.raises(FinSightError) as err:
+        run(llm.embed(["a", "b"]))
+    assert err.value.error_type == "EmbeddingCountError" and "1 embeddings for 2 texts" in err.value.message
+
+
+@pytest.mark.parametrize("failure", [ImportError("No module named 'sentence_transformers'"),
+                                     OSError("couldn't reach huggingface.co")])
+def test_a_local_model_that_cannot_load_is_a_typed_error(monkeypatch, failure):
+    class Broken:
+        def __init__(self, name):
+            raise failure
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", ModuleType("sentence_transformers"))
+    sys.modules["sentence_transformers"].SentenceTransformer = Broken
+    llm = client(EMBED_BACKEND="sentence-transformers", EMBED_LOCAL_MODEL_NAME="tiny-model")
+    with pytest.raises(FinSightError) as err:
+        run(llm.embed(["a"]))
+    assert err.value.error_type == "EmbeddingModelError" and "tiny-model unavailable" in err.value.message
+
+
+
+def test_a_reply_cut_off_at_the_token_cap_is_an_error():
+    cut = reply('{"ticker": "MS')
+    cut.choices[0].finish_reason = "length"
+    with pytest.raises(FinSightError) as err:
+        run(client(cut).chat(USER))
+    assert err.value.error_type == "TruncatedResponseError" and "1024-token cap" in err.value.message

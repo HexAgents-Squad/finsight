@@ -94,7 +94,7 @@ extract company and year from the question and filter before ranking (WP6).
 18 rows on every metric. With filters BM25 is the strongest single retriever (recall@5 0.678-0.705) and dense
 trails it (0.623-0.658): questions name exact line items ("total liabilities", "diluted earnings per share"),
 which is what term matching rewards. The two find different things: at rank 5, 13 questions are hit only by
-BM25 and 9 only by dense on C3 (union 63 of 73), and RRF keeps most of both (59). Hybrid does not help every
+BM25 and 9 only by dense on C3 (union 63 of 73), and hybrid hits 59: 57 of those 63 plus 2 that neither finds alone in its top 5. Hybrid does not help every
 variant: on C1 and C2 its recall@5 (0.664, 0.692) is below BM25's, and C2 hybrid has the lowest filtered
 recall@1 (0.212), because RRF rewards chunks both lists rank moderately well over one list's clear first place.
 

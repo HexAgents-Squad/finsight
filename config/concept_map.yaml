@@ -120,7 +120,8 @@ metrics:
     period: instant
     concepts:
       - {concept: LongTermDebtNoncurrent, label: long-term debt}
-      # GOOGL, KO, ABBV: the balance-sheet long-term debt line includes finance-lease obligations
+      # KO, ABBV (and GOOGL until its FY2024 10-K reclassified FY2023): the balance-sheet long-term debt line
+      # includes finance-lease obligations
       - {concept: LongTermDebtAndCapitalLeaseObligations, label: long-term debt}
       # banks present one long-term debt line without a current portion (BAC, WFC, C: LongTermDebt; JPM: the
       # concept including current maturities); for other companies these would add the current portion
@@ -167,3 +168,9 @@ notes:
   rd_expense:
     tickers: [PG]
     note: P&G states R&D only in words, rounded to $0.1 billion ("$2.0 billion"), so the value is approximate
+  rd_expense_merck:
+    metric: rd_expense
+    tickers: [MRK]
+    note: >-
+      Merck's research and development line includes acquired in-process R&D (e.g. the Prometheus charge in
+      fiscal 2023), unlike the J&J, Pfizer and AbbVie values, so cross-company R&D comparisons are not like for like

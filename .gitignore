@@ -1,5 +1,7 @@
-# Secrets
+# Secrets (.env, and variants such as .env.local; the template stays tracked)
 .env
+.env.*
+!.env.example
 
 # Downloaded / generated data (keep only the folder placeholders)
 data/raw/*

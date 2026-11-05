@@ -114,3 +114,9 @@ def test_quarter_must_match_for_a_10q_hit():
 
 def test_hit_key_strips_every_part():
     assert hit_key({"ticker": " msft ", "fiscal_year": "2024", "fiscal_period": " fy", "item": "Item  8"}) == MSFT
+
+
+@pytest.mark.parametrize("year", [2024.9, True, "24", "FY2024", None, 24, 99999, "\u0662\u0660\u0662\u0664"])
+def test_hit_key_rejects_years_that_would_match_by_accident(year):
+    with pytest.raises(ValueError, match="fiscal_year must be a year"):
+        hit_key({"ticker": "MSFT", "fiscal_year": year, "fiscal_period": "FY", "item": "Item 8"})

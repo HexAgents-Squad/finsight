@@ -14,7 +14,8 @@ Output (git-ignored; files already on disk are not downloaded again):
     data/raw/manifest.jsonl                    one line per selected filing (a --tickers run replaces only
                                                those companies' lines)
 
-Exit codes: 0 = every expected filing found, 1 = some missing (see PROBLEM lines), 2 = setup error.
+Exit codes: 0 = every expected filing found, 1 = some missing (see PROBLEM lines), 2 = setup error (settings,
+unknown ticker, or SEC unreachable / an HTTP error after the retries).
 SEC fair-access policy: SEC_USER_AGENT in .env must name you and give a contact email; < 10 requests/second.
 """
 from __future__ import annotations
@@ -25,11 +26,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import requests  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 from core.settings import get_sec_settings  # noqa: E402
 from ingest import DATA_DIR, MANIFEST_FILE, RAW_DIR, XBRL_DIR  # noqa: E402
 from ingest.edgar import (  # noqa: E402
+    SEC_DATA,
     Company,
     Filing,
     Scope,
@@ -96,6 +99,14 @@ def select_with_fresh_labels(client: SecClient, company: Company, rows: list[dic
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return run(argv)
+    except requests.RequestException as err:      # HTTP error after the retries, timeout, no connection
+        print(f"ERROR: SEC request failed: {err}", file=sys.stderr)
+        return 2
+
+
+def run(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tickers", nargs="*", help="only these tickers (default: all in config/companies.yaml)")
     ap.add_argument("--dry-run", action="store_true", help="print the selection; download no filing documents")
@@ -128,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         folder = RAW_DIR / company.ticker
         folder.mkdir(parents=True, exist_ok=True)
         submissions = client.json(submissions_url(company.cik))
-        older = [client.json(f"https://data.sec.gov/submissions/{name}")
+        older = [client.json(f"{SEC_DATA}/submissions/{name}")
                  for name in older_page_names(submissions, scope.earliest_year)]
         (folder / "submissions.json").write_text(json.dumps({"recent": submissions, "older_pages": older}),
                                                  encoding="utf-8", newline="\n")

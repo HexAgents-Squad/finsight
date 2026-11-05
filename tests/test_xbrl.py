@@ -131,6 +131,8 @@ def test_a_restated_value_cites_the_earliest_filing_that_carries_it():
     (2_411_834, 2_411_834, False),       # unchanged
     (6.1, 6.08, False),                  # per share: a split or restatement, never a rounding
     (2_410_000_000_000, 2_411_834_000_000, True),     # a bank total rounded to $10 billion
+    (12_350e6, 12_345e6, True),          # a tie rounds half-up, as filings do (round() would give 12,340)
+    (12_340e6, 12_345e6, False),
 ])
 def test_is_rounding_of(value, exact, rounding):
     assert is_rounding_of(value, exact) is rounding
@@ -337,6 +339,13 @@ def test_concept_map_rejects_unknown_keys(tmp_path):
     ("    tickers: [GS]\n", "    tickers: [GS]\n    period: [FY]\n", "unknown key"),
     ("    periods: [Q1, Q2, Q3]", "    periods: [Q1, Q4]", "unknown period"),
     ("  capex:\n    tickers: [JPM", "  capx:\n    tickers: [JPM", "unknown metric"),
+    ("  capex:\n    period: duration\n    quarterly_ytd_only: true",
+     "  capex:\n    period: duration\n    quarterly_ytd_only: \"no\"", "must be true or false"),
+    ("      ABBV: net revenues", "      abbv: net revenues", "unknown ticker"),
+    ("sectors: [financials]}   # JPM", "sectors: [Financials]}   # JPM", "unknown sector"),
+    ("tickers: [BAC]}", "tickers: [BOFA]}", "unknown ticker"),
+    ("    tickers: [GS]\n", "    tickers: [gs]\n", "unknown ticker"),          # gaps section
+    ("    tickers: [MRK]\n    note:", "    tickers: [Merck]\n    note:", "unknown ticker"),   # notes section
 ])
 def test_concept_map_is_validated_strictly(tmp_path, old, new, error):
     text = CONCEPT_MAP_FILE.read_text(encoding="utf-8")
@@ -346,6 +355,7 @@ def test_concept_map_is_validated_strictly(tmp_path, old, new, error):
     with pytest.raises(ValueError, match=error):
         load_concept_map(path)
         load_gaps(path)
+        load_notes(path)
 
 
 def test_notes_carry_caveats():

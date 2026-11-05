@@ -137,8 +137,11 @@ class SearchResult:
     item: str
     source_url: str
     score: float
+    # Last and defaulted so positional construction keeps working; a figure quoted from the text needs it for
+    # the answer contract's values[].period_end (spec §8)
+    period_end: str = ""
 
     @classmethod
     def of(cls, chunk: Chunk, score: float) -> SearchResult:
         return cls(chunk.chunk_id, chunk.text, chunk.ticker, chunk.form, chunk.fiscal_year, chunk.fiscal_period,
-                   chunk.item, chunk.source_url, score)
+                   chunk.item, chunk.source_url, score, chunk.period_end)

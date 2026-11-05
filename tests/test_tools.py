@@ -328,7 +328,8 @@ def test_compare_call_level_errors(store, args, kind):
 # --- search_filings --------------------------------------------------------------------------------------------------
 
 def hit(cid, form="10-K", period="FY", item="Item 7", score=0.0123456789):
-    return SearchResult(cid, "text", "AAPL", form, 2025, period, item, "https://www.sec.gov/x.htm", score)
+    return SearchResult(cid, "text", "AAPL", form, 2025, period, item, "https://www.sec.gov/x.htm", score,
+                        "2025-09-27")
 
 
 class FakeRetriever:
@@ -347,7 +348,7 @@ def test_search_passes_normalised_filters_and_returns_citations():
     assert fake.calls == [("growth drivers", 2, Filters("AAPL", 2025, "Q2", "10-Q", "Part I Item 2"))]
     assert out[0] == {"chunk_id": "a", "text": "text", "ticker": "AAPL", "form": "10-K", "fiscal_year": 2025,
                       "fiscal_period": "FY", "item": "Item 7", "source_url": "https://www.sec.gov/x.htm",
-                      "score": 0.012346, "citation": "[AAPL 10-K FY2025 · Item 7]"}
+                      "score": 0.012346, "citation": "[AAPL 10-K FY2025 · Item 7]", "period_end": "2025-09-27"}
     assert out[1]["citation"] == "[AAPL 10-Q FY2025 Q2 · Part I Item 2]"
 
 
@@ -623,3 +624,11 @@ def test_warm_up_runs_one_search_so_the_model_loads(monkeypatch, store):
     monkeypatch.setattr(search_filings, "default_retriever", lambda: fake)
     assert registry.warm_up() == {"ok": True}
     assert fake.calls == [(registry.WARM_UP_QUERY, 1, NO_FILTERS)]
+
+
+def test_the_calculator_units_are_the_spec_units_the_gold_schema_checks():
+    from typing import get_args
+
+    from eval.schema import ALLOWED_UNITS
+    from tools.calculator import Unit
+    assert set(get_args(Unit)) == ALLOWED_UNITS                    # one list in spec §7, defined twice in code
