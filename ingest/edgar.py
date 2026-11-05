@@ -5,6 +5,8 @@
   The fiscal year is NEVER derived from a calendar date (docs/spec.md §4.1): filings without a label are
   reported, not guessed.
 - select_filings(): one original 10-K per in-scope fiscal year and the in-scope 10-Qs (config/companies.yaml).
+  CIKs also come from config/companies.yaml (verified in WP1a) rather than SEC's company_tickers.json, so the
+  scope file stays the single source of truth and each run needs one request less.
 - find_annual_report(): the annual-report exhibit (e.g. Exhibit 13) that some banks file next to the 10-K.
 """
 from __future__ import annotations
@@ -109,7 +111,7 @@ class SecClient:
                     raise
                 self._sleep(BACKOFF_BASE_S ** attempt)
                 continue
-            if response.status_code == 200:
+            if response.status_code == requests.codes.ok:
                 return response
             if response.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS:
                 self._sleep(retry_after(response) or BACKOFF_BASE_S ** attempt)
@@ -213,7 +215,10 @@ def select_filings(company: Company, rows: list[dict], labels: dict[str, tuple[i
             continue
         label = labels.get(r["accessionNumber"])
         if label is None:
-            unlabelled.append(f"{form} {r['accessionNumber']} (period {r.get('reportDate', '?')})")
+            # only filings that could be in scope are worth reporting (the report date is used for this
+            # filter only, never as a fiscal label)
+            if r.get("reportDate", "")[:4] >= str(scope.earliest_year - 1):
+                unlabelled.append(f"{form} {r['accessionNumber']} (period {r.get('reportDate', '?')})")
             continue
         fy, fp = label
         if form == "10-K":
@@ -227,14 +232,8 @@ def select_filings(company: Company, rows: list[dict], labels: dict[str, tuple[i
     expected = [("10-K", y, "FY") for y in sorted(scope.tenk_years)]
     expected += [("10-Q", y, p) for y in sorted(scope.tenq_years) for p in sorted(scope.tenq_periods)]
     missing = [f"{form} {y} {p}" for form, y, p in expected if (form, y, p) not in chosen]
-    recent_unlabelled = [u for u in unlabelled if _period_year(u) >= scope.earliest_year - 1]
     return Selection(sorted(chosen.values(), key=lambda f: (f.form, f.fiscal_year, f.fiscal_period)),
-                     recent_unlabelled, missing)
-
-
-def _period_year(description: str) -> int:
-    found = re.search(r"period (\d{4})", description)
-    return int(found.group(1)) if found else 0
+                     unlabelled, missing)
 
 
 # ----------------------------------------------------------------------------------------------- exhibits
