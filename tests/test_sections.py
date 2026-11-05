@@ -217,7 +217,7 @@ def test_corpus_checks():
 
 # --- risk factors inside a bank's MD&A (section-mapping rule) ---------------------------------------------
 
-def bank_report(risk_end_heading: str = "Controls and Procedures") -> str:
+def bank_report(risk_end_heading: str = "Managing Global Risk") -> str:
     return ("<p>Management's Discussion and Analysis</p><p>" + body("overview", BIG) + "</p>"
             "<p>Risk Factors</p><p>" + body("riskfactor", 5_000) + "</p>"
             f"<p>{risk_end_heading}</p><p>" + body("tail", 2_000) + "</p>"
@@ -314,10 +314,10 @@ def test_risk_factors_subheadings_do_not_end_the_section():
 
 def test_toc_under_a_heading_is_removed_and_toc_headings_are_skipped():
     # JPM/WFC 10-Q: the TOC entry is the only "Item 2" heading; JPM 10-K: the annual report's own contents list
-    from ingest.sections import drop_leading_toc
+    from ingest.sections import strip_toc
     text = ("Item 2. Management's Discussion and Analysis\nExecutive Overview | 3\nResults | 9\n"
             "Item 3. Market Risk | 201\nPart II - Other information\nItem 1. Legal Proceedings | 202\n\nBody text.")
-    assert drop_leading_toc(text) == "Item 2. Management's Discussion and Analysis\nBody text."
+    assert strip_toc(text) == "Item 2. Management's Discussion and Analysis\n\nBody text."
     html = ("<p>Management's discussion and analysis:</p><p>Overview | 1</p><p>Results | 5</p><p>Liquidity | 9</p>"
             "<p>Management's discussion and analysis</p><p>" + body("realmdna", BIG) + "</p>"
             "<p>Consolidated statements of income</p><p>" + body("fs", BIG) + "</p>")
@@ -327,5 +327,72 @@ def test_toc_under_a_heading_is_removed_and_toc_headings_are_skipped():
 
 def test_corpus_check_flags_documents_holding_toc_rows():
     docs = [doc(f"T{i}", 2024, item) for i in range(300) for item in ("Item 7", "Item 8")]
-    docs[0] = {**docs[0], "text": "Item 1. Business | 3\nItem 1A. Risk Factors | 9\nItem 7. MD&A | 30\nreal text"}
-    assert any("table-of-contents rows" in p and docs[0]["doc_id"] in p for p in corpus_problems(docs, 300))
+    docs[0] = {**docs[0], "text": "Executive Summary | 3\n48 | Introduction | 171 | Notes\nResults | 54\n"
+                                  "Note 26-Leases | 212\nreal text"}
+    assert any("table-of-contents block" in p and docs[0]["doc_id"] in p for p in corpus_problems(docs, 300))
+
+
+# --- regressions from the second code review ---------------------------------------------------------------
+
+def test_two_line_toc_entry_is_not_a_heading():
+    # GS: "Item 7A" on one line, "Quantitative ... | 127" on the next was taken as the Item 7A heading
+    # (at GS a long financial-statements index followed the TOC entry, so the TOC copy was the longest)
+    toc = ("<p>Item 7A</p><p>Quantitative and Qualitative Disclosures About Market Risk | 127</p>"
+           "<p>INDEX</p><p>" + body("indexpage", 3_000) + "</p>")
+    html = tenk_html({**STANDARD, "7A": body("realmarket")}, toc=False).replace("<body>", "<body>" + toc, 1)
+    item = next(s for s in parse_filing(html_to_text(html), "10-K").sections if s.key == "Item 7A")
+    assert "realmarket" in item.text and "| 127" not in item.text
+
+
+@pytest.mark.parametrize("rows", [
+    ["Executive Summary | 27", "Recent Developments | 27", "Financial Highlights | 28", "Balance Sheet | 31"],
+    ["48 | Introduction | 171 | Notes", "49 | Executive Overview", "54 | Results", "58 | Balance Sheets"],
+    ["Note 1-Accounting Policies | 149", "Note 2-Discontinued Operations | 160", "Note 3-Segments | 170",
+     "Note 4-Revenue | 172"],
+])
+def test_toc_blocks_of_any_shape_are_removed(rows):
+    from ingest.sections import strip_toc
+    text = "\n".join(["Item 7. Management's Discussion and Analysis", "Table of Contents", "Page", *rows,
+                      "The real discussion starts here."])
+    assert strip_toc(text) == "Item 7. Management's Discussion and Analysis\nThe real discussion starts here."
+
+
+@pytest.mark.parametrize("rows", [
+    ["Duodopa | United States | 97 | 95 | 102", "International | 371 | 363 | 409", "Total | 468 | 458 | 511",
+     "Ubrelvy | United States | 815 | 680 | 552"],                       # product revenue table (ABBV)
+    ["Cash and equivalents | 361", "Short-term investments | 382", "Prepaid expenses | 409", "Other assets | 512"],
+    ["101.INS | Inline XBRL Instance Document | 5", "101.SCH | Taxonomy Extension Schema | 5",
+     "101.CAL | Calculation Linkbase | 5", "101.LAB | Label Linkbase | 5"],    # exhibit index (BAC)
+])
+def test_data_tables_are_never_taken_for_a_toc(rows):
+    from ingest.sections import strip_toc
+    text = "\n".join(["Item 7. Management's Discussion and Analysis", *[body("context", 400)] * 12,
+                      "Our results were as follows:", *rows, *[body("more", 400)] * 12])
+    assert strip_toc(text) == text
+
+
+def test_signature_page_starting_with_under_the_requirements_is_cut():
+    item16 = (body("summary") + "<p>SIGNATURES</p><p>Under the requirements of Section 13 or 15(d) of the Securities "
+              "Exchange Act of 1934, the registrant has duly caused this report to be signed.</p><p>/S/ John Roe</p>")
+    item = next(s for s in parse_filing(html_to_text(tenk_html({**STANDARD, "16": item16})), "10-K").sections
+                if s.key == "Item 16")
+    assert "John Roe" not in item.text
+
+
+def test_risk_factors_end_at_a_whole_line_esg_heading():
+    report = ("<p>Management's Discussion and Analysis</p><p>" + body("overview", BIG) + "</p><p>RISK FACTORS</p><p>"
+              + body("riska", 2_000) + "</p><p>CLIMATE CHANGE AND NET ZERO</p><p>" + body("esg", 2_000) + "</p>"
+              "<p>Consolidated Statement of Income</p><p>" + body("fs", BIG) + "</p>")
+    item1a = next(s for s in parse_filing(html_to_text(report), "10-K").sections if s.key == "Item 1A")
+    assert "riska" in item1a.text and "esg" not in item1a.text
+
+
+def test_controls_and_procedures_inside_a_bank_mdna_become_item_9a():
+    stubs = {k: v for k, v in STANDARD.items() if k != "9A"}
+    stubs.update({"7": "See the Annual Report.", "8": "See the Annual Report."})
+    exhibit = html_to_text("<p>Overview</p><p>" + body("exmdna", BIG) + "</p><p>Controls and Procedures</p><p>"
+                           + body("disclosurecontrols", 2_000) + "</p><p>Report of Independent Registered Public "
+                           "Accounting Firm</p><p>" + body("exfs", BIG) + "</p>")
+    by_key = {s.key: s for s in parse_filing(html_to_text(tenk_html(stubs)), "10-K", exhibit).sections}
+    assert "disclosurecontrols" in by_key["Item 9A"].text and "disclosurecontrols" not in by_key["Item 7"].text
+    assert by_key["Item 9A"].location == EXHIBIT
