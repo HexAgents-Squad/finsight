@@ -5,6 +5,8 @@
 data/raw/*
 data/sections/*
 data/xbrl/*
+data/chunks/*
+data/index/*
 !data/**/.gitkeep
 
 # Python / editors
