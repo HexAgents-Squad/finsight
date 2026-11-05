@@ -16,7 +16,8 @@ previous question). Filter settings:
 A full run (every variant and retriever) writes the tables to <out-dir>/retrieval_summary.md between the
 GENERATED markers, keeping the text outside them (the interpretation, which cites every row). A partial run
 writes its run files and prints its scores but leaves the summary alone, so it never replaces the full table.
-Exit codes: 0 = done, 1 = gold set invalid, 2 = an index, a chunk file or the settings are missing.
+Exit codes: 0 = done, 1 = gold set invalid, 2 = an index, a chunk file or the settings are missing, or the
+summary lost its GENERATED markers.
 """
 from __future__ import annotations
 
@@ -87,7 +88,8 @@ def load_retrievers(variant: str, wanted: list[str], embedder: Embedder | None,
                     index_dir: Path = INDEX_DIR, chunks_dir: Path = CHUNKS_DIR) -> dict[str, Retriever]:
     """The wanted retrievers for one variant. A missing index or chunk file is a FileNotFoundError."""
     out: dict[str, Retriever] = {}
-    bm25 = BM25Index.load(index_path(variant, index_dir))
+    # BM25 is needed for bm25 and hybrid runs only, so a dense-only run works without the BM25 index
+    bm25 = BM25Index.load(index_path(variant, index_dir)) if {"bm25", "hybrid"} & set(wanted) else None
     if "bm25" in wanted:
         out["bm25"] = bm25
     if embedder is not None:
@@ -190,7 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     if set(args.variants) != set(VARIANTS) or set(args.retrievers) != set(RETRIEVERS):
         print(f"partial run: run files written to {args.out_dir / 'runs'}; {SUMMARY_NAME} left unchanged")
         return 0
-    write_summary(tables(rows, best_row(rows)), args.out_dir / SUMMARY_NAME)
+    try:
+        write_summary(tables(rows, best_row(rows)), args.out_dir / SUMMARY_NAME)
+    except ValueError as err:                      # the summary lost its GENERATED markers
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
     print(f"tables written to {args.out_dir / SUMMARY_NAME}")
     return 0
 

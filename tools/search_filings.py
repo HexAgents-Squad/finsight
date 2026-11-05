@@ -1,7 +1,8 @@
 """search_filings: passages from the indexed 10-K/10-Q text, through the WP5 hybrid retriever (ADR-013).
 
     search_filings(query, ticker?, fiscal_year?, fiscal_period?, form?, item?, k=5)
-        -> [{chunk_id, text, ticker, form, fiscal_year, fiscal_period, item, source_url, score, citation}]
+        -> [{chunk_id, text, ticker, form, fiscal_year, fiscal_period, item, source_url, score, citation,
+             period_end}]
 
 Filters narrow the search before ranking (retrieval/common.py Filters: validated and normalised, so "aapl" and
 "item 7" work and a malformed value is an error, never a silently empty search). The default retriever is
@@ -167,7 +168,8 @@ def search_filings(query: str, ticker: str | None = None, fiscal_year: int | Non
                         filters=filters.active())
     return [{"chunk_id": h.chunk_id, "text": h.text, "ticker": h.ticker, "form": h.form,
              "fiscal_year": h.fiscal_year, "fiscal_period": h.fiscal_period, "item": h.item,
-             "source_url": h.source_url, "score": round(h.score, SCORE_DIGITS), "citation": citation(h)}
+             "source_url": h.source_url, "score": round(h.score, SCORE_DIGITS), "citation": citation(h),
+             "period_end": h.period_end}
             for h in hits]
 
 

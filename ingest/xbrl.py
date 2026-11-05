@@ -32,7 +32,7 @@ from typing import Any
 
 import yaml
 
-from ingest import ROOT
+from ingest import COMPANIES_FILE, ROOT
 
 CONCEPT_MAP_FILE = ROOT / "config" / "concept_map.yaml"
 TAXONOMY = "us-gaap"
@@ -165,9 +165,24 @@ def _raw_map(path: Path) -> dict:
     return raw
 
 
-def load_concept_map(path: Path = CONCEPT_MAP_FILE) -> dict[str, Metric]:
-    """The metrics in config/concept_map.yaml. Unknown keys, missing keys and wrong types are errors: a typo,
-    or a comma inside an unquoted label in a {...} entry, would otherwise be dropped silently."""
+def _scope_names(companies: Path) -> tuple[frozenset[str], frozenset[str]]:
+    """(tickers, sectors) of config/companies.yaml, to check the concept map's references against."""
+    cfg = yaml.safe_load(companies.read_text(encoding="utf-8"))
+    return frozenset(c["ticker"] for c in cfg["companies"]), frozenset(c["sector"] for c in cfg["companies"])
+
+
+def _check_names(where: str, values: tuple[str, ...], known: frozenset[str], kind: str) -> None:
+    """Tickers and sectors must be written exactly as in companies.yaml: "abbv" or "Financials" would never
+    match (find_fact compares exactly) and the entry would be ignored silently."""
+    if unknown := sorted(set(values) - known):
+        raise _fail(where, f"unknown {kind}(s) {unknown}; use one of {sorted(known)}")
+
+
+def load_concept_map(path: Path = CONCEPT_MAP_FILE, companies: Path = COMPANIES_FILE) -> dict[str, Metric]:
+    """The metrics in config/concept_map.yaml. Unknown keys, missing keys, wrong types, and tickers or sectors
+    not in config/companies.yaml are errors: a typo, or a comma inside an unquoted label in a {...} entry, would
+    otherwise be dropped silently."""
+    tickers, sectors = _scope_names(companies)
     metrics = {}
     for name, spec in _raw_map(path)["metrics"].items():
         where = f"metric {name}"
@@ -181,16 +196,21 @@ def load_concept_map(path: Path = CONCEPT_MAP_FILE) -> dict[str, Metric]:
         for c in spec["concepts"]:
             cwhere = f"{where} concept {c.get('concept') if isinstance(c, dict) else c!r}"
             _check_keys(cwhere, c, CONCEPT_KEYS, frozenset({"concept", "label"}))
-            concepts.append(Concept(
-                _text(cwhere, c["concept"]), _text(cwhere, c["label"]),
-                *(_texts(f"{cwhere} {key}", c[key]) if key in c else ()
-                  for key in ("sectors", "tickers", "unless_reported"))))
+            concept = Concept(_text(cwhere, c["concept"]), _text(cwhere, c["label"]),
+                              *(_texts(f"{cwhere} {key}", c[key]) if key in c else ()
+                                for key in ("sectors", "tickers", "unless_reported")))
+            _check_names(cwhere, concept.sectors, sectors, "sector")
+            _check_names(cwhere, concept.tickers, tickers, "ticker")
+            concepts.append(concept)
         labels = spec.get("ticker_labels", {})
         if not isinstance(labels, dict):
             raise _fail(where, "ticker_labels must be a mapping of ticker to label")
-        metrics[name] = Metric(name, spec["period"], kind, tuple(concepts),
-                               bool(spec.get("quarterly_ytd_only", False)),
-                               tuple((_text(where, t), _text(f"{where} {t}", label)) for t, label in labels.items()))
+        ytd_only = spec.get("quarterly_ytd_only", False)
+        if not isinstance(ytd_only, bool):                 # bool("no") would be True
+            raise _fail(where, f"quarterly_ytd_only must be true or false, not {ytd_only!r}")
+        label_pairs = tuple((_text(where, t), _text(f"{where} {t}", label)) for t, label in labels.items())
+        _check_names(f"{where} ticker_labels", tuple(t for t, _ in label_pairs), tickers, "ticker")
+        metrics[name] = Metric(name, spec["period"], kind, tuple(concepts), ytd_only, label_pairs)
     return metrics
 
 
@@ -246,9 +266,15 @@ def select_row(rows: list[dict], period: Period) -> tuple[dict, dict] | None:
     return (first if current["val"] == first["val"] else current), first
 
 
+def _round_half_up(value: float, digits: int) -> float:
+    """`value` rounded to 10**digits, ties away from zero as filings round (12,345 -> 12,350), not to even."""
+    return float(Decimal(repr(value)).quantize(Decimal(1).scaleb(digits), rounding=ROUND_HALF_UP))
+
+
 def is_rounding_of(value: float, exact: float) -> bool:
-    """True if `value` is `exact` rounded to a power of ten (a summary table repeating 2,411,834 as 2,412,000)."""
-    return value != exact and any(value == round(exact, -digits) for digits in ROUNDING_DIGITS
+    """True if `value` is `exact` rounded to a power of ten (a summary table repeating 2,411,834 as 2,412,000).
+    Limit: a genuine restatement that happens to land on such a rounded number is taken as rounding."""
+    return value != exact and any(value == _round_half_up(exact, digits) for digits in ROUNDING_DIGITS
                                   if 10 ** (digits + ROUNDING_MIN_SIGNIFICANT_DIGITS - 1) <= abs(exact))
 
 
@@ -349,22 +375,28 @@ def _entries(path: Path, section: str, keys: frozenset[str], required: frozenset
     return out
 
 
-def load_gaps(path: Path = CONCEPT_MAP_FILE) -> list[Gap]:
+def _tickers(where: str, value: Any, companies: Path) -> tuple[str, ...]:
+    tickers = _texts(where, value)
+    _check_names(where, tickers, _scope_names(companies)[0], "ticker")
+    return tickers
+
+
+def load_gaps(path: Path = CONCEPT_MAP_FILE, companies: Path = COMPANIES_FILE) -> list[Gap]:
     gaps = []
     for metric, spec in _entries(path, "gaps", GAP_KEYS, frozenset({"tickers", "reason"})):
         periods = _texts(f"gaps {metric} periods", spec["periods"]) if "periods" in spec else FISCAL_PERIODS
         if unknown := set(periods) - set(FISCAL_PERIODS):
             raise _fail(f"gaps {metric}", f"unknown period(s) {sorted(unknown)}")
-        gaps.append(Gap(metric, frozenset(_texts(f"gaps {metric} tickers", spec["tickers"])), frozenset(periods),
-                        _text(f"gaps {metric} reason", spec["reason"])))
+        gaps.append(Gap(metric, frozenset(_tickers(f"gaps {metric} tickers", spec["tickers"], companies)),
+                        frozenset(periods), _text(f"gaps {metric} reason", spec["reason"])))
     return gaps
 
 
-def load_notes(path: Path = CONCEPT_MAP_FILE) -> dict[tuple[str, str], str]:
+def load_notes(path: Path = CONCEPT_MAP_FILE, companies: Path = COMPANIES_FILE) -> dict[tuple[str, str], str]:
     """(metric, ticker) -> a caveat the answer must carry (e.g. a value the filing gives only rounded)."""
     return {(metric, t): _text(f"notes {metric} note", spec["note"])
             for metric, spec in _entries(path, "notes", NOTE_KEYS, frozenset({"tickers", "note"}))
-            for t in _texts(f"notes {metric} tickers", spec["tickers"])}
+            for t in _tickers(f"notes {metric} tickers", spec["tickers"], companies)}
 
 
 def gap_problems(missing: set[tuple[str, str, int, str]], gaps: list[Gap],

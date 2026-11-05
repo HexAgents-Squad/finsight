@@ -7,12 +7,14 @@ Contract with WP5 (retrieval):
         {"id": "B07", "retriever": "hybrid", "filters": "company+year",
          "retrieved": [{"ticker": "MSFT", "fiscal_year": 2024, "fiscal_period": "FY", "item": "Item 8"}, ...]}
      (ranked best first; extra fields such as chunk_id or score are allowed and ignored)
-  3. Score it:  python eval/retrieval_eval.py --runs eval/results/runs_c2_hybrid.jsonl [--out table.md]
+  3. Score it:  python eval/retrieval_eval.py --runs eval/results/runs/C3_hybrid_company_year.jsonl
+     (--out FILE appends the table to FILE; eval/run_retrieval.py writes all runs and the summary itself)
 
 A retrieved chunk is a HIT for a gold source when (ticker, fiscal_year, fiscal_period, item) match
 (fiscal_period separates the 10-Q quarters, which share Item names; docs/decisions.md ADR-009).
 recall@k = share of the item's gold sources found in the top k (multi-company items have several);
 MRR = 1 / rank of the first hit (0 if none in the list). Refusal items (no gold sources) are skipped.
+Exit codes: 0 = scored, 1 = gold set invalid, 2 = runs file missing or malformed.
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from eval.validate_gold import DEFAULT_PATH, safe_console, validate_file  # noqa
 
 KS = (1, 5, 10)
 METRIC_DECIMALS = 3
+YEAR_DIGITS = 4
 SourceKey = tuple[str, int, str, str]
 
 
@@ -42,7 +45,19 @@ def build_query(item: GoldItem, items_by_id: dict[str, GoldItem]) -> str:
 
 
 def hit_key(record: dict) -> SourceKey:
-    return (str(record["ticker"]).strip().upper(), int(record["fiscal_year"]),
+    """The matching key of a retrieved record, normalised (case, spaces, a year written as digits). A year that
+    is a float, a bool or not a 4-digit number is a ValueError: int(2024.9) would silently match FY2024."""
+    raw = record["fiscal_year"]
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        text = str(raw)
+    elif isinstance(raw, str):
+        text = raw.strip()
+    else:
+        text = ""
+    if not (text.isascii() and text.isdecimal() and len(text) == YEAR_DIGITS):
+        raise ValueError(f"fiscal_year must be a year such as 2024, not {raw!r}")
+    year = int(text)
+    return (str(record["ticker"]).strip().upper(), year,
             str(record["fiscal_period"]).strip().upper(), " ".join(str(record["item"]).split()))
 
 

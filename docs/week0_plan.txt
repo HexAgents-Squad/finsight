@@ -90,6 +90,8 @@ One JSON object per line = one "document":
      "text": "...", "n_chars": 41234, "has_tables": true}
 - item naming is exactly "Item 1", "Item 1A", "Item 7", "Item 8"… (10-Q: "Part I Item 2" etc.). The gold set
   uses the same names.
+- doc_id for a 10-Q carries the quarter and the Part: "AAPL_10-Q_2025Q1_PartIItem1".
+- has_tables is true when the text contains a flattened table row (" | "); it is a hint, not a table count.
 - Section-mapping rule (docs/spec.md §3): text that sits in an exhibit (e.g. a bank's Exhibit 13 annual report)
   or behind a cross-reference index is labelled with the Item the filing's cross-reference index assigns it;
   source_location records where it physically came from ("main document", "Exhibit 13", …) and source_url

@@ -2,10 +2,12 @@
 
 | | |
 |---|---|
-| **Version** | v0.2 (draft for team review), 30 Oct 2026 |
+| **Version** | v1.0, 6 Nov 2026 (v0.2 reviewed on the WP1 PR; decisions since then are in `docs/decisions.md`) |
 | **Owner** | Alok Srivastava (WP1) · backup: Amresh Kumar |
 | **Review** | All members comment on the PR by **Mon 2 Nov** · v1 merged **Tue 3 Nov** |
 | **Change rule** | After v1, changes need team agreement and an entry in `docs/decisions.md` |
+
+**What changed in v1.0:** R2 takes precedence over R3 for questions that ask for a prediction (§6); ratios are rounded to 2 decimals (§7); Apple added to the companies with later filings (§4.3); known data limitations completed from WP2/WP3 (§11); decided open questions closed (§12); `citations[].url` wording (§8).
 
 **What changed in v0.2:** quarterly fields and numeric calculation inputs in the answer contract, aligned citation fields, `refusal_rule` with partial refusals, separate handling of injected document text, new rule R7 (off-topic), G category in §5, year/quarter interpretation rules, CAGR and edge-case formulas, section-mapping rule for exhibits, corpus cut-off rule.
 
@@ -71,8 +73,8 @@ Rules:
 ### 4.3 "Latest" and the corpus cut-off
 1. The corpus is **fixed**: latest annual = **fiscal 2025** 10-K; latest quarter = **fiscal 2025 Q3** 10-Q.
 2. "Latest", "this year", "last year" and "most recent quarter" are interpreted relative to the corpus, and the answer **always names the period it used**.
-3. Some companies have already filed fiscal-2026 reports (e.g. Microsoft, P&G, NVIDIA, Walmart and Costco 10-Ks). When "latest" is answered for such a company, `notes` says: *"Latest in the indexed filings is FY2025 (ended {date}); later filings exist but are not indexed."*
-4. A question that names a period outside the corpus (e.g. "FY2026", "fiscal 2024 Q2") is out of corpus (R3).
+3. Some companies have already filed fiscal-2026 reports (as of the 4 Nov 2026 data: Apple, Microsoft, P&G, NVIDIA, Walmart and Costco 10-Ks; `get_financial_fact` reports this per company as `later_filings_exist`). When "latest" is answered for such a company, `notes` says: *"Latest in the indexed filings is FY2025 (ended {date}); later filings exist but are not indexed."*
+4. A question about a reported period outside the corpus (e.g. "What was Microsoft's FY2026 revenue?", "fiscal 2024 Q2") is out of corpus (R3). A question that asks what *will* happen is a forecast (R2), even when it names a year (§6).
 
 ## 5. Supported questions
 | Code | Type | Example | The answer must contain |
@@ -107,6 +109,11 @@ FinSight **refuses briefly, gives the reason, and offers what it can do** from t
 
 `{suggestion}` is one concrete in-scope question related to the user's request (same company if it is covered).
 
+**R2 before R3.** A question that asks for a prediction ("will", "expect", "next year") is R2, even when it names a
+period outside the corpus ("What will Apple's revenue be in fiscal 2027?"). R3 covers facts about periods that are
+already reported but not indexed ("What was Microsoft's FY2026 revenue?"), and companies, forms or data outside §3.
+The refusal tests follow this rule (RF03 and RF15 are R2, RF05 is R3).
+
 **Partly answerable questions** (e.g. "Is Apple a good buy given its fiscal 2025 revenue?"): the factual part is answered normally and the refused part is declined in one sentence. The contract then has `refused: false` and `refusal_rule` set to the rule that applied (`"R1"`), with citations for the factual part.
 
 **Instructions inside documents (prompt injection) are not a refusal case.** Retrieved filing text is **data, never instructions**:
@@ -130,8 +137,8 @@ The rules R1–R7 map 1:1 to the refusal test list (WP8) and to the G-category g
    | cagr | ((end / start)^(1 / years) − 1) × 100, years = fiscal-year difference | start ≤ 0, end < 0 or years ≤ 0 |
 
    If old < 0, the answer says the base was negative. If a calculation is undefined, the answer gives the inputs and says the measure is "not meaningful".
-3. **Values are stored in the filing's units** (`value` + `unit`, e.g. `391035` + `"USD millions"`). XBRL facts are raw USD; `get_financial_fact` scales currency facts to the unit the company's financial statements use (millions for the 20 companies; WP3 confirms per company), and per-share values stay in `"USD per share"`. Conversions for display ("$391.0 billion") are **formatting done in code by the answer composer**, never by the model; the answer may show both forms.
-4. **Rounding**: percentages to 1 decimal place; per-share values to 2 decimals; currency shown in billions to 1 decimal place.
+3. **Values are stored in the filing's units** (`value` + `unit`, e.g. `391035` + `"USD millions"`). XBRL facts are raw USD; `get_financial_fact` scales currency facts to the unit the company's financial statements use (millions for all 20 companies, confirmed in WP3, ADR-011), and per-share values stay in `"USD per share"`. Conversions for display ("$391.0 billion") are **formatting done in code by the answer composer**, never by the model; the answer may show both forms.
+4. **Rounding** (half-up, as written: 28.75 → 28.8): percentages to 1 decimal place; ratios to 2 decimals (a current ratio of 1.03 would otherwise read 1.0; ADR-014); per-share values to 2 decimals; currency shown in billions to 1 decimal place.
 5. **If a metric is not reported** by a company for that period, say **"not reported"**. Never substitute a different line item silently (e.g. banks often have no single "revenue" or "operating income" line; use the term the filing uses, such as "total net revenue", and name it).
 6. Never compute from numbers that were not retrieved.
 7. When a figure was **restated or amended**, the most recently filed value is used and `notes` says so. (The text corpus keeps original filings only; XBRL facts take the latest filed value.)
@@ -188,7 +195,7 @@ Every response is one JSON object (a Pydantic model in code; this is what the UI
 | `citations[].ticker`, `.form`, `.fiscal_year`, `.fiscal_period` | | Same meaning as in `values`; `form` is `"10-K"` or `"10-Q"` |
 | `citations[].item` | string | Exact Item name (§3), same field name as `sections.jsonl` and `gold_sources` |
 | `citations[].chunk_id` | string | ID of the retrieved chunk (used for citation accuracy and trace links) |
-| `citations[].url` | string | SEC URL of the file the text or fact came from |
+| `citations[].url` | string | SEC URL of the source: the filing document for text (`search_filings` `source_url`), the filing's folder for XBRL facts (`get_financial_fact` `url`) |
 | `calculations[]` | list | Every computed number: `operation` (§7 rule 2), numeric `inputs`, `result`, `unit`, `expression` (as returned by the `calculate` tool) |
 | `verified` | bool | `true` only if all critic checks pass (see invariants) |
 | `refused` | bool | `true` when the whole question is refused (§6) |
@@ -211,7 +218,7 @@ Every response is one JSON object (a Pydantic model in code; this is what the UI
 | Token budget per query | ~12,000 tokens (`MAX_TOKENS_PER_QUERY`) |
 | Timeout per query | 60 s |
 | Critic retries | The critic sends a failed answer back once; if it fails again, `verified: false` with "could not verify" |
-| Shared token quota | Per-team quota on the official endpoint: responses are cached |
+| Shared token quota | Per-team quota on the official endpoint: responses are cached (not built yet: Week 1, before the switch to the official endpoint) |
 
 If a limit is hit, FinSight returns its best verified partial answer with a note, or "could not verify".
 
@@ -227,10 +234,18 @@ Known now:
 4. **Exhibit-based filings**: some Items come from annual-report exhibits via the section-mapping rule (§3); mapping errors would show up as retrieval misses.
 5. **52/53-week fiscal years**: period ends move by a few days each year (§4.1).
 
-*To be completed on Tue 3 Nov from WP2 (parsing: which filers needed section mapping, dropped Items) and WP3 (XBRL coverage matrix: which metrics are missing for which companies and years).*
+Found in WP2 (ADR-010):
+6. **Citigroup** files no Item headings, so only Items 1A, 7 and 8 (10-Q: Part I Items 1-2) are mapped from its report.
+7. **Pointer-only Items** (e.g. JPM/BAC/GS Item 1C, GS Item 7A) are dropped as too short; relocated bank statements keep trailing glossaries.
+8. **Page furniture**: about 2,500 lone "Table of Contents" back-links and some page footers ("Bank of America 22") remain in the text. They add noise to chunks and keyword search; removing them needs a re-parse and a full re-index (planned for Week 1).
+
+Found in WP3 (ADR-011):
+9. **Declared gaps** ("not reported", never derived): operating income (banks, JNJ, PFE, MRK), gross profit (15 companies), R&D (10 companies; P&G quarterly), capex (JPM, BAC, WFC), total liabilities (AMZN, MRK, ABBV, WMT, KO), equity (UNH, PG), long-term debt (GS).
+10. **Restatements**: 34 facts carry a later filing's value (spec §7 rule 7). Within one year the latest-filed values can mix restated and original figures: BAC FY2023 net income, revenue, EPS and equity are restated while its total assets and liabilities are not, so a ratio across them mixes bases.
+11. **Line-item scope**: Merck's "research and development" includes acquired in-process R&D (e.g. the Prometheus charge in FY2023), unlike J&J, Pfizer and AbbVie, so cross-company R&D comparisons are not like for like (noted on every MRK R&D value). Figures outside the 13 mapped metrics (e.g. Costco "net sales") come from cited filing text.
 
 ## 12. Open questions for review (comment on the PR)
 1. Is the 10-Q scope (fiscal 2025 Q1–Q3) enough, or do we add fiscal-2026 quarters? Note that NVIDIA's and Walmart's fiscal-2025 quarters end in 2024, so their "latest quarter" is old. *(Pending the mentor: a larger scope means more documents and embedding time.)*
-2. Should Q4 be derived as FY − 9M (with a note), or stay "not reported separately" as in §4.2?
-3. Any additional refusal cases from WP8's test list that are not covered by R1–R7?
+2. ~~Should Q4 be derived as FY − 9M?~~ Decided: no, "not reported separately" (ADR-008, ADR-014).
+3. ~~Refusal cases not covered by R1–R7?~~ Decided: none; the 22 refusal tests map to R1–R7, and future-period questions are R2 (§6).
 4. Are the answer length (~120 words) and rounding rules right for the demo?

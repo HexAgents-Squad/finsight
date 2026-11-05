@@ -7,6 +7,7 @@
 | `sheet_to_jsonl.py` | Converts the team's Google Sheet (CSV export) to `gold_set.jsonl`; writes only if every row is valid |
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
+| `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
 | `injection_tests.jsonl` | 12 prompt-injection tests: text planted in a filing passage + the question + what must not appear in the answer |
 | `safety_tests.py` / `validate_test_sets.py` | Rules for both sets, and `check_refusal()` / `check_injection()` to score an answer contract (spec §8) |
@@ -43,9 +44,10 @@ python eval/validate_gold.py --final                       # before tagging gold
 
 ## Scoring retrieval (with WP5)
 ```bash
-python eval/retrieval_eval.py --runs eval/results/runs_c2_hybrid_filtered.jsonl --out eval/results/retrieval_summary.md
+python eval/run_retrieval.py                       # all variants and retrievers; rewrites the tables in results/retrieval_summary.md
+python eval/retrieval_eval.py --runs eval/results/runs/C3_hybrid_company_year.jsonl   # score one run file
 ```
-Build queries with `retrieval_eval.build_query()` so follow-up questions include the previous turn, exactly as the agent will.
+`retrieval_eval.py --out FILE` appends a table to FILE, so never point it at `retrieval_summary.md` (its tables are generated between markers). Build queries with `retrieval_eval.build_query()` so follow-up questions include the previous turn, exactly as the agent will.
 
 Reading the numbers:
 - recall@k is the share of an item's gold sources found. Items with two sources (two companies, or a period comparison citing each year's own 10-K) score at most 0.5 at recall@1.

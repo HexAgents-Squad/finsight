@@ -148,3 +148,19 @@ def test_missing_or_non_utf8_csv_exits_2(tmp_path, capsys):
 def test_header_spellings_map_to_the_same_column(header):
     from eval.sheet_to_jsonl import header_key
     assert header_key(header) == "gold_answer"
+
+
+def test_only_real_scientific_notation_is_called_scientific():
+    with pytest.raises(CellError, match="is not a number"):
+        parse_number("none")                                   # contains an "e", but is not 1e5-style
+    for value in ("3.91E+05", "+3.91E+05", "3.E5", "-1e3"):
+        with pytest.raises(CellError, match="scientific notation"):
+            parse_number(value)
+
+
+def test_two_headers_for_the_same_column_are_an_error(tmp_path, capsys):
+    header = HEADER + ["notes "]                               # "Notes" and "notes " normalise to the same key
+    rows = [r + [""] for r in ROWS]
+    assert main([str(write_csv(tmp_path / "s.csv", rows, header=header)), "--dry-run"]) == 1
+    out = capsys.readouterr().out
+    assert "header row names column(s) twice (after case/space normalisation): ['notes']" in out

@@ -93,12 +93,14 @@ def parse_number(value: str) -> float | None:
     v = value.strip().replace(",", "").replace("$", "").replace("%", "").replace("−", "-").strip()
     if v.startswith("(") and v.endswith(")"):           # accounting negative: (1,234) -> -1234
         v = "-" + v[1:-1]
-    if "e" in v.lower():                               # Excel exports narrow columns as 3.91E+05
-        raise CellError(f"'{value}' is in scientific notation; format the column as a plain number and export again")
     try:
         number = float(v)
     except ValueError as err:
         raise CellError(f"'{value}' is not a number") from err
+    # Checked only once the cell parses as a number, so "none" is "not a number"; float() also accepts every
+    # exponent form (3.91E+05, +3.91e5, 3.E5), which Excel writes for narrow columns and which loses digits
+    if "e" in v.lower():
+        raise CellError(f"'{value}' is in scientific notation; format the column as a plain number and export again")
     if not math.isfinite(number):
         raise CellError(f"'{value}' is not a finite number")
     return number
@@ -163,6 +165,8 @@ def read_sheet(path: Path) -> tuple[list[tuple[int, dict]], list[str]]:
     with path.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         headers = [header_key(h) for h in (reader.fieldnames or [])]
+        if duplicated := sorted({h for h in headers if h and headers.count(h) > 1}):
+            return [], [f"header row names column(s) twice (after case/space normalisation): {duplicated}"]
         reader.fieldnames = headers
         missing = [c for c in REQUIRED if c not in headers]
         if missing:

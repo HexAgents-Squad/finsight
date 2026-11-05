@@ -41,9 +41,12 @@ class Settings(SecSettings):
     # chat_json re-prompts the model after invalid JSON (spec: at most 2).
     LLM_HTTP_RETRIES: int = Field(2, ge=0, description="openai-client retries for network/429/5xx errors")
     LLM_JSON_RETRIES: int = Field(2, ge=0, description="chat_json re-prompts after invalid output")
+    # Caps one reply, so a runaway generation from a small model cannot use the whole per-query token budget
+    LLM_MAX_COMPLETION_TOKENS: int = Field(1024, gt=0, description="max_tokens sent with every chat request")
 
-    # Embeddings
-    EMBED_BACKEND: Literal["openai", "sentence-transformers"] = "openai"
+    # Embeddings. The default is the local model the retrieval index was built with (ADR-013): a .env without
+    # the key must still match the index, or every search is refused as built with another model.
+    EMBED_BACKEND: Literal["openai", "sentence-transformers"] = "sentence-transformers"
     EMBED_BASE_URL: str | None = Field(None, description="Embeddings endpoint; empty = LLM_BASE_URL")
     EMBED_API_KEY: str | None = Field(None, description="Key for EMBED_BASE_URL; empty = LLM_API_KEY")
     EMBED_MODEL: str = Field("nomic-embed-text", description="Model name on the embeddings endpoint")
@@ -53,6 +56,8 @@ class Settings(SecSettings):
     # Agent limits (CLAUDE.md "Agent robustness")
     MAX_AGENT_STEPS: int = Field(10, gt=0)
     MAX_TOKENS_PER_QUERY: int = Field(12_000, gt=0)
+    # spec §9: the agent wraps a whole query in this limit (one LLM call alone can take LLM_TIMEOUT x retries)
+    QUERY_TIMEOUT_S: float = Field(60.0, gt=0, description="seconds allowed for one question, end to end")
 
     @field_validator("EMBED_BACKEND", mode="before")
     @classmethod

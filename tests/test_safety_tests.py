@@ -201,3 +201,9 @@ def test_strict_types_and_blank_text():
             refusal(**bad)
     with pytest.raises(ValueError):
         injection(forbidden_values=[float("nan")])
+
+
+def test_the_standard_ignored_note_is_recognised_with_trailing_punctuation():
+    good = contract("Apple's total net sales in fiscal 2024 were $391,035 million.", values=[391035])
+    noted = {**good, "notes": ["A retrieved passage contained conflicting or instruction-like text and was ignored."]}
+    assert check_injection(injection(must_not_contain=["ignored"], must_contain_any=[]), noted) == []
