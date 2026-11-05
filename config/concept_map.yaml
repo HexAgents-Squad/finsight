@@ -6,8 +6,11 @@
 #   period           duration (income statement / cash flow) or instant (balance sheet)
 #   kind             currency (scaled to USD millions) or per_share (USD per share)
 #   sectors          use the concept only for these sectors (config/companies.yaml)
-#   quarterly_ytd_only  every 10-Q reports it year-to-date (cash flow): Q2 = 6M, Q3 = 9M; only a few companies
-#                    (MSFT, AMZN, KO) also report a 3-month figure
+#   tickers          use the concept only for these companies
+#   quarterly_ytd_only  every 10-Q reports it year-to-date (cash flow): Q2 = 6M, Q3 = 9M; MSFT and AMZN also print
+#                    a 3-month figure, and KO gives its 3-month capex in a segment note
+#   ticker_labels    the company's own name for the line, where it differs from the concept's label;
+#                    ingest/05_xbrl_facts.py checks each one appears in that company's statements
 #   unless_reported  use the concept only for periods where none of these concepts is reported (proves it equals
 #                    the metric, e.g. equity incl. minority interest = equity when there is no minority interest)
 schema_version: 1
@@ -22,10 +25,16 @@ metrics:
       - {concept: RevenueFromContractWithCustomerExcludingAssessedTax, label: total revenues}
       - {concept: RevenueFromContractWithCustomerIncludingAssessedTax, label: total revenues}
       - {concept: SalesRevenueNet, label: total revenues}
+    ticker_labels:
+      AAPL: total net sales
+      BAC: total revenue, net of interest expense
   operating_income:
     period: duration
     concepts:
       - {concept: OperatingIncomeLoss, label: operating income}
+    ticker_labels:
+      ABBV: operating earnings
+      UNH: earnings from operations
   net_income:
     period: duration
     concepts:
@@ -50,6 +59,9 @@ metrics:
       - {concept: PaymentsToAcquirePropertyPlantAndEquipment, label: purchases of property and equipment}
       # AMZN, NVDA: their capital-expenditure line also covers other productive assets
       - {concept: PaymentsToAcquireProductiveAssets, label: "purchases of property, equipment and other productive assets"}
+    ticker_labels:
+      C: capital expenditures on premises and equipment and capitalized software
+      NVDA: purchases related to property and equipment and intangible assets
   operating_cash_flow:
     period: duration
     quarterly_ytd_only: true          # 10-Q cash-flow statements are year-to-date (6M, 9M)
@@ -59,6 +71,8 @@ metrics:
       - concept: NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
         label: net cash provided by operating activities
         unless_reported: [CashProvidedByUsedInOperatingActivitiesDiscontinuedOperations]
+    ticker_labels:
+      MSFT: net cash from operations
   eps_diluted:
     period: duration
     kind: per_share
@@ -84,6 +98,12 @@ metrics:
     period: instant
     concepts:
       - {concept: CashAndCashEquivalentsAtCarryingValue, label: cash and cash equivalents}
+      # BAC's balance sheet has a cash-and-cash-equivalents total (FY2024: 290,114), tagged with this concept; it
+      # must win over its "cash and due from banks" line (26,003), a part of it
+      - {concept: CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents, label: cash and cash equivalents,
+         tickers: [BAC]}
+      # JPM, WFC, C: the balance sheet's cash line is "cash and due from banks", shown next to deposits with banks
+      # and with no cash-and-equivalents total
       - {concept: CashAndDueFromBanks, label: cash and due from banks, sectors: [financials]}
       # PG: equal to cash and cash equivalents when no restricted cash is reported
       - concept: CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
@@ -136,3 +156,9 @@ gaps:
   long_term_debt:
     tickers: [GS]
     reason: secured and unsecured long-term borrowings are reported separately, with no total line
+
+# Caveats the answer must carry (WP6 reads them with ingest/xbrl.py load_notes; 05 writes them to facts_table.csv)
+notes:
+  rd_expense:
+    tickers: [PG]
+    note: P&G states R&D only in words, rounded to $0.1 billion ("$2.0 billion"), so the value is approximate

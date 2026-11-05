@@ -2,6 +2,10 @@
 
 Each case uses a small synthetic company-facts structure reproducing a situation found in the real data.
 """
+import importlib.util
+import sys
+from dataclasses import replace
+
 import pytest
 
 from ingest.xbrl import (
@@ -18,6 +22,9 @@ from ingest.xbrl import (
     is_rounding_of,
     load_concept_map,
     load_gaps,
+    load_notes,
+    missing_ticker_labels,
+    select_row,
     value_in_text,
     value_on_statement_line,
 )
@@ -92,12 +99,38 @@ def test_a_rounded_repeat_is_not_a_restatement():
     assert (f.value, f.restated, f.original_accession_no) == (2_411_900, True, "ORIG")
 
 
+def test_restated_then_reverted_is_the_original_value():
+    rows = [annual(100 * M, FY24, 2024, filed="2024-11-01", accn="A"), annual(105 * M, FY24, 2025, filed="2025-11-01",
+            accn="B"), annual(100 * M, FY24, 2026, filed="2026-11-01", accn="C")]
+    row, first = select_row(rows, FY24)
+    assert (row["accn"], first["accn"]) == ("A", "A")                  # latest filed value = the original
+
+
+def test_a_rounded_repeat_of_a_restated_value_keeps_the_restated_value():
+    rows = [row(2_411_834 * M, "2023-12-31", 2023, "FY", filed="2024-02-23", accn="A"),
+            row(2_420_123 * M, "2023-12-31", 2024, "FY", filed="2025-02-21", accn="B"),
+            row(2_420_000 * M, "2023-12-31", 2025, "FY", filed="2026-02-20", accn="C")]
+    f = find_fact(facts(Assets=rows), "C", metric("Assets", period="instant"), 2023)
+    assert (f.value, f.accession_no, f.restated, f.original_value) == (2_420_123, "B", True, 2_411_834)
+
+
+def test_a_restated_value_cites_the_earliest_filing_that_carries_it():
+    # NVIDIA FY2024 EPS: split-adjusted 1.19 first appears in the FY2025 10-K (indexed) and is repeated in the
+    # FY2026 10-K (not indexed): cite the FY2025 10-K
+    data = facts(EarningsPerSharePerShare=[annual(11.93, FY24, 2024, filed="2024-02-21", accn="K24"),
+                                           annual(1.19, FY24, 2025, filed="2025-02-26", accn="K25"),
+                                           annual(1.19, FY24, 2026, filed="2026-02-25", accn="K26")])
+    f = find_fact(data, "NVDA", metric("EarningsPerSharePerShare", kind="per_share"), 2024)
+    assert (f.value, f.accession_no, f.original_accession_no, f.period_accession_no) == (1.19, "K25", "K24", "K24")
+
+
 @pytest.mark.parametrize("value, exact, rounding", [
     (2_412_000, 2_411_834, True),
     (2_411_800, 2_411_834, True),
     (2_000_000, 2_411_834, False),       # keeps fewer than 3 significant digits: a different value
     (2_411_834, 2_411_834, False),       # unchanged
     (6.1, 6.08, False),                  # per share: a split or restatement, never a rounding
+    (2_410_000_000_000, 2_411_834_000_000, True),     # a bank total rounded to $10 billion
 ])
 def test_is_rounding_of(value, exact, rounding):
     assert is_rounding_of(value, exact) is rounding
@@ -130,6 +163,19 @@ def test_quarter_defaults_to_three_months_and_year_to_date_on_request():
     assert (six.value, six.duration, six.fiscal_period) == (219_659, "6M", "Q2")
     with pytest.raises(ValueError, match="Q4 is never derived"):
         find_fact(data, "AAPL", metric("Revenues"), 2025, "Q4")
+
+
+def test_inputs_are_normalised():
+    data = facts(Revenues=Q2)
+    f = find_fact(data, " aapl ", metric("Revenues"), 2025, " q2 ", " 6m ")
+    assert (f.ticker, f.fiscal_period, f.duration, f.value) == ("AAPL", "Q2", "6M", 219_659)
+
+
+@pytest.mark.parametrize("year", ["2025", 2025.0, True])
+def test_fiscal_year_must_be_an_int(year):
+    # a string would silently match nothing and read as "not reported"
+    with pytest.raises(TypeError, match="fiscal_year must be an int"):
+        find_fact(facts(Revenues=Q2), "AAPL", metric("Revenues"), year, "Q2")
 
 
 @pytest.mark.parametrize("fiscal_period, duration", [("FY", "3M"), ("Q1", "6M"), ("Q2", "9M"), ("Q3", "12M"),
@@ -185,6 +231,37 @@ def test_rd_uses_the_income_statement_line_before_the_in_process_line():
     assert find_fact(data, "JNJ", load_concept_map()["rd_expense"], 2024).value == 17_232
 
 
+def test_bank_cash_is_the_cash_and_equivalents_total_where_the_balance_sheet_has_one():
+    # BAC prints "Cash and cash equivalents | 290,114" (tagged with the restricted-cash concept) and, as a part of
+    # it, "Cash and due from banks | 26,003"; JPM has only the latter line
+    cash = load_concept_map()["cash"]
+    rows = dict(CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents=[row(290_114 * M, "2024-12-31", 2024,
+                                                                                   "FY")],
+                CashAndDueFromBanks=[row(26_003 * M, "2024-12-31", 2024, "FY")])
+    bac = find_fact(facts(**rows), "BAC", cash, 2024, sector="financials")
+    assert (bac.value, bac.label) == (290_114, "cash and cash equivalents")
+    jpm = find_fact(facts(**rows), "JPM", cash, 2024, sector="financials")
+    assert (jpm.value, jpm.label) == (26_003, "cash and due from banks")
+
+
+def test_company_labels_override_the_concept_label():
+    m = Metric("operating_income", "duration", "currency", (Concept("OperatingIncomeLoss", "operating income"),),
+               ticker_labels=(("ABBV", "operating earnings"),))
+    data = facts(OperatingIncomeLoss=[annual(9_137 * M, FY24, 2024)])
+    assert find_fact(data, "ABBV", m, 2024).label == "operating earnings"
+    assert find_fact(data, "AAPL", m, 2024).label == "operating income"
+    assert missing_ticker_labels({"operating_income": m}, {"ABBV": "Operating earnings | 9,137"}) == []
+    assert missing_ticker_labels({"operating_income": m}, {"ABBV": "Operating income | 9,137"}) == [
+        "label not in ABBV's statements: operating_income 'operating earnings'"]
+
+
+def test_a_concept_reported_only_for_the_comparative_column_is_not_this_period():
+    # the FY2024 10-K reports the fallback concept only for FY2023 (its comparative column): pass 1 must not take
+    # FY2023 as FY2024; the anchor fixes FY2024 and the concept has no FY2024 value
+    data = facts(NetIncomeLoss=[annual(10 * M, FY24, 2024)], Other=[annual(7 * M, FY23, 2024)])
+    assert find_fact(data, "X", metric("Other"), 2024) is None
+
+
 def test_sector_specific_concept():
     data = facts(LongTermDebt=[row(401 * M, "2024-12-31", 2024, "FY")])
     m = metric(Concept("LongTermDebt", "long-term debt", sectors=("financials",)), period="instant")
@@ -211,6 +288,8 @@ def test_period_anchor_finds_a_value_tagged_differently_in_its_own_filing():
                  Capex=[annual(1_833 * M, fy23, 2024, filed="2024-02-21")])
     f = find_fact(data, "NVDA", metric("Capex"), 2023)
     assert (f.value, f.period_end) == (1_833, "2023-01-29")
+    # cited: the FY2024 10-K that carries the mapped concept; the period's own filing is the FY2023 10-K
+    assert (f.accession_no, f.period_accession_no) == ("A-2024-02-21", "A-2023-02-24")
 
 
 def test_a_concept_used_by_the_original_filing_wins_over_the_anchor():
@@ -252,6 +331,27 @@ def test_concept_map_rejects_unknown_keys(tmp_path):
         load_concept_map(path)
 
 
+@pytest.mark.parametrize("old, new, error", [
+    ("sectors: [financials]}   # JPM", "sectors: financials}   # JPM", "must be a non-empty list"),
+    ("      - {concept: GrossProfit, label: gross profit}", "      - {concept: GrossProfit}", "missing key"),
+    ("    tickers: [GS]\n", "    tickers: [GS]\n    period: [FY]\n", "unknown key"),
+    ("    periods: [Q1, Q2, Q3]", "    periods: [Q1, Q4]", "unknown period"),
+    ("  capex:\n    tickers: [JPM", "  capx:\n    tickers: [JPM", "unknown metric"),
+])
+def test_concept_map_is_validated_strictly(tmp_path, old, new, error):
+    text = CONCEPT_MAP_FILE.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    path = tmp_path / "concept_map.yaml"
+    path.write_text(text.replace(old, new), encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
+        load_concept_map(path)
+        load_gaps(path)
+
+
+def test_notes_carry_caveats():
+    assert "approximate" in load_notes()[("rd_expense", "PG")]
+
+
 def test_gap_problems_are_checked_year_by_year():
     gaps = [Gap("operating_income", frozenset({"JPM"}), frozenset({"FY", "Q1"}), "no line")]
     periods = [(2024, "FY"), (2025, "FY"), (2025, "Q1")]
@@ -265,9 +365,9 @@ def test_gap_problems_are_checked_year_by_year():
         "stale gap entry: operating_income for JPM FY2024 FY is now reported"]
 
 
-def fact(metric_name, period, duration, value, concept="C"):
-    return Fact("JNJ", metric_name, 2025, period, duration, value, "USD millions", concept, "l", None, "e", "a",
-                "10-K", "f", None, False, value, "a")
+def fact(metric_name, period, duration, value, concept="C", ticker="JNJ", year=2025, restated=False):
+    return Fact(ticker, metric_name, year, period, duration, value, "USD millions", concept, "l", None, "e", "a",
+                "10-K", "f", None, restated, value, "a", "a")
 
 
 def test_implausible_annual_values_are_reported():
@@ -275,7 +375,8 @@ def test_implausible_annual_values_are_reported():
     wrong = [fact("rd_expense", "FY", "12M", 109, "InProcess"), fact("rd_expense", "Q1", "3M", 3_225)]
     assert implausible(wrong) == ["implausible: JNJ rd_expense FY2025 = 109 but Q1 3M = 3,225 (InProcess vs C)"]
     right = [fact("rd_expense", "FY", "12M", 14_665), fact("rd_expense", "Q1", "3M", 3_225),
-             fact("capex", "FY", "12M", 10), fact("capex", "Q3", "9M", 900)]     # capex: lumpy, not checked
+             fact("capex", "FY", "12M", 10), fact("capex", "Q3", "9M", 900),     # capex: lumpy, not checked
+             fact("revenue", "FY", "12M", 60_922), fact("revenue", "Q1", "3M", 7_192)]   # NVDA FY2024 growth
     assert implausible(right) == []
 
 
@@ -305,3 +406,38 @@ def test_value_on_statement_line(metric_name, value, unit, line, found):
 def test_display_forms():
     assert display_forms(1_234.5, "USD millions") == ["1,235", "1,234.5"]   # half up, like the statements
     assert display_forms(6.081, "USD per share") == ["6.08"] and display_forms(0.125, "USD per share") == ["0.13"]
+
+
+def load_facts_script():
+    spec = importlib.util.spec_from_file_location("xbrl_facts_script", CONCEPT_MAP_FILE.parents[1] / "ingest"
+                                                  / "05_xbrl_facts.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module        # @dataclass looks the module up
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_known_misses_are_year_specific_where_declared():
+    script = load_facts_script()
+    assert "Assuming Dilution" in script.miss_reason(fact("eps_diluted", "FY", "12M", 0.14, ticker="MRK", year=2023))
+    assert script.miss_reason(fact("eps_diluted", "FY", "12M", 6.74, ticker="MRK", year=2024)) == "UNEXPLAINED"
+    assert "without a label" in script.miss_reason(fact("total_assets", "Q1", None, 1, ticker="MRK", year=2025))
+
+
+def test_spot_check_searches_original_and_restated_values():
+    script = load_facts_script()
+    corpus = script.Corpus({"a": "Total revenue, net of interest expense | 105,856 | 101,887"}, {}, frozenset({"a"}))
+    f = fact("revenue", "FY", "12M", 105_856, ticker="BAC", restated=True)
+    f = replace(f, original_value=101_887)
+    checks = script.spot_checks(f, corpus)
+    assert [(c["checked"], c["value"], c["found_on_statement_line"]) for c in checks] == [
+        ("original", 101_887, True), ("restated", 105_856, True)]
+
+
+def test_a_corrupt_cache_file_is_a_setup_error(tmp_path, monkeypatch, capsys):
+    script = load_facts_script()
+    monkeypatch.setattr(script, "XBRL_DIR", tmp_path)
+    for company in script.load_scope().companies:
+        (tmp_path / f"{company.ticker}.json").write_text("{not json", encoding="utf-8")
+    assert script.main([]) == 2
+    assert "run with --refresh" in capsys.readouterr().err

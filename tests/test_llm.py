@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from core.exceptions import FinSightError
 from core.llm import LLMClient, extract_json
-from core.settings import Settings, get_settings
+from core.settings import SecSettings, Settings, get_settings
 
 REQUIRED = {"LLM_BASE_URL": "http://llm.test/v1", "LLM_API_KEY": "key", "LLM_MODEL": "chat-model",
             "SEC_USER_AGENT": "HexAgents_Squad test@example.com"}
@@ -313,3 +313,8 @@ def test_env_file_is_the_repo_root_whatever_the_working_directory():
 def test_blank_embeddings_endpoint_in_env_example_falls_back_to_chat_endpoint():
     llm = LLMClient(settings(EMBED_BASE_URL="", EMBED_API_KEY=""))
     assert str(llm.embed_client.base_url).startswith("http://llm.test/v1") and llm.embed_client.api_key == "key"
+
+
+def test_sec_settings_need_only_the_user_agent():
+    # ingest/01 and ingest/05 must run with the LLM section of .env still empty
+    assert SecSettings(_env_file=None, SEC_USER_AGENT=" team you@domain.com ").SEC_USER_AGENT == "team you@domain.com"
