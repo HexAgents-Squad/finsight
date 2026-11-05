@@ -20,34 +20,34 @@ from typing import Any
 from pydantic import Field, field_validator
 
 from ingest.xbrl import OUTPUT_UNITS
+from tools import financial_facts
 from tools.base import NOT_REPORTED, OUT_OF_CORPUS, ToolArgs, ToolError, tool_boundary, tool_schema
 from tools.calculator import compute
-from tools.financial_facts import ANNUAL, FactStore, default_store, fact_result
+from tools.financial_facts import ANNUAL, FACT_FIELDS, FactStore
 
-MAX_YEARS = 10                          # the corpus has 3 fiscal years; a bound keeps a bad call cheap
+MAX_YEARS = 10                          # distinct years; the corpus has 3, and a bound keeps a bad call cheap
 PER_YEAR_ERRORS = frozenset({NOT_REPORTED, OUT_OF_CORPUS})
-MISSING_FIELDS = ("period_start", "period_end", "duration", "concept", "accession_no", "filed", "url", "label",
-                  "form", "restated", "original_value", "original_accession_no", "cited_filing_indexed")
 NOT_REQUESTED_NOTE = "no year-over-year growth: FY{previous} was not requested"
 PREVIOUS_MISSING_NOTE = "no year-over-year growth: FY{previous} has no value"
 YOY_UNDEFINED_NOTE = "year-over-year growth is not meaningful: {reason}"
-MIXED_RESTATEMENT_NOTE = ("FY{restated} is a restated value and FY{other} is not, so the comparison mixes a restated "
-                          "and an originally reported figure")
+MIXED_RESTATEMENT_NOTE = ("FY{restated} is a restated value and FY{other} is not (they come from different "
+                          "filings), so the comparison mixes a restated and an originally reported figure")
 
 
 class CompareArgs(ToolArgs):
     ticker: str = Field(min_length=1, max_length=10, description="Ticker of one of the 20 companies, e.g. NVDA")
     metric: str = Field(min_length=1, description="Metric name from config/concept_map.yaml, e.g. revenue")
-    years: list[int] = Field(min_length=1, max_length=MAX_YEARS, description=(
-        "The company's own fiscal-year labels to compare, e.g. [2024, 2025]"))
+    years: list[int] = Field(min_length=1, description=(
+        f"The company's own fiscal-year labels to compare, e.g. [2024, 2025]; at most {MAX_YEARS} distinct years"))
 
-    @field_validator("years", mode="before")
+    @field_validator("years")
     @classmethod
-    def _unique(cls, value: Any) -> Any:
-        """Duplicates are dropped before the MAX_YEARS bound applies ([2024] * 11 is one year)."""
-        if isinstance(value, list) and all(isinstance(y, int) and not isinstance(y, bool) for y in value):
-            return sorted(set(value))
-        return value
+    def _distinct(cls, value: list[int]) -> list[int]:
+        """Sorted and de-duplicated; the MAX_YEARS bound counts distinct years ([2024] * 11 is one year)."""
+        years = sorted(set(value))
+        if len(years) > MAX_YEARS:
+            raise ValueError(f"at most {MAX_YEARS} distinct years, got {len(years)}")
+        return years
 
     @field_validator("ticker", mode="before")
     @classmethod
@@ -68,11 +68,10 @@ def _row(store: FactStore, ticker: str, metric: str, year: int) -> dict[str, Any
         # the agent would report "no value" for data that exists
         if err.error_type not in PER_YEAR_ERRORS:
             raise
-        unit = OUTPUT_UNITS[store.metrics[metric].kind]
-        return {"value": None, "unit": unit, "ticker": ticker, "fiscal_year": year, "fiscal_period": ANNUAL,
-                **dict.fromkeys(MISSING_FIELDS), "metric": metric, "missing": err.error_type,
-                "notes": [err.message]}
-    return fact_result(fact, store.notes_for(fact, None), store.indexed) | {"missing": None}
+        known = {"unit": OUTPUT_UNITS[store.metrics[metric].kind], "ticker": ticker, "fiscal_year": year,
+                 "fiscal_period": ANNUAL, "metric": metric, "notes": [err.message]}
+        return {k: known.get(k) for k in FACT_FIELDS} | {"missing": err.error_type}
+    return store.result(fact, None) | {"missing": None}
 
 
 def _add_yoy(rows: list[dict[str, Any]]) -> None:
@@ -95,7 +94,9 @@ def _add_yoy(rows: list[dict[str, Any]]) -> None:
             continue
         row["yoy_growth_pct"], row["yoy_calculation"] = calc["result"], calc
         row["notes"] += calc["notes"]
-        if row["restated"] != previous["restated"]:
+        # Both years from the same (restating) filing are like for like; only a restated and an original figure
+        # from different filings are mixed (ADR-011)
+        if row["restated"] != previous["restated"] and row["accession_no"] != previous["accession_no"]:
             restated, other = (row, previous) if row["restated"] else (previous, row)
             row["notes"].append(MIXED_RESTATEMENT_NOTE.format(restated=restated["fiscal_year"],
                                                               other=other["fiscal_year"]))
@@ -107,9 +108,9 @@ def compare_periods(ticker: str, metric: str, years: list[int], *,
     """Tool entry point: one row per requested year (oldest first), or {"error": {...}} for an unknown metric or
     company or invalid arguments (never raises). `store` is for tests."""
     args = CompareArgs(ticker=ticker, metric=metric, years=years)
-    store = store or default_store()
+    store = store or financial_facts.default_store()        # via the module, so tests can replace it
     store.check_company_metric(args.ticker, args.metric)
-    rows = [_row(store, args.ticker, args.metric, y) for y in sorted(set(args.years))]
+    rows = [_row(store, args.ticker, args.metric, y) for y in args.years]
     _add_yoy(rows)
     return rows
 

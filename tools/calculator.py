@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from decimal import ROUND_HALF_UP, Decimal, DecimalException, localcontext
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -42,8 +42,11 @@ Unit = Literal["USD", "USD thousands", "USD millions", "USD billions", "USD per 
                "%", "ratio", "count"]
 
 PAIR_OPERATIONS = frozenset({"ratio", "percent", "growth", "difference", "cagr"})   # exactly two inputs
-MIN_SUM_INPUTS = 2
+MIN_INPUTS = 2                          # every operation combines at least two numbers
 MAX_INPUTS = 50                         # far more than any answer needs; bounds the expression length
+# Largest input magnitude: 1e15 is ~10,000x Walmart's revenue in USD millions, and every number up to 2**53
+# (~9e15) is an exact float, so inputs keep the digits they were given and print as plain integers
+MAX_ABS_INPUT = 1e15
 RESULT_UNIT: dict[str, str] = {"ratio": "ratio", "percent": "%", "growth": "%", "cagr": "%"}
 UNIT_FROM_ARGUMENT = frozenset({"difference", "sum"})       # the result is in the inputs' own unit
 # Spec §7.4: percentages 1 decimal, per-share values 2; ratios 2 (gold B15 asks for two, and one decimal would
@@ -64,9 +67,10 @@ NO_UNIT_NOTE = "no unit given: the result is in the inputs' unit"
 
 class CalculateArgs(ToolArgs):
     operation: Operation = Field(description="ratio | percent | growth | difference | sum | cagr")
-    inputs: list[float] = Field(min_length=1, max_length=MAX_INPUTS, description=(
-        "Numbers exactly as returned by get_financial_fact. ratio/percent: [a, b] for a / b. growth/difference: "
-        "[old, new]. cagr: [start, end]. sum: two or more values."))
+    inputs: list[Annotated[float, Field(ge=-MAX_ABS_INPUT, le=MAX_ABS_INPUT)]] = Field(
+        min_length=MIN_INPUTS, max_length=MAX_INPUTS, description=(
+            "Numbers exactly as returned by get_financial_fact. ratio/percent: [a, b] for a / b. "
+            "growth/difference: [old, new]. cagr: [start, end]. sum: two or more values."))
     years: float | None = Field(default=None, description="cagr only: number of years between start and end")
     unit: Unit | None = Field(default=None, description=(
         "difference and sum only (optional): the unit the inputs share, e.g. 'USD millions', returned as the "
@@ -96,8 +100,6 @@ def _num(x: float, wrap: bool = True) -> str:
 def _check_arity(operation: str, inputs: list[float]) -> None:
     if operation in PAIR_OPERATIONS and len(inputs) != 2:
         raise ToolError(INVALID_INPUT, f"{operation} takes exactly 2 inputs, got {len(inputs)}")
-    if operation == "sum" and len(inputs) < MIN_SUM_INPUTS:
-        raise ToolError(INVALID_INPUT, f"sum takes at least {MIN_SUM_INPUTS} inputs, got {len(inputs)}")
 
 
 def _evaluate(op: str, xs: list[float], years: float | None) -> tuple[Decimal, str, list[str]]:

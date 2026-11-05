@@ -12,13 +12,20 @@ Passage text is filing data, never instructions (spec §6): the agent must quote
 Errors are results, never exceptions: invalid_input (bad arguments or filters, or a form that contradicts the
 period: a 10-K is FY, a 10-Q is Q1-Q3), out_of_corpus (a company or fiscal year outside config/companies.yaml,
 the same answer get_financial_fact gives, so the agent refuses under R3 instead of rephrasing), data_missing
-(index not built, built with another embedding model, search packages or settings missing), no_results.
+(index not built, built with another embedding model, search packages or settings missing), no_results,
+service_unavailable (the embedding endpoint failed).
+
+Concurrency: the tools are synchronous, and the default retriever's embedder runs its own event loop, which
+cannot be entered twice at once. Searches through the default retriever are therefore serialised with a lock,
+and an async agent must call the tools from a worker thread (tools.registry.call_tool_async does that).
 """
 from __future__ import annotations
 
 import functools
+import threading
 from typing import Any, Literal
 
+import yaml
 from pydantic import Field, ValidationError, field_validator
 
 from ingest.edgar import Scope, load_scope
@@ -42,6 +49,8 @@ MAX_QUERY_CHARS = 2_000
 SCORE_DIGITS = 6
 ANNUAL = "FY"
 FORM_OF_PERIOD = {"FY": "10-K", "Q1": "10-Q", "Q2": "10-Q", "Q3": "10-Q"}
+# Re-entrant: building the default retriever happens inside a locked search
+_DEFAULT_RETRIEVER_LOCK = threading.RLock()
 
 
 class SearchArgs(ToolArgs):
@@ -56,7 +65,7 @@ class SearchArgs(ToolArgs):
         "'Part I Item 2' (10-Q MD&A)"))
     k: int = Field(default=DEFAULT_K, ge=1, le=MAX_K, description="Number of passages to return")
 
-    @field_validator("fiscal_period", "form", mode="before")
+    @field_validator("ticker", "fiscal_period", "form", mode="before")
     @classmethod
     def _upper(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
@@ -69,29 +78,42 @@ def citation(hit: SearchResult) -> str:
 
 
 @functools.cache
-def corpus_scope() -> Scope:
+def _corpus_scope() -> Scope:
     return load_scope()
 
 
-def check_scope(filters: Filters, scope: Scope) -> None:
-    """Typed errors for filters that can only match nothing: outside the corpus, or a contradictory form."""
+def corpus_scope() -> Scope:
+    """config/companies.yaml, read once; a missing or broken file is data_missing (and not cached)."""
+    try:
+        return _corpus_scope()
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+        raise ToolError(DATA_MISSING, f"config/companies.yaml cannot be read: {type(err).__name__}: {err}") from err
+
+
+def check_period(args: SearchArgs, scope: Scope) -> None:
+    """A form that contradicts the period is invalid_input; a fiscal year outside the corpus is out_of_corpus,
+    checked on the raw year, before Filters' plausibility range, so 1990 is R3 like in get_financial_fact."""
+    if args.form is not None and args.fiscal_period is not None and FORM_OF_PERIOD[args.fiscal_period] != args.form:
+        raise ToolError(INVALID_INPUT, f"form {args.form} does not fit fiscal_period {args.fiscal_period} "
+                                       f"(a 10-K is FY, a 10-Q is Q1-Q3)")
+    form = args.form or (FORM_OF_PERIOD[args.fiscal_period] if args.fiscal_period else None)
+    years = {"10-K": scope.tenk_years, "10-Q": scope.tenq_years}.get(form, scope.tenk_years | scope.tenq_years)
+    if args.fiscal_year is not None and args.fiscal_year not in years:
+        raise ToolError(OUT_OF_CORPUS, f"fiscal {args.fiscal_year} is outside the indexed filings (10-K fiscal "
+                                       f"{sorted(scope.tenk_years)}, 10-Q fiscal {sorted(scope.tenq_years)})")
+
+
+def check_ticker(filters: Filters, scope: Scope) -> None:
     if filters.ticker is not None and filters.ticker not in {c.ticker for c in scope.companies}:
         raise ToolError(OUT_OF_CORPUS, f"{filters.ticker} is not one of the {len(scope.companies)} companies in "
                                        f"config/companies.yaml")
-    if filters.form is not None and filters.fiscal_period is not None             and FORM_OF_PERIOD[filters.fiscal_period] != filters.form:
-        raise ToolError(INVALID_INPUT, f"form {filters.form} does not fit fiscal_period {filters.fiscal_period} "
-                                       f"(a 10-K is FY, a 10-Q is Q1-Q3)")
-    form = filters.form or (FORM_OF_PERIOD[filters.fiscal_period] if filters.fiscal_period else None)
-    years = {"10-K": scope.tenk_years, "10-Q": scope.tenq_years}.get(form, scope.tenk_years | scope.tenq_years)
-    if filters.fiscal_year is not None and filters.fiscal_year not in years:
-        raise ToolError(OUT_OF_CORPUS, f"fiscal {filters.fiscal_year} is outside the indexed filings (10-K fiscal "
-                                       f"{sorted(scope.tenk_years)}, 10-Q fiscal {sorted(scope.tenq_years)})")
 
 
 @functools.cache
 def default_retriever() -> Retriever:
     """C3 hybrid search over data/index (built by ingest/04_index.py), loaded once. A failure is not cached, so
-    a call after building the index succeeds without a restart."""
+    a call after building the index succeeds without a restart. Call it under _DEFAULT_RETRIEVER_LOCK, so two
+    first calls cannot build (and leak) two embedders."""
     from retrieval.bm25 import BM25Index, index_path
     from retrieval.common import chunks_path, read_chunks
     from retrieval.dense import (
@@ -128,12 +150,18 @@ def search_filings(query: str, ticker: str | None = None, fiscal_year: int | Non
     """Tool entry point: the passages, or {"error": {...}} (never raises). `retriever` is for tests."""
     args = SearchArgs(query=query, ticker=ticker, fiscal_year=fiscal_year, fiscal_period=fiscal_period, form=form,
                       item=item, k=k)
+    scope = corpus_scope()
+    check_period(args, scope)
     try:
         filters = Filters(args.ticker, args.fiscal_year, args.fiscal_period, args.form, args.item)
     except ValueError as err:
         raise ToolError(INVALID_INPUT, str(err)) from err
-    check_scope(filters, corpus_scope())
-    hits = (retriever or default_retriever()).search(args.query, args.k, filters)
+    check_ticker(filters, scope)
+    if retriever is not None:
+        hits = retriever.search(args.query, args.k, filters)
+    else:
+        with _DEFAULT_RETRIEVER_LOCK:
+            hits = default_retriever().search(args.query, args.k, filters)
     if not hits:
         raise ToolError(NO_RESULTS, "no passage matched the query and filters; widen the filters or rephrase",
                         filters=filters.active())

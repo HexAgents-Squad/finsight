@@ -25,9 +25,14 @@ metrics:
       - {concept: RevenueFromContractWithCustomerExcludingAssessedTax, label: total revenues}
       - {concept: RevenueFromContractWithCustomerIncludingAssessedTax, label: total revenues}
       - {concept: SalesRevenueNet, label: total revenues}
-    ticker_labels:
+    ticker_labels:                    # the company's own line item, so answers use its wording (spec §7.5)
       AAPL: total net sales
+      ABBV: net revenues
       BAC: total revenue, net of interest expense
+      C: total revenues, net of interest expense
+      KO: net operating revenues
+      MRK: sales
+      PG: net sales
   operating_income:
     period: duration
     concepts:

@@ -5,12 +5,16 @@ case: 10-Ks that repeat the prior year as a comparative column, a restated FY202
 restated by a fiscal-2026 10-Q (outside the corpus manifest), 3M and year-to-date quarters, balance-sheet instants,
 per-share values and a zero gross profit.
 """
+import asyncio
+import json
 import math
 from pathlib import Path
 
 import pytest
 
+from core.exceptions import FinSightError
 from retrieval.common import NO_FILTERS, Filters, SearchResult
+from tools import compare_periods as compare_periods_module
 from tools import financial_facts, registry, search_filings
 from tools.base import CalculationError, ToolError
 from tools.calculator import calculate, compute, round_half_up
@@ -20,7 +24,7 @@ from tools.financial_facts import FactStore, get_financial_fact
 FIXTURES = Path(__file__).parent / "fixtures"
 FACT_KEYS = {"value", "unit", "ticker", "fiscal_year", "fiscal_period", "duration", "period_start", "period_end",
              "concept", "accession_no", "filed", "url", "metric", "label", "form", "restated", "original_value",
-             "original_accession_no", "cited_filing_indexed", "notes"}
+             "original_accession_no", "period_accession_no", "cited_filing_indexed", "later_filings_exist", "notes"}
 K24, K25, Q1_26 = "0000320193-24-000001", "0000320193-25-000001", "0000320193-26-000101"
 
 
@@ -85,8 +89,8 @@ def test_difference_and_sum_without_a_unit_keep_the_inputs_unit():
 
 
 def test_very_large_but_finite_results_are_numbers():
-    assert calculate("ratio", [1e30, 1])["result"] == 1e30
-    assert calculate("sum", [1e27, 1], unit="USD")["result"] == 1e27
+    assert calculate("ratio", [1e15, 1e-10])["result"] == 1e25          # beyond 28 decimal digits: still exact
+    assert calculate("sum", [1e15, 1], unit="USD")["result"] == 1000000000000001.0
 
 
 def test_negative_growth_base_is_computed_and_noted():
@@ -104,9 +108,10 @@ def test_undefined_calculations_are_errors_not_numbers(operation, inputs, years)
         compute(operation, inputs, years)
 
 
-@pytest.mark.parametrize("kwargs", [{"operation": "ratio", "inputs": [1e308, 1e-10]},          # -> inf
-                                    {"operation": "sum", "inputs": [1e308, 1e308], "unit": "USD"},   # fsum raises
-                                    {"operation": "cagr", "inputs": [1e-300, 1e300], "years": 0.001}])
+# Inputs are bounded (MAX_ABS_INPUT), but a tiny denominator or root can still leave the float range
+@pytest.mark.parametrize("kwargs", [{"operation": "ratio", "inputs": [1e15, 1e-300]},            # 1e315
+                                    {"operation": "percent", "inputs": [-1e15, 1e-310]},
+                                    {"operation": "cagr", "inputs": [1e-300, 1e15], "years": 0.001}])
 def test_an_overflowing_result_is_undefined_not_a_crash(kwargs):
     out = calculate(**kwargs)
     assert error_type(out) == "undefined" and "not a finite number" in out["error"]["message"]
@@ -114,7 +119,9 @@ def test_an_overflowing_result_is_undefined_not_a_crash(kwargs):
 
 @pytest.mark.parametrize("kwargs, message", [
     ({"operation": "ratio", "inputs": [1, 2, 3]}, "exactly 2 inputs"),
-    ({"operation": "sum", "inputs": [1]}, "at least 2 inputs"),
+    ({"operation": "sum", "inputs": [1]}, "inputs: List should have at least 2 items"),
+    ({"operation": "sum", "inputs": [2.0 ** 53 + 2, 1], "unit": "USD"}, "inputs.0: Input should be less than or equal"),
+    ({"operation": "sum", "inputs": [10 ** 400, 1], "unit": "USD"}, "inputs.0: Input should be"),
     ({"operation": "cagr", "inputs": [1, 2]}, "years is required for cagr"),
     ({"operation": "growth", "inputs": [1, 2], "years": 1}, "years is required for cagr"),
     ({"operation": "ratio", "inputs": [1, 2], "unit": "USD millions"}, "unit is only for difference and sum"),
@@ -142,7 +149,9 @@ def test_fact_output_contract(store):
         "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax", "accession_no": K25,
         "filed": "2025-10-31", "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000001/",
         "metric": "revenue", "label": "total net sales", "form": "10-K", "restated": False,
-        "original_value": 1210.0, "original_accession_no": K25, "cited_filing_indexed": True, "notes": None}
+        "original_value": 1210.0, "original_accession_no": K25, "period_accession_no": K25,
+        "cited_filing_indexed": True, "later_filings_exist": False, "notes": None}
+    assert list(out) == list(financial_facts.FACT_FIELDS)                     # stable field order
 
 
 def test_current_year_not_the_prior_year_comparative(store):
@@ -154,6 +163,8 @@ def test_current_year_not_the_prior_year_comparative(store):
 def test_restated_value_is_the_latest_filed_with_the_original_kept(store):
     out = fact(store, "AAPL", "net_income", 2023)
     assert (out["value"], out["original_value"], out["restated"], out["accession_no"]) == (105.0, 100.0, True, K24)
+    assert out["period_accession_no"] == "0000320193-23-000001"        # the period's own (corpus) filing
+    assert (out["fiscal_year"], out["later_filings_exist"]) == (2023, None)  # the value's period, not the filing's
     assert out["notes"] == ["restated: first reported as 100 USD millions (accession 0000320193-23-000001); "
                             "the latest filed value is used (spec §7.7)"]
 
@@ -208,7 +219,9 @@ def test_per_share_values_are_not_scaled(store):
     (("AAPL", "revenue", 2024, "Q2"), "out_of_corpus", "FY2024 Q2 is outside"),
     (("MSFT", "revenue", 2024), "data_missing", "XBRL facts for MSFT are not cached"),
     (("AAPL", "ebitda", 2024), "invalid_input", "unknown metric 'ebitda'"),
-    (("AAPL", "revenue", 2024, "Q4"), "invalid_input", "Q4 is not filed separately"),
+    (("AAPL", "revenue", 2025, "Q4"), "not_reported", "Q4 is not reported separately"),
+    (("AAPL", "revenue", 2025, "q4 "), "not_reported", "never derived"),
+    (("PG", "rd_expense", 2025), "data_missing", "XBRL facts for PG are not cached"),   # the gap is Q1-Q3 only
     (("AAPL", "revenue", "2024"), "invalid_input", "fiscal_year: Input should be a valid integer"),
     (("AAPL", "revenue", True), "invalid_input", "fiscal_year: Input should be a valid integer"),
     (("AAPL", "revenue", 2024, "FY", "3M"), "invalid_input", "duration '3M' is not valid for FY"),
@@ -262,11 +275,30 @@ def test_yoy_from_a_zero_base_is_not_meaningful(store):
     assert rows[1]["notes"] == ["year-over-year growth is not meaningful: growth is undefined: the old value is 0"]
 
 
-def test_comparing_a_restated_year_with_an_original_one_is_noted(store):
+def test_a_restated_year_from_the_same_filing_is_like_for_like(store):
+    # FY2023 (restated) and FY2024 both come from the FY2024 10-K: same basis, no mixing note
     rows = compare_periods("AAPL", "net_income", [2023, 2024], store=store)
     assert rows[1]["yoy_growth_pct"] == 14.3                                  # (120 - 105) / 105 = 14.29%
-    assert rows[1]["notes"][-1] == ("FY2023 is a restated value and FY2024 is not, so the comparison mixes a "
-                                    "restated and an originally reported figure")
+    assert rows[0]["accession_no"] == rows[1]["accession_no"] and not any("mixes" in n for n in rows[1]["notes"])
+
+
+def yoy_rows(*values):
+    """Minimal compare rows for _add_yoy: (fiscal_year, value, restated, accession_no)."""
+    return [{"fiscal_year": y, "value": v, "restated": r, "accession_no": a, "notes": []} for y, v, r, a in values]
+
+
+def test_a_restated_and_an_original_figure_from_different_filings_are_noted():
+    rows = yoy_rows((2023, 100.0, True, "later-10-K"), (2024, 110.0, False, "own-10-K"))
+    compare_periods_module._add_yoy(rows)
+    assert rows[1]["notes"] == ["FY2023 is a restated value and FY2024 is not (they come from different filings), "
+                                "so the comparison mixes a restated and an originally reported figure"]
+
+
+def test_a_negative_base_note_reaches_the_comparison_row():
+    rows = yoy_rows((2023, -50.0, False, "a"), (2024, 25.0, False, "b"))
+    compare_periods_module._add_yoy(rows)
+    assert rows[1]["yoy_growth_pct"] == 150.0
+    assert rows[1]["notes"] == ["the base (old value) is negative, so growth is measured against its absolute value"]
 
 
 def test_a_declared_gap_gives_rows_with_the_reason(store):
@@ -340,7 +372,6 @@ def test_search_with_nothing_found_is_a_no_results_error():
     ({"query": "x", "form": "8-K"}, "form: Input should be"),
     ({"query": "x", "ticker": "A A"}, "invalid ticker"),
     ({"query": "x", "item": "MD&A"}, "invalid item"),
-    ({"query": "x", "fiscal_year": 24}, "fiscal_year must be an int from 1993"),
     ({"query": "x", "fiscal_period": "FY", "form": "10-Q"}, "form 10-Q does not fit fiscal_period FY"),
     ({"query": "x", "fiscal_period": "Q1", "form": "10-K"}, "form 10-K does not fit fiscal_period Q1"),
 ])
@@ -354,6 +385,8 @@ def test_search_rejects_bad_arguments_and_filters(kwargs, message):
     ({"fiscal_year": 2026}, "fiscal 2026 is outside the indexed filings"),
     ({"fiscal_year": 2024, "fiscal_period": "Q1"}, "fiscal 2024 is outside"),          # 10-Qs: fiscal 2025 only
     ({"fiscal_year": 2024, "form": "10-Q"}, "fiscal 2024 is outside"),
+    ({"fiscal_year": 24}, "fiscal 24 is outside"),                    # R3 like get_financial_fact, not "fix the call"
+    ({"fiscal_year": 1990}, "fiscal 1990 is outside"),
 ])
 def test_search_outside_the_corpus_is_out_of_corpus_like_the_fact_tool(kwargs, message):
     fake = FakeRetriever([hit("a")])
@@ -434,5 +467,159 @@ def test_warm_up_reports_what_is_missing(monkeypatch):
     monkeypatch.setattr(financial_facts, "default_store", lambda: None)
     monkeypatch.setattr(search_filings, "default_retriever", unavailable)
     assert registry.warm_up() == {"error": {"type": "data_missing", "message": "the search index is not available"}}
-    monkeypatch.setattr(search_filings, "default_retriever", lambda: None)
+
+
+# --- review follow-ups: rounding per unit, notes, later filings, setup and service errors, async, JSON args ------
+
+def test_per_share_and_cagr_results_use_their_own_decimals():
+    assert calculate("sum", [1.005, 2], unit="USD per share")["result"] == 3.01      # 2 decimals, half-up
+    assert calculate("sum", [1.005, 2], unit="USD millions")["result"] == 3.005      # other units keep the value
+    assert calculate("cagr", [100, 101], years=4)["result"] == 0.2                   # 0.249%: needs a precise root
+
+
+def test_an_instant_without_a_duration_carries_no_note(store):
+    assert fact(store, "AAPL", "total_assets", 2024)["notes"] == []
+    rows = compare_periods("AAPL", "total_assets", [2024, 2025], store=store)
+    assert [r["duration"] for r in rows] == [None, None] and rows[0]["notes"] == []
+    assert rows[1]["notes"] == [] and rows[1]["yoy_growth_pct"] == 9.1               # 5,500 -> 6,000
+
+
+def test_an_explicit_duration_miss_does_not_suggest_itself(store):
+    out = fact(store, "AAPL", "eps_diluted", 2025, "Q2", "6M")                      # no quarterly EPS in the fixture
+    assert error_type(out) == "not_reported" and "available_duration" not in out["error"]
+    assert out["error"]["message"] == "no reported eps_diluted for AAPL FY2025 Q2 (6M)"
+
+
+def test_a_missing_per_share_year_keeps_the_per_share_unit(store):
+    rows = compare_periods("AAPL", "eps_diluted", [2022, 2025], store=store)
+    assert [(r["value"], r["unit"]) for r in rows] == [(None, "USD per share"), (2.25, "USD per share")]
+    fact_keys = [k for k in rows[0] if k not in ("missing", "yoy_growth_pct", "yoy_calculation")]
+    assert fact_keys == list(financial_facts.FACT_FIELDS)                         # same keys and order as a fact
+
+
+def test_too_many_distinct_years_are_rejected(store):
+    out = compare_periods("AAPL", "revenue", list(range(2015, 2026)), store=store)
+    assert error_type(out) == "invalid_input" and "at most 10 distinct years, got 11" in out["error"]["message"]
+
+
+def test_a_later_annual_filing_is_flagged_for_the_latest_year_only(tmp_path):
+    facts = json.loads((FIXTURES / "xbrl" / "AAPL.json").read_text(encoding="utf-8"))
+    facts["facts"]["us-gaap"]["NetIncomeLoss"]["units"]["USD"].append(
+        {"start": "2025-09-28", "end": "2026-09-26", "val": 1, "accn": "0000320193-26-000001", "fy": 2026,
+         "fp": "FY", "form": "10-K", "filed": "2026-10-30"})
+    (tmp_path / "AAPL.json").write_text(json.dumps(facts), encoding="utf-8")
+    later = FactStore(xbrl_dir=tmp_path, manifest=FIXTURES / "manifest.jsonl")
+    assert fact(later, "AAPL", "revenue", 2025)["later_filings_exist"] is True
+    assert fact(later, "AAPL", "revenue", 2024)["later_filings_exist"] is None
+    assert fact(later, "AAPL", "revenue", 2025, "Q3")["later_filings_exist"] is None
+
+
+def test_a_cache_that_cannot_be_read_is_data_missing(tmp_path):
+    (tmp_path / "AAPL.json").mkdir()                                     # reading a directory raises an OSError
+    out = fact(FactStore(xbrl_dir=tmp_path, manifest=tmp_path / "none.jsonl"), "AAPL", "revenue", 2024)
+    assert error_type(out) == "data_missing" and "cannot be read" in out["error"]["message"]
+
+
+@pytest.mark.parametrize("broken", ["concept_map", "manifest"])
+def test_a_broken_setup_file_is_data_missing(tmp_path, monkeypatch, broken):
+    kwargs = {"xbrl_dir": FIXTURES / "xbrl", "manifest": FIXTURES / "manifest.jsonl"}
+    if broken == "concept_map":
+        (tmp_path / "map.yaml").write_text("metrics: [not, a, mapping", encoding="utf-8")
+        kwargs["concept_map"] = tmp_path / "map.yaml"
+    else:
+        (tmp_path / "manifest.jsonl").write_text('{"ticker": "AAPL"}\n', encoding="utf-8")   # no accession_no
+        kwargs["manifest"] = tmp_path / "manifest.jsonl"
+    monkeypatch.setattr(financial_facts, "_default_store", lambda: FactStore(**kwargs))
+    out = registry.call_tool("get_financial_fact", {"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024})
+    assert error_type(out) == "data_missing" and "fact store cannot be built" in out["error"]["message"]
+
+
+def test_incomplete_settings_for_the_search_index_are_data_missing(monkeypatch):
+    from pydantic import BaseModel
+
+    import retrieval.bm25
+    import retrieval.dense
+
+    class Settings(BaseModel):
+        EMBED_BACKEND: int
+
+    class Client:
+        def list_collections(self):
+            return ["chunks_C3"]
+
+    def incomplete():
+        Settings(EMBED_BACKEND="x")
+
+    monkeypatch.setattr(retrieval.bm25.BM25Index, "load", staticmethod(lambda path: object()))
+    monkeypatch.setattr(retrieval.dense, "open_client", lambda *a: Client())
+    monkeypatch.setattr(retrieval.dense, "embedder_from_settings", incomplete)
+    search_filings.default_retriever.cache_clear()
+    try:
+        out = search_filings.search_filings("revenue")
+    finally:
+        search_filings.default_retriever.cache_clear()
+    assert error_type(out) == "data_missing" and out["error"]["message"].startswith("settings are incomplete")
+
+
+def test_an_embedding_outage_is_service_unavailable_not_a_bug():
+    class Down:
+        def search(self, query, k=5, filters=NO_FILTERS):
+            raise FinSightError("LLM request to all-MiniLM failed: connection refused", error_type="NetworkError")
+
+    out = search_filings.search_filings("revenue", retriever=Down())
+    assert out == {"error": {"type": "service_unavailable", "cause": "NetworkError",
+                             "message": "LLM request to all-MiniLM failed: connection refused"}}
+
+
+class PrivateLoopRetriever:
+    """Searches the way the real embedder does: on its own event loop (retrieval/dense.py)."""
+
+    def __init__(self):
+        self.loop = asyncio.new_event_loop()
+
+    def search(self, query, k=5, filters=NO_FILTERS):
+        async def embed():
+            return [hit("a")]
+        return self.loop.run_until_complete(embed())
+
+
+# The wrong-way call leaves the embed coroutine un-awaited, exactly as the real embedder would
+@pytest.mark.filterwarnings("ignore:coroutine .* was never awaited:RuntimeWarning")
+def test_async_callers_use_call_tool_async(monkeypatch):
+    retriever = PrivateLoopRetriever()
+    monkeypatch.setattr(search_filings, "default_retriever", lambda: retriever)
+
+    async def agent_step():
+        inside_loop = registry.call_tool("search_filings", {"query": "revenue"})           # wrong way: fails
+        threaded = await registry.call_tool_async("search_filings", {"query": "revenue"})  # right way
+        return inside_loop, threaded
+
+    try:
+        inside_loop, threaded = asyncio.run(agent_step())
+    finally:
+        retriever.loop.close()
+    assert error_type(inside_loop) == "internal_error"
+    assert threaded[0]["citation"] == "[AAPL 10-K FY2025 · Item 7]"
+
+
+@pytest.mark.parametrize("arguments, expected", [
+    ('{"operation": "percent", "inputs": [1, 4]}', 25.0),                 # OpenAI tool_calls arguments string
+    (b'{"operation": "ratio", "inputs": [1, 4]}', 0.25),
+])
+def test_call_tool_accepts_json_string_arguments(arguments, expected):
+    assert registry.call_tool("calculate", arguments)["result"] == expected
+
+
+@pytest.mark.parametrize("arguments, message", [('{"operation": "percent", ', "arguments are not valid JSON"),
+                                                ('["percent", [1, 4]]', "must be a JSON object, not list")])
+def test_call_tool_rejects_broken_json_arguments(arguments, message):
+    out = registry.call_tool("calculate", arguments)
+    assert error_type(out) == "invalid_input" and message in out["error"]["message"]
+
+
+def test_warm_up_runs_one_search_so_the_model_loads(monkeypatch, store):
+    fake = FakeRetriever([hit("a")])
+    monkeypatch.setattr(financial_facts, "_default_store", lambda: store)
+    monkeypatch.setattr(search_filings, "default_retriever", lambda: fake)
     assert registry.warm_up() == {"ok": True}
+    assert fake.calls == [(registry.WARM_UP_QUERY, 1, NO_FILTERS)]

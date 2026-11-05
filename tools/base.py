@@ -28,6 +28,7 @@ NOT_REPORTED = "not_reported"            # the company does not report this metr
 OUT_OF_CORPUS = "out_of_corpus"          # company, form or period outside config/companies.yaml (spec §6 R3)
 DATA_MISSING = "data_missing"            # a local cache or index is not built, or does not match the settings
 NO_RESULTS = "no_results"                # a search matched nothing
+SERVICE_UNAVAILABLE = "service_unavailable"   # the embedding/LLM endpoint failed (core/llm.py): retry later
 INTERNAL_ERROR = "internal_error"        # a bug: logged with its traceback
 
 
@@ -69,7 +70,8 @@ def validation_message(err: ValidationError) -> str:
 
 def tool_boundary(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Turn every failure of a tool call into an error result, so no exception reaches the agent loop.
-    Unexpected exceptions are bugs: they are logged with a traceback and reported as internal_error."""
+    ToolError keeps its type; a FinSightError from core/llm.py (network, endpoint) is service_unavailable;
+    anything else is a bug, logged with a traceback and reported as internal_error."""
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -79,6 +81,9 @@ def tool_boundary(fn: Callable[..., Any]) -> Callable[..., Any]:
             return err.result()
         except ValidationError as err:
             return error_result(INVALID_INPUT, validation_message(err))
+        except FinSightError as err:                   # core/llm.py: endpoint down or refusing, not a code bug
+            log.warning("tool %s: %s (%s)", fn.__name__, err.message, err.error_type)
+            return error_result(SERVICE_UNAVAILABLE, err.message, cause=err.error_type)
         except Exception as err:                       # the agent must get a result, never a traceback
             log.exception("tool %s failed", fn.__name__)
             return error_result(INTERNAL_ERROR, f"{type(err).__name__}: {err}")
