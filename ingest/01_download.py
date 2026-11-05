@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pydantic import ValidationError  # noqa: E402
 
-from core.settings import get_settings  # noqa: E402
+from core.settings import get_sec_settings  # noqa: E402
 from ingest import DATA_DIR, MANIFEST_FILE, RAW_DIR, XBRL_DIR  # noqa: E402
 from ingest.edgar import (  # noqa: E402
     Company,
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        user_agent = get_settings().SEC_USER_AGENT
+        user_agent = get_sec_settings().SEC_USER_AGENT
     except ValidationError as err:
         print(f"ERROR: settings are incomplete; copy .env.example to .env and fill it in.\n{err}", file=sys.stderr)
         return 2

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FinSight is an IIT Kharagpur capstone (Track B · API-side): a multi-agent copilot that answers questions about US companies' SEC 10-K/10-Q filings, with citations and verified calculations, running on a hosted ≤8B chat model plus an embeddings endpoint. Fine-tuning and larger models are not allowed. Quality has to come from retrieval, tools, orchestration and evaluation.
 
-**The repo is at an early stage.** It contains the scope file, the spec, the decision log, the CI workflow, the test/lint configuration, the evaluation tooling (`eval/`), the LLM client (`core/`) and the corpus steps (`ingest/01_download.py` and `02_parse_sections.py`, logic in `ingest/edgar.py` and `ingest/sections.py`); no agent, retrieval or chunking/indexing code or Makefile exists yet. The design lives in two documents. Read them before adding anything:
+**The repo is at an early stage.** It contains the scope file, the spec, the decision log, the CI workflow, the test/lint configuration, the evaluation tooling (`eval/`), the LLM client (`core/`), the corpus steps (`ingest/01_download.py` and `02_parse_sections.py`, logic in `ingest/edgar.py` and `ingest/sections.py`) and the XBRL facts step (`ingest/05_xbrl_facts.py`, selection rules in `ingest/xbrl.py`); no agent, retrieval or chunking/indexing code or Makefile exists yet. The design lives in two documents. Read them before adding anything:
 - [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt): full plan (spec, data, retrieval, agents, eval, responsible AI, deployment).
 - [docs/week0_plan.txt](docs/week0_plan.txt): Week 0 work packages (WP1–WP8), the interface contracts between them, and step-by-step how-tos.
 
@@ -38,7 +38,7 @@ Streamlit UI → FastAPI /ask (rate limit + cache) → LangGraph app
 
 - `data/sections/sections.jsonl`: one Item section of one filing per line. This is the "document" unit, and the corpus must have 500–2,000 of them. `doc_id` looks like `AAPL_10-K_2024_Item7`. The full field list is in week0_plan §2.1.
 - Item naming is exact: `"Item 1"`, `"Item 1A"`, `"Item 7"`, `"Item 8"`. 10-Qs use `"Part I Item 2"`. The gold set uses the same strings.
-- `data/xbrl/<TICKER>.json` holds raw SEC companyfacts. `config/concept_map.yaml` maps metric names to candidate XBRL concepts in priority order. `config/companies.yaml` lists the 20 tickers (with CIK, sector, fiscal-year end and name aliases) and the in-scope forms and fiscal years.
+- `data/xbrl/<TICKER>.json` holds raw SEC companyfacts. `config/concept_map.yaml` (exists) maps 13 metric names to candidate XBRL concepts in priority order, with the line-item label to use (company-specific where the wording differs), the declared gaps and caveats (`notes`); `ingest/xbrl.py` `find_fact()` selects a value (WP6's `get_financial_fact` wraps it). `config/companies.yaml` lists the 20 tickers (with CIK, sector, fiscal-year end and name aliases) and the in-scope forms and fiscal years.
 - `eval/gold_set.jsonl`: 80 items. The ID is the category letter plus 2 digits: A fact, B ratio, C period, D multi-company, E qualitative, F multi-turn (uses `previous_turn_id`), G refuse / not answerable (G items carry `refusal_rule`). The answer contract (fields and invariants the critic and evaluation check) is defined in `docs/spec.md` §8, which supersedes plan §3.5.
 - `data/raw|sections|xbrl` are git-ignored. Small hand-checked samples go in `data/sample/`.
 

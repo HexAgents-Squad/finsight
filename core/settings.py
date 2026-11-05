@@ -15,11 +15,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
-class Settings(BaseSettings):
-    """Configuration for the LLM client, embeddings, agent limits and SEC access."""
+class SecSettings(BaseSettings):
+    """SEC access only: the download steps (ingest/01, ingest/05) need nothing else, so an incomplete LLM
+    section in .env does not stop them."""
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore", frozen=True,
                                       str_strip_whitespace=True)
+
+    # SEC EDGAR fair-access policy: automated clients must identify themselves
+    SEC_USER_AGENT: str = Field(..., min_length=1, description="User-Agent header required by SEC EDGAR")
+
+
+class Settings(SecSettings):
+    """Configuration for the LLM client, embeddings, agent limits and SEC access."""
 
     # Chat model on an OpenAI-compatible endpoint (min_length: an empty value in .env is an error here,
     # not a confusing failure inside the openai client)
@@ -46,9 +54,6 @@ class Settings(BaseSettings):
     MAX_AGENT_STEPS: int = Field(10, gt=0)
     MAX_TOKENS_PER_QUERY: int = Field(12_000, gt=0)
 
-    # SEC EDGAR fair-access policy: automated clients must identify themselves
-    SEC_USER_AGENT: str = Field(..., min_length=1, description="User-Agent header required by SEC EDGAR")
-
     @field_validator("EMBED_BACKEND", mode="before")
     @classmethod
     def _backend_name(cls, value: object) -> object:
@@ -60,3 +65,9 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """The settings, read from the environment and `.env` once per process."""
     return Settings()
+
+
+@cache
+def get_sec_settings() -> SecSettings:
+    """The SEC settings alone, read from the environment and `.env` once per process."""
+    return SecSettings()
