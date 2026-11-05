@@ -80,10 +80,19 @@ TOC_PAGE_CELL = re.compile(r"^(?:\d{1,3}(?:\s*[-–]\s*\d{1,3})?|[A-Z]-\d{1,3}|n
 DATA_FIGURE = re.compile(r"\d,\d{3}|\d\.\d|[$%()]|\b\d{1,3}\.[A-Z]{3}\b")
 HAS_LETTER = re.compile(r"[A-Za-z]")
 LEADING_NUMBER = re.compile(r"\d+")
-# A table-of-contents BLOCK is at least this many TOC rows in a row whose first page numbers never go down
-# (an executive table "Name | 63 | CEO" has ages in any order)
+# A table-of-contents BLOCK is at least MIN_TOC_ROWS TOC rows in a row whose page numbers mostly go up (at least
+# TOC_ASCENDING_SHARE of consecutive pairs: two-column TOCs restart once; an executive table "Name | 63 | CEO" has
+# ages in any order)
 MIN_TOC_ROWS = 4
 TOC_ASCENDING_SHARE = 0.75
+TITLE_LOOKAHEAD_LINES = 3        # lines after a bare "Item N" searched for its title
+TITLE_MAX_LINES = 2              # an Item title wraps over at most this many lines
+# Words that TOC entries use. A block recognised only by its position at a section's edge must use them in most
+# rows, so a small data table there ("Santa Clara, California | 12") is never taken for a TOC.
+TOC_TITLE_WORD = re.compile(r"\b(?:statements?|notes?|management|discussion|analysis|overview|results|report|"
+                            r"financial|balance|income|cash\s+flows?|equity|risk|summary|highlights|controls|"
+                            r"introduction|segments?|glossary|index|item|part|liquidity|capital|critical|"
+                            r"accounting|supplementary)\b", re.IGNORECASE)   # not "executive": officer tables
 TOC_LOOKAHEAD_LINES = 6          # lines after a region heading checked for the start of a TOC block
 TOC_LOOKAHEAD_MIN_ROWS = 3
 TOC_EDGE_LINES = 8               # a TOC block starting within this many lines of a section's start/end
@@ -131,7 +140,12 @@ CONTROLS_END = re.compile(r"^(?:report\s+of\s+independent\s+registered|(?:conden
                           r"(?:statements?|balance\s+sheets?)\b|financial\s+statements|glossary|risk\s+factors$)",
                           re.IGNORECASE)
 CONTROLS_KEY = {"10-K": "Item 9A", "10-Q": "Part I Item 4"}
-POINTER_CHARS = 1_000            # an Item 1A/9A shorter than this only points elsewhere ("see Risk Factors on page 76")
+# An Item 1A/9A is only a pointer when it is short AND refers elsewhere ("can be found ... under Risk Factors");
+# a genuine short Item (MSFT/GS 10-Q Item 4, ~800 chars) is never replaced
+POINTER_CHARS = 1_000
+POINTER_WORDING = re.compile(r"\b(?:see|refer(?:red)?\s+to|incorporated\s+(?:herein\s+)?by\s+reference|"
+                             r"set\s+forth|can\s+be\s+found|included\s+(?:in|under)|appears?\s+(?:in|under)|"
+                             r"page\s+\d+)", re.IGNORECASE)
 # The signature page (heading + its standard legend) ends a filing's text; without this the last Item, or a
 # relocated Item 8, would carry the signatures and anything printed after them
 SIGNATURE_PAGE = re.compile(r"^[ \t]*signatures?[ \t]*\n+[ \t]*(?:pursuant\s+to|under)\s+the\s+requirements",
@@ -187,8 +201,8 @@ def find_headings(lines: list[str], form: str) -> list[tuple[int, str]]:
     """(line index, Item key) for every line that looks like an Item heading."""
     out, part = [], "I"
     for i, line in enumerate(lines):
-        if TOC_PAGE_NUMBER.search(line):
-            continue
+        if TOC_PAGE_NUMBER.search(line) or is_toc_row(line):
+            continue                         # a TOC row ("Item 7. | MD&A | 30", "Item 7 (continued) | 31")
         part_line = PART_LINE.match(line) if len(line) < HEADING_MAX_CHARS else None
         if part_line:
             part = part_line.group(1).upper()
@@ -201,11 +215,17 @@ def find_headings(lines: list[str], form: str) -> list[tuple[int, str]]:
         item = m.group(2).upper()
         rest = m.group(3).strip().lstrip("|").strip()
         if not rest:                         # bare "Item 7": a heading only if the next line is its title
-            nxt = next((ln.strip() for ln in lines[i + 1:i + 4] if ln.strip()), "")
+            following = [ln.strip() for ln in lines[i + 1:i + 1 + TITLE_LOOKAHEAD_LINES] if ln.strip()]
+            nxt = following[0] if following else ""
             titles = [TENK_TITLES.get(item, "")] if form == "10-K" else [
                 t for (_, it), t in TENQ_TITLES.items() if it == item]
-            if not any(t and starts_with_title(nxt, t) for t in titles) or is_toc_row(nxt):
-                continue                     # (a title line ending in a page number is a two-line TOC entry)
+            if not any(t and starts_with_title(nxt, t) for t in titles):
+                continue
+            # A title ending in a page number is a TOC entry, also when the title wraps and the page number is
+            # on its second line (GS: "Changes in ... on Accounting" / "and Financial Disclosure | 240")
+            title_end = next((ln for ln in following[:TITLE_MAX_LINES] if "|" in ln), "")
+            if is_toc_row(title_end) or TOC_PAGE_NUMBER.search(title_end):
+                continue
             rest = nxt
         if NOT_A_TITLE.match(_norm_quote(rest)):
             continue                         # sentence fragment or cross-reference, not a heading
@@ -235,14 +255,16 @@ def starts_with_title(text: str, title: str) -> bool:
     return n > 0 and words[:n] == title_words[:n]
 
 
-def heading_offsets(text: str, pattern: re.Pattern) -> list[int]:
+def heading_offsets(text: str, pattern: re.Pattern, include_toc: bool = False) -> list[int]:
     """Character offsets of short lines matching `pattern` (region headings such as "Management's Discussion").
-    Lines inside a table of contents (the row itself, or MIN_TOC_ROWS page-reference rows among the next
-    lines) are not headings."""
+    Unless `include_toc`, lines inside a table of contents (the row itself, or TOC_LOOKAHEAD_MIN_ROWS TOC rows
+    among the next TOC_LOOKAHEAD_LINES lines) are not headings."""
     lines, pos, out = text.split("\n"), 0, []
     for n, line in enumerate(lines):
         stripped = line.strip()
-        if len(stripped) < REGION_HEADING_MAX_CHARS and pattern.match(stripped) and not is_toc_row(line):
+        if len(stripped) < REGION_HEADING_MAX_CHARS and pattern.match(stripped) and include_toc:
+            out.append(pos)
+        elif len(stripped) < REGION_HEADING_MAX_CHARS and pattern.match(stripped) and not is_toc_row(line):
             following = [ln for ln in lines[n + 1:n + 1 + TOC_LOOKAHEAD_LINES] if ln.strip()]
             if sum(map(is_toc_row, following)) < TOC_LOOKAHEAD_MIN_ROWS:
                 out.append(pos)
@@ -275,14 +297,21 @@ def split_items(text: str, form: str) -> tuple[dict[str, str], str]:
 
 def split_last_item(sections: dict[str, str]) -> str:
     """When the MD&A or the statements are not under their Items, a bank's annual report (JPM) or NVIDIA's
-    statements follow the exhibit list in Item 15: cut Item 15 at the first MD&A / statements heading and
-    return the rest as unassigned text for relocation. Item 15 is left alone when nothing follows it."""
+    statements follow the exhibit list in Item 15: cut Item 15 where that report starts and return the rest as
+    unassigned text for relocation. The report usually opens with its own contents list naming the MD&A, so the
+    cut also counts MD&A / statements lines inside a TOC; otherwise its front matter (JPM's contents, financial
+    highlights, stock-performance chart) would stay in Item 15. Item 15 is left alone when nothing follows it."""
     body = sections.get("Item 15", "")
-    starts = [p for p in heading_offsets(body, MDNA_HEADING) + heading_offsets(body, FS_HEADING)
-              if p > MIN_SECTION_CHARS]
+    starts = [p for p in heading_offsets(body, MDNA_HEADING, include_toc=True)
+              + heading_offsets(body, FS_HEADING, include_toc=True) if p > MIN_SECTION_CHARS]
     if not starts:
         return ""
     cut = min(starts)
+    # The MD&A line may be the 3rd row of the report's contents list: start at its "Table of contents" header
+    header = heading_offsets(body[:cut], TOC_HEADER, include_toc=True)
+    preceding = body[header[-1]:cut].count("\n") if header else None
+    if preceding is not None and preceding <= TOC_LOOKAHEAD_LINES and header[-1] > MIN_SECTION_CHARS:
+        cut = header[-1]
     sections["Item 15"] = body[:cut].strip()
     return body[cut:]
 
@@ -357,17 +386,19 @@ def toc_blocks(lines: list[str]) -> list[tuple[int, int]]:
             first -= 1                           # take the "Table of Contents" / "Page" header along
         before = next((lines[i].strip() for i in range(first - 1, -1, -1) if lines[i].strip()), "")
         rows = [ln for ln in lines[first:last + 1] if is_toc_row(ln)]
-        navigation = (first in near_start or last in near_end or TOC_SUBHEADING.match(lines[first].strip())
-                      or TOC_HEADER.match(before)
-                      or sum(bool(TOC_ENTRY_WORD.match(r)) for r in rows) * 2 >= len(rows))
-        if navigation:
+        headed = bool(TOC_SUBHEADING.match(lines[first].strip()) or TOC_HEADER.match(before))
+        lists_entries = sum(bool(TOC_ENTRY_WORD.match(r)) for r in rows) * 2 >= len(rows)
+        at_edge = first in near_start or last in near_end
+        titled = sum(bool(TOC_TITLE_WORD.search(r)) for r in rows) * 2 >= len(rows)
+        if headed or lists_entries or (at_edge and titled):
             blocks.append((first, last))
     return blocks
 
 
 def strip_toc(text: str) -> str:
-    """The text without its table-of-contents blocks (navigation only, never content). A heading on the first
-    line is always kept."""
+    """The text without the blocks toc_blocks() takes for tables of contents. Those rules are built to leave
+    data tables alone (checked block by block on the real corpus, and by tests), but they are heuristics.
+    A heading on the first line is always kept."""
     lines = text.split("\n")
     drop = {i for first, last in toc_blocks(lines) for i in range(max(first, 1), last + 1)}
     if not drop:
@@ -455,7 +486,8 @@ def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> 
             (RISK_KEY[form], RISK_FACTORS_HEADING, RISK_FACTORS_END, False, False),
             (CONTROLS_KEY[form], CONTROLS_HEADING, CONTROLS_END, True, True)):
         present = key in result
-        is_pointer = present and len(result[key].text) < POINTER_CHARS
+        is_pointer = (present and len(result[key].text) < POINTER_CHARS
+                      and bool(POINTER_WORDING.search(result[key].text)))
         if mdna_key not in result or (present and not is_pointer):
             continue
         if not (mdna_key in relocated or is_pointer or (when_absent and not present)):

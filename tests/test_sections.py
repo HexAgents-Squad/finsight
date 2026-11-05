@@ -396,3 +396,101 @@ def test_controls_and_procedures_inside_a_bank_mdna_become_item_9a():
     by_key = {s.key: s for s in parse_filing(html_to_text(tenk_html(stubs)), "10-K", exhibit).sections}
     assert "disclosurecontrols" in by_key["Item 9A"].text and "disclosurecontrols" not in by_key["Item 7"].text
     assert by_key["Item 9A"].location == EXHIBIT
+
+
+# --- regressions from the review of #10 (each test pins one rule) ------------------------------------------
+
+def test_wrapped_two_line_toc_title_is_not_a_heading():
+    # GS: "Item 9" / "Changes in ... on Accounting" / "and Financial Disclosure | 240" (page on the wrapped line)
+    toc = ("<p>Item 9</p><p>Changes in and Disagreements with Accountants on Accounting</p>"
+           "<p>and Financial Disclosure | 240</p><p>INDEX</p><p>" + body("indexpage", 3_000) + "</p>")
+    html = tenk_html(STANDARD, toc=False).replace("<body>", "<body>" + toc, 1)
+    assert "Item 9" not in {s.key for s in parse_filing(html_to_text(html), "10-K").sections}
+
+
+def test_annual_report_front_matter_is_not_left_in_item_15():
+    # JPM: the appended report opens with its own contents list and highlights before the MD&A heading
+    stubs = {**STANDARD, "7": "See the Annual Report.", "8": "See the Annual Report."}
+    report = ("<p>Management's discussion and analysis: | 48 | Consolidated Financial Statements</p>"
+              "<p>THREE-YEAR SUMMARY OF CONSOLIDATED FINANCIAL HIGHLIGHTS</p><p>" + body("highlights", 2_000) + "</p>"
+              "<p>Management's discussion and analysis</p><p>" + body("bankmdna", BIG) + "</p>"
+              "<p>Consolidated statements of income</p><p>" + body("fs", BIG) + "</p>")
+    by_key = {s.key: s for s in parse_filing(html_to_text(tenk_html(stubs, extra=report)), "10-K").sections}
+    assert "highlights" not in by_key["Item 15"].text and "exhibits" in by_key["Item 15"].text
+    assert by_key["Item 7"].text.startswith("Management's discussion and analysis\n")
+
+
+def tenq_html(items: dict[tuple[str, str], str]) -> str:
+    parts = ["<html><body>"]
+    for (part, item), text in items.items():
+        parts.append(f"<p>Item {item}. {TENQ_TITLES[(part, item)]}</p><p>{text}</p>")
+    return "".join(parts) + "</body></html>"
+
+
+def test_short_real_item_is_never_taken_for_a_pointer():
+    # MSFT/GS 10-Q Part I Item 4 is a complete ~800-char Item: keep it, even if the MD&A has the same heading
+    real_item4 = body("disclosurecontrols", 800)
+    mdna = body("mdna", BIG) + "<p>Controls and Procedures</p><p>" + body("mdnacontrols", 2_000) + "</p>"
+    items = {("I", "1"): body("fs", BIG), ("I", "2"): mdna, ("I", "4"): real_item4, ("II", "1A"): body("risk")}
+    by_key = {s.key: s for s in parse_filing(html_to_text(tenq_html(items)), "10-Q").sections}
+    assert "disclosurecontrols" in by_key["Part I Item 4"].text and "mdnacontrols" in by_key["Part I Item 2"].text
+
+
+def test_long_item_9a_is_kept_even_if_it_cross_refers():
+    # pins POINTER_CHARS: a 1,500-char Item 9A that says "see Note 5" is a real Item, not a pointer
+    item9a = "<p>See Note 5 for details.</p><p>" + body("realcontrols", 1_500) + "</p>"
+    stubs = {**STANDARD, "9A": item9a, "7": "See the Annual Report.", "8": "See the Annual Report."}
+    exhibit = html_to_text("<p>Overview</p><p>" + body("exmdna", BIG) + "</p><p>Controls and Procedures</p><p>"
+                           + body("excontrols", 2_000) + "</p><p>Report of Independent Registered Public "
+                           "Accounting Firm</p><p>" + body("exfs", BIG) + "</p>")
+    by_key = {s.key: s for s in parse_filing(html_to_text(tenk_html(stubs)), "10-K", exhibit).sections}
+    assert "realcontrols" in by_key["Item 9A"].text and "excontrols" not in by_key["Item 9A"].text
+
+
+def test_controls_are_carved_when_the_10q_has_no_item_4():
+    # WFC 10-Q: no Part I Item 4 at all; its controls text sits at the end of the MD&A
+    mdna = body("mdna", BIG) + "<p>Controls and Procedures</p><p>" + body("mdnacontrols", 2_000) + "</p>"
+    items = {("I", "1"): body("fs", BIG), ("I", "2"): mdna, ("II", "1"): body("legal"), ("II", "1A"): body("risk"),
+             ("II", "6"): body("exhibits")}
+    by_key = {s.key: s for s in parse_filing(html_to_text(tenq_html(items)), "10-Q").sections}
+    assert "mdnacontrols" in by_key["Part I Item 4"].text and "mdnacontrols" not in by_key["Part I Item 2"].text
+
+
+@pytest.mark.parametrize("rows, at_end", [
+    (["Santa Clara, California | 12", "Austin, Texas | 14", "Hyderabad, India | 17", "Tel Aviv, Israel | 19"], False),
+    (["Jane Doe | 52 | Chief Financial Officer", "John Roe | 55 | General Counsel", "Ann Poe | 58 | Chief People "
+      "Officer", "Bob Loe | 61 | Chief Executive Officer"], True),
+])
+def test_small_data_tables_at_a_section_edge_are_kept(rows, at_end):
+    # pins the edge rule: position alone is not enough, the rows must read like TOC entries
+    from ingest.sections import strip_toc
+    filler = [body("context", 400)] * 12
+    lines = ["Item 2. Properties", *filler, *rows] if at_end else ["Item 2. Properties", *rows, *filler]
+    text = "\n".join(lines)
+    assert strip_toc(text) == text
+
+
+@pytest.mark.parametrize("rows", [
+    ["Executive Summary | 90", "Recent Developments | 70", "Financial Highlights | 50", "Balance Sheet | 30"],
+    ["Executive Summary | 27", "Recent Developments | 28", "Financial Highlights | 29"],
+    ["Operating margin 44.6% | 27", "Net margin 12.5 | 28", "Return on equity 9.1 | 29", "Leverage 1.2 | 30"],
+])
+def test_toc_block_rules_are_pinned(rows):
+    # descending pages (TOC_ASCENDING_SHARE), only 3 rows (MIN_TOC_ROWS), rows with figures (DATA_FIGURE):
+    # none of these is a TOC block, even under a "Page" header
+    from ingest.sections import strip_toc
+    text = "\n".join(["Item 7. Management's Discussion and Analysis", "Page", *rows, body("context", 400)])
+    assert strip_toc(text) == text
+
+
+def test_item_15_cut_starts_at_the_reports_contents_header():
+    # JPM: "Table of contents" / "Financial: | Audited ..." / "46 | Highlights | 162 | ..." / MD&A row
+    stubs = {**STANDARD, "7": "See the Annual Report.", "8": "See the Annual Report."}
+    report = ("<p>Table of contents</p><p>Financial: | Audited financial statements:</p>"
+              "<p>46 | Three-Year Summary of Highlights | 162 | Management's Report</p>"
+              "<p>Management's discussion and analysis: | 48 | Consolidated Financial Statements</p>"
+              "<p>Management's discussion and analysis</p><p>" + body("bankmdna", BIG) + "</p>"
+              "<p>Consolidated statements of income</p><p>" + body("fs", BIG) + "</p>")
+    item15 = next(s for s in parse_filing(html_to_text(tenk_html(stubs, extra=report)), "10-K").sections
+                  if s.key == "Item 15")
+    assert "Table of contents" not in item15.text and "Highlights" not in item15.text
