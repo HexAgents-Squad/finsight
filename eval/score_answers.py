@@ -438,8 +438,9 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
     if gold and within(-value, gold, q.tolerance_pct):
         out.update(reason=out["reason"] + ": sign flipped (a decrease given as an increase, or the reverse)",
                    suggested_label="arithmetic_slip")
-    elif any(within(value * f, gold, q.tolerance_pct) for f in CONFUSION_FACTORS):
-        out["suggested_label"] = "unit_confusion"
+    elif any(within(value * f, gold, q.tolerance_pct)
+             and (not reported or same_reported_figure(value * f, a.value, gold)) for f in CONFUSION_FACTORS):
+        out["suggested_label"] = "unit_confusion"       # a reported figure only when it is the gold one rescaled
     elif checks["wrong_year"]:
         out["suggested_label"] = "wrong_fiscal_year"
     elif checks["wrong_company"]:

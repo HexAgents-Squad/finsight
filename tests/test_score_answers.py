@@ -662,3 +662,10 @@ def test_a_sheet_that_cannot_be_written_leaves_sheet_and_key_as_they_were(tmp_pa
     with pytest.raises(PermissionError):
         sa.write_sheet(changed, tmp_path)
     assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before   # no .part left, key untouched
+
+
+def test_another_figure_in_the_wrong_scale_is_not_a_unit_confusion():
+    # M2 A12 (measured): the next quarter's 12,535 with unit "USD" is a wrong figure first, a scale slip second
+    s = score_one("A12", answer(value=12535, unit="USD"))
+    assert s["correct"] is False and s["suggested_label"] == "wrong_line_item"
+    assert score_one("A12", answer(value=12455, unit="USD thousands"))["suggested_label"] == "unit_confusion"
