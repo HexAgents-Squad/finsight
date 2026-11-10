@@ -39,18 +39,20 @@ class Settings(SecSettings):
     # SecretStr: the team key must never appear in a repr, a log line or a validation error message
     LLM_API_KEY: SecretStr = Field(..., min_length=1, description="API key for the endpoint ('ollama' locally)")
     LLM_MODEL: str = Field(..., min_length=1, description="Chat model name")
-    # Worst case for one call is LLM_TIMEOUT x (LLM_HTTP_RETRIES + 1) plus the back-off (2 + 4 + 8 s); the
-    # agent enforces its overall per-query time limit on top of this.
-    LLM_TIMEOUT: float = Field(30.0, gt=0, description="HTTP request timeout in seconds")
+    # Worst case for one call is LLM_TIMEOUT x (LLM_HTTP_RETRIES + 1) plus the waits (2 + 4 + 8 s by default, a
+    # server's Retry-After up to 30 s each); the agent enforces its per-query time limit on top of this.
+    LLM_TIMEOUT: float = Field(30.0, gt=0, allow_inf_nan=False, description="HTTP request timeout in seconds")
     # Two separate retry budgets. core.llm retries 429 (one active request per team key, 60/min), 5xx, timeouts
     # and network errors after LLM_RETRY_BASE_S x 2^n seconds (2, 4, 8: the learner guide's advice), the openai
     # SDK's own retries being off so the two never multiply; chat_json re-prompts after invalid JSON (spec: 2).
-    LLM_HTTP_RETRIES: int = Field(3, ge=0, description="retries for 429/5xx/timeout/network errors")
-    LLM_RETRY_BASE_S: float = Field(2.0, ge=0, description="first retry delay; doubles each retry")
+    LLM_HTTP_RETRIES: int = Field(3, ge=0, le=10, description="retries for 429/5xx/timeout/network errors")
+    LLM_RETRY_BASE_S: float = Field(2.0, ge=0, le=30, allow_inf_nan=False,
+                                    description="first retry delay; doubles each retry (each wait at most 30 s)")
     # One request at a time per endpoint in a process, and at most one start per interval (60 requests/min)
-    LLM_MIN_INTERVAL_S: float = Field(1.0, ge=0, description="minimum seconds between request starts")
-    # Disk cache of replies (spec §9): an identical request (model, messages, temperature, max_tokens, thinking,
-    # sample) is answered from here, so an evaluation re-run is identical and costs no calls. Empty = no cache.
+    LLM_MIN_INTERVAL_S: float = Field(1.0, ge=0, le=60, allow_inf_nan=False,
+                                      description="minimum seconds between request starts")
+    # Disk cache of replies (spec §9): an identical request (server, model, messages, temperature, max_tokens,
+    # thinking, sample) is answered from here, so an evaluation re-run is identical and costs no calls. Empty = no cache.
     LLM_CACHE_DIR: Path | None = Field(Path("data/cache/llm"), description="reply cache; relative to the repo")
     LLM_JSON_RETRIES: int = Field(2, ge=0, description="chat_json re-prompts after invalid output")
     # Caps one reply, so a runaway generation from a small model cannot use the whole per-query token budget

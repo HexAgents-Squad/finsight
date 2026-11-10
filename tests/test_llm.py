@@ -699,7 +699,6 @@ def test_retry_after_is_honoured_when_longer_up_to_a_cap(slept, after, wait):
 
 
 def test_a_tls_failure_is_not_retried():
-    import ssl
     request = httpx.Request("POST", "https://endpoint.test/v1/chat/completions")
     error = openai.APIConnectionError(request=request)
     error.__cause__ = ssl.SSLCertVerificationError("certificate verify failed")
@@ -870,10 +869,12 @@ def test_without_a_tokenizer_the_size_check_is_skipped_with_a_warning(monkeypatc
         raise FinSightError("Qwen tokenizer unavailable", error_type="TokenizerUnavailable")
 
     monkeypatch.setattr(core.tokens, "count_tokens", offline)
-    llm = client(reply("OK"), reply("OK"), LLM_CONTEXT_TOKENS=8192)
+    monkeypatch.setattr(core.llm, "_TOKEN_COUNTER", None)                # not tried yet in this process
+    first = client(reply("OK"), reply("OK"), LLM_CONTEXT_TOKENS=8192)
+    second = client(reply("OK"), LLM_CONTEXT_TOKENS=8192)                 # e.g. the next question's client
     with caplog.at_level("WARNING", logger="finsight.llm"):
-        assert run(llm.chat(USER)) == "OK" and run(llm.chat(USER)) == "OK"
-    assert sum("prompt-size check off" in r.message for r in caplog.records) == 1     # warned once
+        assert run(first.chat(USER)) == "OK" and run(first.chat(USER)) == "OK" and run(second.chat(USER)) == "OK"
+    assert sum("prompt-size check off" in r.message for r in caplog.records) == 1     # once per process
 
 
 def test_cache_and_context_settings(monkeypatch):
@@ -886,6 +887,11 @@ def test_cache_and_context_settings(monkeypatch):
         settings(LLM_CONTEXT_TOKENS=1024)
     d = Settings(_env_file=None, **REQUIRED)
     assert (d.LLM_HTTP_RETRIES, d.LLM_RETRY_BASE_S, d.LLM_MIN_INTERVAL_S, d.LLM_CONTEXT_TOKENS) == (3, 2.0, 1.0, 8192)
+    assert d.LLM_CACHE_DIR == REPO_ROOT / "data" / "cache" / "llm"               # the default, from any folder
+    for bad in ({"LLM_RETRY_BASE_S": "inf"}, {"LLM_TIMEOUT": "inf"}, {"LLM_HTTP_RETRIES": 11},
+                {"LLM_MIN_INTERVAL_S": "nan"}):
+        with pytest.raises(ValueError):
+            settings(**bad)
 
 
 def test_a_cache_entry_with_missing_fields_is_fetched_again(tmp_path):
@@ -927,3 +933,199 @@ def test_the_smoke_test_never_answers_from_the_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(smoke, "LLMClient", Recorder)
     monkeypatch.setattr(smoke, "run_checks", no_checks)
     assert run(smoke.main()) == 0 and seen == [None]
+
+
+
+# --- added after the independent review of W1-02 -------------------------------------------------------------------
+
+def test_the_endpoint_serves_callers_in_arrival_order():
+    """A caller making back-to-back calls must not starve one that arrived meanwhile (a plain lock would)."""
+    order = []
+
+    class Quick(FakeChat):
+        async def _create(self, **request):
+            await asyncio.sleep(0.005)
+            order.append(request["messages"][0]["content"][0])
+            return reply("ok")
+
+    shared = Quick()
+    busy = LLMClient(settings(LLM_BASE_URL="http://fair.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+    other = LLMClient(settings(LLM_BASE_URL="http://fair.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+
+    async def scenario():
+        async def many():
+            for i in range(15):
+                await busy.chat([{"role": "user", "content": f"A{i}"}])
+
+        async def one():
+            await asyncio.sleep(0.02)
+            await other.chat([{"role": "user", "content": "B"}])
+
+        await asyncio.gather(many(), one())
+
+    run(scenario())
+    assert order.index("B") < 10, "".join(order)                        # served soon after it arrived, not last
+
+
+def test_an_identical_request_that_waited_is_answered_from_the_cache(tmp_path):
+    slow = SlowChat(2)
+    a = LLMClient(settings(LLM_BASE_URL="http://dup.test/v1", LLM_CACHE_DIR=str(tmp_path)), chat_client=slow,
+                  embed_client=FakeEmbeddings())
+
+    async def twice():
+        return await asyncio.gather(a.complete(USER), a.complete(USER))
+
+    first, second = run(twice())
+    assert len(slow.requests) == 1 and sorted([first.cached, second.cached]) == [False, True]
+    assert first.text == second.text == "r0"
+
+
+def test_the_server_is_part_of_the_cache_key(tmp_path):
+    run(client(reply("hosted"), LLM_BASE_URL="http://hosted.test/v1", LLM_CACHE_DIR=str(tmp_path)).chat(USER))
+    other = client(reply("other provider"), LLM_BASE_URL="http://other.test/v1", LLM_CACHE_DIR=str(tmp_path))
+    assert run(other.chat(USER)) == "other provider"
+    same = client(reply("never used"), LLM_BASE_URL="HTTP://Hosted.test:80/v1/", LLM_CACHE_DIR=str(tmp_path))
+    assert run(same.chat(USER)) == "hosted"                             # same server, other spelling
+
+
+def test_max_tokens_is_part_of_the_cache_key(tmp_path):
+    run(client(reply("short"), LLM_CACHE_DIR=str(tmp_path)).chat(USER))
+    longer = client(reply("long"), LLM_CACHE_DIR=str(tmp_path), LLM_MAX_COMPLETION_TOKENS=2048)
+    assert run(longer.chat(USER)) == "long"
+
+
+def test_the_endpoint_holds_across_threads_and_event_loops():
+    import threading
+    state = {"active": 0, "peak": 0}
+    guard = threading.Lock()
+
+    class Counting(FakeChat):
+        async def _create(self, **request):
+            with guard:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+            await asyncio.sleep(0.01)
+            with guard:
+                state["active"] -= 1
+            return reply("ok")
+
+    def worker(i):
+        llm = LLMClient(settings(LLM_BASE_URL="http://threads.test/v1"), chat_client=Counting(),
+                        embed_client=FakeEmbeddings())
+        for j in range(3):
+            asyncio.run(llm.chat([{"role": "user", "content": f"{i}-{j}"}]))      # a new event loop each time
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert state["peak"] == 1
+
+
+def test_cancelling_during_back_off_or_in_the_queue_frees_the_endpoint(slept):
+    class Blocks(FakeChat):
+        hold: asyncio.Event
+
+        async def _create(self, **request):
+            if request["messages"][0]["content"] == "holder":
+                await self.hold.wait()
+            return reply("ok")
+
+    blocks = Blocks()
+    llm = LLMClient(settings(LLM_BASE_URL="http://queue.test/v1"), chat_client=blocks, embed_client=FakeEmbeddings())
+    backoff = client(status_error(openai.RateLimitError, 429), reply("never"), LLM_BASE_URL="http://queue.test/v1",
+                     LLM_RETRY_BASE_S=2.0)
+
+    async def scenario():
+        blocks.hold = asyncio.Event()
+        holder = asyncio.create_task(llm.chat([{"role": "user", "content": "holder"}]))
+        await asyncio.sleep(0.01)
+        waiting = asyncio.create_task(llm.chat([{"role": "user", "content": "queued"}]))   # waits for its turn
+        await asyncio.sleep(0.01)
+        waiting.cancel()
+        blocks.hold.set()
+        await holder
+        in_backoff = asyncio.create_task(backoff.chat(USER))
+        while not slept:                                                   # inside the 2 s back-off
+            await asyncio.sleep(0)
+        in_backoff.cancel()
+        for task in (waiting, in_backoff):
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        return await asyncio.wait_for(llm.chat([{"role": "user", "content": "after"}]), timeout=2)
+
+    assert run(scenario()) == "ok"
+
+
+def test_each_wait_is_capped(slept):
+    llm = client(*[status_error(openai.RateLimitError, 429)] * 3, reply("OK"), LLM_RETRY_BASE_S=20.0)
+    assert run(llm.chat(USER)) == "OK" and slept == [20.0, 30.0, 30.0]
+
+
+def test_an_empty_reply_is_not_cached(tmp_path):
+    llm = client(reply("  "), reply("OK"), LLM_CACHE_DIR=str(tmp_path))
+    with pytest.raises(FinSightError):
+        run(llm.chat(USER))
+    assert run(llm.chat(USER)) == "OK" and len(llm.client.requests) == 2
+
+
+def test_a_cache_entry_with_wrong_types_is_fetched_again(tmp_path):
+    llm = client(reply("first"), reply("again"), LLM_CACHE_DIR=str(tmp_path))
+    run(llm.chat(USER))
+    entry = next(tmp_path.rglob("*.json"))
+    entry.write_text('{"content": "x", "finish_reason": null, "prompt_tokens": null, "completion_tokens": 3}',
+                     encoding="utf-8")
+    assert run(llm.chat(USER)) == "again"
+
+
+def test_any_text_gives_a_cache_key(tmp_path):
+    llm = client(reply("OK"), LLM_CACHE_DIR=str(tmp_path))
+    assert run(llm.chat([{"role": "user", "content": "broken \ud800 surrogate"}])) == "OK"
+
+
+def test_cancelled_waiters_never_let_a_later_caller_overlap_the_active_request():
+    """Holder active; waiter 1 cancels, caller C queues, waiter 2 cancels: C must still wait for the holder."""
+    state = {"active": 0, "peak": 0}
+
+    class Tracks(FakeChat):
+        hold: asyncio.Event
+
+        async def _create(self, **request):
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+            try:
+                if request["messages"][0]["content"] == "holder":
+                    await self.hold.wait()
+                return reply("ok")
+            finally:
+                state["active"] -= 1
+
+    chat = Tracks()
+    llm = LLMClient(settings(LLM_BASE_URL="http://abandon.test/v1"), chat_client=chat, embed_client=FakeEmbeddings())
+
+    def ask(text):
+        return asyncio.create_task(llm.chat([{"role": "user", "content": text}]))
+
+    async def scenario():
+        chat.hold = asyncio.Event()
+        holder = ask("holder")
+        await asyncio.sleep(0.01)
+        w1 = ask("w1")
+        await asyncio.sleep(0.01)
+        w1.cancel()
+        c = ask("c")
+        await asyncio.sleep(0.01)
+        w2 = ask("w2")
+        await asyncio.sleep(0.01)
+        w2.cancel()
+        await asyncio.sleep(0.2)                       # C must not have started while the holder runs
+        started_early = state["peak"] > 1
+        chat.hold.set()
+        await asyncio.gather(holder, c)
+        for t in (w1, w2):
+            with pytest.raises(asyncio.CancelledError):
+                await t
+        return started_early
+
+    assert run(scenario()) is False and state["peak"] == 1

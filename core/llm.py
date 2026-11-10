@@ -28,6 +28,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import ssl
 import threading
@@ -66,8 +67,8 @@ MAX_CAUSE_DEPTH = 10             # exception-chain links searched for the TLS er
 DEFAULT_PORTS = {"http": 80, "https": 443}
 MAX_ERROR_CHARS = 2_000          # validation errors sent back to the model are cut to this length
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})   # busy key, rate limit, server or gateway trouble
-MAX_RETRY_AFTER_S = 30.0         # a server's Retry-After is honoured up to this
-LOCK_POLL_S = 0.05               # how often a waiting request checks the endpoint lock
+MAX_RETRY_DELAY_S = 30.0         # no wait between attempts is longer, whatever Retry-After or the back-off say
+LOCK_POLL_S = 0.05               # how often a waiting request checks whether its turn has come
 # Qwen3's chat template around the content, measured against the endpoint's prompt_tokens (10 Nov 2026: 1, 2
 # and 4 messages gave 12, 17 and 27 tokens over the content, with or without the thinking switch)
 TEMPLATE_BASE_TOKENS, TEMPLATE_TOKENS_PER_MESSAGE = 7, 5
@@ -191,7 +192,7 @@ def _tls_advice(tls: ssl.SSLError, ca_file: Path | None) -> str:
 
 
 def _api_error(err: openai.APIError, model: str, ca_file: Path | None = None) -> FinSightError:
-    """The openai client has already retried what is retryable (network, 429, 5xx); report what is left.
+    """The error left after the retries (LLMClient._send for chat; the openai client for embeddings).
     `ca_file` is the CA the failing client verified against (None = default trust store)."""
     if isinstance(err, openai.APIConnectionError):          # includes timeouts
         tls = _tls_failure(err)
@@ -220,21 +221,76 @@ class Reply:
 
 
 class _Endpoint:
-    """Per endpoint URL: the lock that keeps one request active and the time the last one started. A threading
-    lock (polled, never blocking the event loop), so it holds across threads and event loops in one process."""
+    """One request at a time per endpoint, first come first served: each caller takes a ticket and waits until
+    it is served (polled, so the event loop never blocks; the state sits behind a threading lock, so the order
+    holds across threads and event loops in one process). A plain lock would let a caller making back-to-back
+    calls take it again before the others' next poll, starving them into timeouts. A caller cancelled while
+    waiting gives up its ticket, so the queue never stalls."""
 
     def __init__(self) -> None:
-        self.lock = threading.Lock()
+        self._guard = threading.Lock()
+        self._next = self._serving = 0
+        self._abandoned: set[int] = set()
         self.last_start = float("-inf")
 
+    def take_ticket(self) -> int:
+        with self._guard:
+            self._next += 1
+            return self._next - 1
 
-_ENDPOINTS: dict[str, _Endpoint] = {}
+    def is_turn(self, ticket: int) -> bool:
+        with self._guard:
+            return self._serving == ticket
+
+    def done(self, ticket: int) -> None:
+        """Finish a turn (served) or give up a ticket still waiting (cancelled)."""
+        with self._guard:
+            if ticket != self._serving:
+                self._abandoned.add(ticket)
+                return
+            self._serving += 1
+            while self._serving in self._abandoned:
+                self._abandoned.remove(self._serving)
+                self._serving += 1
+
+    async def turn(self) -> int:
+        ticket = self.take_ticket()
+        try:
+            while not self.is_turn(ticket):
+                await asyncio.sleep(LOCK_POLL_S)
+        except BaseException:                       # cancelled (or interrupted) while waiting
+            self.done(ticket)
+            raise
+        return ticket
+
+
+_ENDPOINTS: dict[tuple[str, str, int | None], _Endpoint] = {}
 _ENDPOINTS_GUARD = threading.Lock()
+# The Qwen tokenizer for the prompt-size check, loaded once per process: None = not tried yet, False = failed
+_TOKEN_COUNTER: TokenCounter | bool | None = None
+_TOKEN_COUNTER_GUARD = threading.Lock()
 
 
 def _endpoint(url: str) -> _Endpoint:
+    """The endpoint state for the server behind `url` (scheme, host, port; case and default port normalised)."""
     with _ENDPOINTS_GUARD:
-        return _ENDPOINTS.setdefault(url.rstrip("/"), _Endpoint())
+        return _ENDPOINTS.setdefault(_origin(url), _Endpoint())
+
+
+def _load_token_counter() -> TokenCounter | None:
+    """core.tokens.count_tokens once it has loaded, or None (remembered: an offline process does not retry a
+    download on every client)."""
+    global _TOKEN_COUNTER
+    with _TOKEN_COUNTER_GUARD:
+        if _TOKEN_COUNTER is None:
+            try:
+                from core.tokens import count_tokens
+                count_tokens("warm-up")
+                _TOKEN_COUNTER = count_tokens
+            except (ImportError, FinSightError) as err:      # first run offline, or tokenizers not installed
+                logger.warning("prompt-size check off (Qwen tokenizer unavailable): %s", err)
+                _TOKEN_COUNTER = False
+        return _TOKEN_COUNTER or None
 
 
 def count_prompt_tokens(messages: list[Message], count: TokenCounter) -> int:
@@ -285,8 +341,7 @@ class LLMClient(AbstractLLMClient):
         self.settings = settings
         self.usage = Usage()
         self._endpoint = _endpoint(settings.LLM_BASE_URL)
-        self._count: TokenCounter | None = token_counter
-        self._budget_checked = token_counter is not None      # False: load the Qwen tokenizer on first use
+        self._count: TokenCounter | None = token_counter        # None: the process-wide Qwen tokenizer
         needs_client = chat_client is None or embed_client is None
         ssl_context = build_ssl_context(settings.LLM_CA_CERT) if settings.LLM_CA_CERT and needs_client else None
         self.client = chat_client or AsyncOpenAI(
@@ -343,19 +398,11 @@ class LLMClient(AbstractLLMClient):
         start = time.perf_counter()
         path = self._cache_path(request, sample)
         entry = self._read_cache(path) if path else None
-        cached = entry is not None
-        retries = 0
+        cached, retries = entry is not None, 0
         if entry is None:
-            self._check_budget(messages)
-            response, retries = await self._send(request, target_model)
-            choice = response.choices[0] if response.choices else None
-            entry = {"content": choice.message.content if choice else None,
-                     "finish_reason": getattr(choice, "finish_reason", None),
-                     "prompt_tokens": (response.usage.prompt_tokens or 0) if response.usage else 0,
-                     "completion_tokens": (response.usage.completion_tokens or 0) if response.usage else 0}
-            if path:
-                self._write_cache(path, entry)          # before the checks below: a re-run replays them exactly
-        else:
+            await self._check_budget(messages)
+            entry, cached, retries = await self._fetch(request, target_model, path)
+        if cached:
             self.usage.cache_hits += 1
         self.usage.prompt_tokens += entry["prompt_tokens"]
         self.usage.completion_tokens += entry["completion_tokens"]
@@ -371,53 +418,66 @@ class LLMClient(AbstractLLMClient):
         return Reply(answer, raw, entry["prompt_tokens"], entry["completion_tokens"], cached, retries,
                      time.perf_counter() - start)
 
-    async def _send(self, request: dict[str, Any], target_model: str) -> tuple[Any, int]:
-        """The request through the endpoint lock, spaced and retried; returns (response, retries)."""
-        endpoint, retries, start = self._endpoint, 0, time.perf_counter()
-        while not endpoint.lock.acquire(blocking=False):    # polling: cancellable, never blocks the event loop
-            await asyncio.sleep(LOCK_POLL_S)
+    async def _fetch(self, request: dict[str, Any], target_model: str,
+                     path: Path | None) -> tuple[dict[str, Any], bool, int]:
+        """The reply entry in this endpoint's turn: from the cache if an identical request finished while this
+        one waited, else from the endpoint (then cached). Returns (entry, cached, retries)."""
+        endpoint, start = self._endpoint, time.perf_counter()
+        ticket = await endpoint.turn()
         try:
-            while True:
-                wait = endpoint.last_start + self.settings.LLM_MIN_INTERVAL_S - time.monotonic()
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                endpoint.last_start = time.monotonic()
-                self.usage.calls += 1
-                try:
-                    return await self.client.chat.completions.create(**request), retries
-                except openai.APIError as err:
-                    if retries >= self.settings.LLM_HTTP_RETRIES or not _retryable(err):
-                        raise _api_error(err, target_model, self.settings.LLM_CA_CERT) from err
-                    delay = self.settings.LLM_RETRY_BASE_S * 2 ** retries
-                    after = _retry_after(err)
-                    if after is not None:
-                        delay = max(delay, min(after, MAX_RETRY_AFTER_S))
-                    retries += 1
-                    self.usage.http_retries += 1
-                    logger.warning("LLM request to %s failed (%s); retry %d/%d in %.0f s", target_model,
-                                   type(err).__name__, retries, self.settings.LLM_HTTP_RETRIES, delay)
-                    await asyncio.sleep(delay)
+            entry = self._read_cache(path) if path else None
+            if entry is not None:
+                return entry, True, 0
+            response, retries = await self._send(request, target_model)
+            choice = response.choices[0] if response.choices else None
+            entry = {"content": choice.message.content if choice else None,
+                     "finish_reason": getattr(choice, "finish_reason", None),
+                     "prompt_tokens": (response.usage.prompt_tokens or 0) if response.usage else 0,
+                     "completion_tokens": (response.usage.completion_tokens or 0) if response.usage else 0}
+            # Cached before the checks in complete(), so a re-run replays them exactly; an empty reply is not
+            # cached (likely a one-off glitch, and a cached one would be replayed until the folder is deleted)
+            if path and strip_thinking(entry["content"] or ""):
+                self._write_cache(path, entry)
+            return entry, False, retries
         finally:
-            endpoint.lock.release()
+            endpoint.done(ticket)
             self.usage.seconds += time.perf_counter() - start
 
-    def _check_budget(self, messages: list[Message]) -> None:
-        """Refuse a request whose prompt + max_tokens cannot fit the context (the endpoint would answer 400)."""
+    async def _send(self, request: dict[str, Any], target_model: str) -> tuple[Any, int]:
+        """The request, spaced from the previous start and retried; call it only during the endpoint's turn.
+        Returns (response, retries)."""
+        endpoint, retries = self._endpoint, 0
+        while True:
+            wait = endpoint.last_start + self.settings.LLM_MIN_INTERVAL_S - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            endpoint.last_start = time.monotonic()
+            self.usage.calls += 1
+            try:
+                return await self.client.chat.completions.create(**request), retries
+            except openai.APIError as err:
+                if retries >= self.settings.LLM_HTTP_RETRIES or not _retryable(err):
+                    raise _api_error(err, target_model, self.settings.LLM_CA_CERT) from err
+                delay = self.settings.LLM_RETRY_BASE_S * 2 ** retries
+                after = _retry_after(err)
+                delay = min(max(delay, after or 0.0), MAX_RETRY_DELAY_S)
+                retries += 1
+                self.usage.http_retries += 1
+                logger.warning("LLM request to %s failed (%s); retry %d/%d in %.0f s", target_model,
+                               type(err).__name__, retries, self.settings.LLM_HTTP_RETRIES, delay)
+                await asyncio.sleep(delay)
+
+    async def _check_budget(self, messages: list[Message]) -> None:
+        """Refuse a request whose prompt + max_tokens cannot fit the context (the endpoint would answer 400). The
+        tokenizer loads in a worker thread, so a first-run download never freezes the event loop."""
         limit = self.settings.LLM_CONTEXT_TOKENS
         if limit is None:
             return
-        if not self._budget_checked:
-            self._budget_checked = True
-            try:
-                from core.tokens import count_tokens
-                count_tokens("warm-up")
-                self._count = count_tokens
-            except (ImportError, FinSightError) as err:     # first run offline: no tokenizer yet
-                logger.warning("prompt-size check off (Qwen tokenizer unavailable): %s", err)
-        if self._count is None:
+        count = self._count or await asyncio.to_thread(_load_token_counter)
+        if count is None:
             return
         cap = self.settings.LLM_MAX_COMPLETION_TOKENS
-        tokens = count_prompt_tokens(messages, self._count)
+        tokens = count_prompt_tokens(messages, count)
         if tokens + cap > limit:
             raise FinSightError(f"prompt is {tokens} tokens; with max_tokens {cap} it exceeds the {limit}-token "
                                 f"context (LLM_CONTEXT_TOKENS)", error_type="PromptTooLongError")
@@ -425,10 +485,12 @@ class LLMClient(AbstractLLMClient):
     def _cache_path(self, request: dict[str, Any], sample: int) -> Path | None:
         if self.settings.LLM_CACHE_DIR is None:
             return None
-        key = {"v": CACHE_VERSION, "model": request["model"], "messages": request["messages"],
-               "temperature": request["temperature"], "max_tokens": request["max_tokens"],
-               "thinking": self.settings.LLM_ENABLE_THINKING, "sample": sample}
-        digest = hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        # The server is part of the key: another provider serving a model of the same name is another model
+        key = {"v": CACHE_VERSION, "server": list(_origin(self.settings.LLM_BASE_URL)), "model": request["model"],
+               "messages": request["messages"], "temperature": request["temperature"],
+               "max_tokens": request["max_tokens"], "thinking": self.settings.LLM_ENABLE_THINKING, "sample": sample}
+        # ensure_ascii: any text, even a lone surrogate, gives a key
+        digest = hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         return self.settings.LLM_CACHE_DIR / digest[:2] / f"{digest}.json"
 
     @staticmethod
@@ -441,14 +503,15 @@ class LLMClient(AbstractLLMClient):
         except (OSError, ValueError) as err:
             logger.warning("ignoring unreadable cache entry %s: %s", path.name, err)
             return None
-        fields_ok = isinstance(entry, dict) and {"content", "finish_reason", "prompt_tokens",
-                                                 "completion_tokens"} <= set(entry)
-        return entry if fields_ok else None
+        types = {"content": (str, type(None)), "finish_reason": (str, type(None)), "prompt_tokens": int,
+                 "completion_tokens": int}
+        ok = isinstance(entry, dict) and all(isinstance(entry.get(k, ...), t) for k, t in types.items())
+        return entry if ok else None
 
     @staticmethod
     def _write_cache(path: Path, entry: dict[str, Any]) -> None:
         """Atomic: a crash never leaves half an entry; a write failure only costs the cache, never the reply."""
-        tmp = path.with_name(f"{path.name}.{threading.get_ident()}.part")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")   # unique per writer
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
