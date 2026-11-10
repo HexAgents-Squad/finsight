@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 
 import openai
 from openai import AsyncOpenAI
@@ -51,6 +52,7 @@ THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
 THINK_OPEN = re.compile(r"<think>", re.IGNORECASE)
 FINISH_LENGTH = "length"          # finish_reason when a reply stopped at max_tokens
 MAX_CAUSE_DEPTH = 10             # exception-chain links searched for the TLS error behind a connection error
+DEFAULT_PORTS = {"http": 80, "https": 443}
 MAX_ERROR_CHARS = 2_000          # validation errors sent back to the model are cut to this length
 
 
@@ -105,8 +107,7 @@ def extract_json(reply: str) -> str:
     break it). Reasoning blocks are removed first (strip_thinking), so a draft object inside <think> is never
     picked. If nothing decodes, the stripped reply is returned so validation reports the real error."""
     reply = strip_thinking(reply)
-    text = reply
-    for candidate in [text, *(m.group(1).strip() for m in CODE_FENCE.finditer(reply))]:
+    for candidate in [reply, *(m.group(1).strip() for m in CODE_FENCE.finditer(reply))]:
         if _is_object(candidate):
             return candidate
     decoder = json.JSONDecoder()
@@ -117,7 +118,7 @@ def extract_json(reply: str) -> str:
             continue
         if isinstance(obj, dict):
             return reply[start.start():end]
-    return text
+    return reply
 
 
 def build_ssl_context(ca_file: Path) -> ssl.SSLContext:
@@ -132,9 +133,17 @@ def build_ssl_context(ca_file: Path) -> ssl.SSLContext:
 
 
 def _http_client(ssl_context: ssl.SSLContext | None) -> Any:
-    """None keeps the openai client's own HTTP client (system CAs); otherwise the openai default client
-    (same timeouts, limits and redirects) verifying against the given context."""
+    """None keeps the openai client's own HTTP client (the HTTP library's default trust store: the OS store or
+    certifi, depending on the openai/httpx version); otherwise the openai default client (same limits and
+    redirects; timeout and retries still come from AsyncOpenAI) verifying against the given context."""
     return None if ssl_context is None else openai.DefaultAsyncHttpxClient(verify=ssl_context)
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """(scheme, host, port) with case and default ports normalised: the unit a CA certificate vouches for,
+    so `https://H.test/v1` and `https://h.test:443/v1/` are the same server."""
+    parts = urlsplit(url.strip())                    # urlsplit lower-cases the scheme; hostname is lower-cased too
+    return parts.scheme, parts.hostname or "", parts.port or DEFAULT_PORTS.get(parts.scheme)
 
 
 def _tls_failure(err: BaseException) -> ssl.SSLError | None:
@@ -149,15 +158,26 @@ def _tls_failure(err: BaseException) -> ssl.SSLError | None:
     return None
 
 
-def _api_error(err: openai.APIError, model: str) -> FinSightError:
-    """The openai client has already retried what is retryable (network, 429, 5xx); report what is left."""
+def _tls_advice(tls: ssl.SSLError, ca_file: Path | None) -> str:
+    """What to fix for a failed handshake. Only a certificate that did not verify is a CA question; any other
+    TLS error (e.g. WRONG_VERSION_NUMBER) means the server did not answer with TLS at all."""
+    if not isinstance(tls, ssl.SSLCertVerificationError):
+        return "the server did not complete a TLS handshake: check http:// vs https:// and the port in the URL"
+    if ca_file is None:
+        return "the certificate is not trusted: set LLM_CA_CERT to your group's CA file (LOCAL_SETUP.md)"
+    return (f"the certificate does not verify against {ca_file.name}: check LLM_CA_CERT is your group's CA file "
+            f"and the URL is your group's (LOCAL_SETUP.md)")
+
+
+def _api_error(err: openai.APIError, model: str, ca_file: Path | None = None) -> FinSightError:
+    """The openai client has already retried what is retryable (network, 429, 5xx); report what is left.
+    `ca_file` is the CA the failing client verified against (None = default trust store)."""
     if isinstance(err, openai.APIConnectionError):          # includes timeouts
         tls = _tls_failure(err)
         if tls is not None:
-            # A wrong or missing certificate looks like a network error to openai; name the actual fix
-            logger.error("TLS handshake with the endpoint for %s failed: %s", model, tls)
-            return FinSightError(f"TLS verification failed for {model}: {tls}. Check that LLM_CA_CERT points at "
-                                 f"your group's CA certificate (LOCAL_SETUP.md, Hosted endpoint).",
+            # A TLS failure looks like a network error to openai; name the actual fix instead
+            logger.error("TLS handshake for %s failed: %s", model, tls)
+            return FinSightError(f"TLS handshake for {model} failed ({tls}); {_tls_advice(tls, ca_file)}.",
                                  error_type="TLSError")
         kind = "NetworkError"
     else:
@@ -197,14 +217,16 @@ class LLMClient(AbstractLLMClient):
             max_retries=settings.LLM_HTTP_RETRIES,
             http_client=_http_client(ssl_context),
         )
-        # The group CA vouches for the LLM endpoint only; a separate embeddings host keeps the system CAs
+        # The group CA vouches for the LLM endpoint's server only; an embeddings URL on another server keeps
+        # the default trust store
         embed_url = settings.EMBED_BASE_URL or settings.LLM_BASE_URL
+        self._embed_ca = settings.LLM_CA_CERT if _origin(embed_url) == _origin(settings.LLM_BASE_URL) else None
         self.embed_client = embed_client or AsyncOpenAI(
             base_url=embed_url,
             api_key=(settings.EMBED_API_KEY or settings.LLM_API_KEY).get_secret_value(),
             timeout=settings.LLM_TIMEOUT,
             max_retries=settings.LLM_HTTP_RETRIES,
-            http_client=_http_client(ssl_context if embed_url == settings.LLM_BASE_URL else None),
+            http_client=_http_client(ssl_context if self._embed_ca else None),
         )
         self._st_model: Any = None
         self._st_lock = asyncio.Lock()
@@ -236,7 +258,7 @@ class LLMClient(AbstractLLMClient):
         try:
             response = await self.client.chat.completions.create(**request)
         except openai.APIError as err:
-            raise _api_error(err, target_model) from err
+            raise _api_error(err, target_model, self.settings.LLM_CA_CERT) from err
         finally:
             self.usage.calls += 1
             self.usage.seconds += time.perf_counter() - start
@@ -304,7 +326,7 @@ class LLMClient(AbstractLLMClient):
                     model=self.settings.EMBED_MODEL, input=texts[i:i + size]
                 )
             except openai.APIError as err:
-                raise _api_error(err, self.settings.EMBED_MODEL) from err
+                raise _api_error(err, self.settings.EMBED_MODEL, self._embed_ca) from err
             batch = texts[i:i + size]
             if len(response.data) != len(batch):        # a short reply would misalign every later vector
                 raise FinSightError(f"{self.settings.EMBED_MODEL} returned {len(response.data)} embeddings for "

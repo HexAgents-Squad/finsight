@@ -48,10 +48,11 @@ class Settings(SecSettings):
     LLM_JSON_RETRIES: int = Field(2, ge=0, description="chat_json re-prompts after invalid output")
     # Caps one reply, so a runaway generation from a small model cannot use the whole per-query token budget
     LLM_MAX_COMPLETION_TOKENS: int = Field(1024, gt=0, description="max_tokens sent with every chat request")
-    # The hosted endpoint's certificate is issued by the group's own CA (a Caddy local root), which no system
+    # The hosted endpoint's certificate is issued by the group's own CA (a Caddy local root), which no default
     # trust store has. HTTPS is verified against this file instead; it is never switched off. Trust the CA
     # file, never the server's own certificate: the server certificate is renewed every few hours.
-    LLM_CA_CERT: Path | None = Field(None, description="PEM CA certificate for LLM_BASE_URL; empty = system CAs")
+    LLM_CA_CERT: Path | None = Field(None, description="PEM CA certificate for LLM_BASE_URL; empty = the HTTP "
+                                                       "library's default trust store")
     # Qwen3 reasoning mode, sent as chat_template_kwargs.enable_thinking (Ollama ignores the field). Off: the
     # answer comes directly and output tokens go to the answer, not to reasoning. None (empty in .env) = do
     # not send the field, for an endpoint that rejects unknown request fields.

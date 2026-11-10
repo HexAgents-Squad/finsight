@@ -57,7 +57,7 @@ The provided endpoint speaks the same OpenAI-compatible API as Ollama, over HTTP
 your group's own CA, which no system trust store knows. The client verifies the connection against that CA
 file; verification is never switched off.
 
-1. **Put the group's CA certificate in `certs/`** (git-ignored), e.g. `certs/vm05-ca.crt`. Use the file for your
+1. **Put the group's CA certificate in `certs/`** (git-ignored), e.g. `certs/<group>-ca.crt`. Use the file for your
    group from the learner guide. It is the CA's certificate (valid for years); the server's own certificate is
    renewed every few hours and must not be used instead.
 2. **Edit `.env`** with your group's values from the learner guide:
@@ -88,7 +88,8 @@ removed from replies either way. The provided endpoint currently ignores the swi
 
 | Smoke-test failure | Meaning and fix |
 |---|---|
-| `TLSError` | The certificate does not match: check `LLM_CA_CERT` points at your group's CA file |
+| `TLSError` ... `does not verify` / `not trusted` | Check `LLM_CA_CERT` points at your group's CA file and the URL is your group's |
+| `TLSError` ... `did not complete a TLS handshake` | The server is not speaking HTTPS there: check `http://` vs `https://` and the port |
 | `TLSConfigError` | `LLM_CA_CERT` is not a PEM certificate (e.g. the wrong download) |
 | settings error `no certificate file at ...` | The path in `LLM_CA_CERT` is wrong (relative paths start at the repo root) |
 | `AuthenticationError` | TLS works; the key in `LLM_API_KEY` is wrong or missing |

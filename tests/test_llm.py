@@ -370,7 +370,7 @@ def test_a_reply_cut_off_at_the_token_cap_is_an_error():
 
 # --- W1-01: hosted endpoint (CA certificate, thinking switch, <think> stripping, secret key) ----------------
 
-HTTPS_URL = {"LLM_BASE_URL": "https://endpoint.test:1033/v1"}
+HTTPS_URL = {"LLM_BASE_URL": "https://endpoint.test:8443/v1"}
 
 
 def ca_bundle() -> str:
@@ -436,14 +436,31 @@ def test_clients_verify_against_the_ca_file(monkeypatch):
         return real(verify=verify)
 
     monkeypatch.setattr(core.llm.openai, "DefaultAsyncHttpxClient", recording)
+    built = []
+    real_openai = core.llm.AsyncOpenAI
+
+    def recording_openai(**kwargs):
+        built.append(kwargs.get("http_client"))
+        return real_openai(**kwargs)
+
+    monkeypatch.setattr(core.llm, "AsyncOpenAI", recording_openai)
     llm = LLMClient(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle()))
     assert len(made) == 2 and made[0] is made[1]                       # chat and embeddings share one context
     assert made[0].check_hostname
+    assert built[0] is not None and llm.client._client is built[0]     # the verifying client is the one used
+    # a custom http_client must not drop the SDK settings (openai applies them per request)
+    assert (llm.client.timeout, llm.client.max_retries) == (30.0, 2)
     run(llm.aclose())
+    assert built[0].is_closed                                           # closing the SDK client closes ours
 
-    made.clear()                                                        # a separate embeddings host keeps system CAs
+    made.clear()                                                        # another server keeps the default store
     llm = LLMClient(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), EMBED_BASE_URL="https://embed.test/v1"))
     assert len(made) == 1
+    run(llm.aclose())
+
+    made.clear()                                                        # same server, other spelling: same CA
+    llm = LLMClient(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), EMBED_BASE_URL="HTTPS://Endpoint.test:8443/v1/"))
+    assert len(made) == 2
     run(llm.aclose())
 
     made.clear()                                                        # no certificate: openai's own client
@@ -451,7 +468,7 @@ def test_clients_verify_against_the_ca_file(monkeypatch):
     assert made == []
 
 
-def test_a_failed_tls_handshake_is_reported_as_a_certificate_problem():
+def test_an_untrusted_certificate_without_a_ca_asks_for_llm_ca_cert():
     request = httpx.Request("POST", "https://endpoint.test/v1/chat/completions")
     error = openai.APIConnectionError(request=request)
     transport = httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED]", request=request)
@@ -519,7 +536,7 @@ def smoke_script():
 
 
 @pytest.mark.parametrize("url, shown", [
-    ("https://203.0.113.7:1033/v1", "https://<endpoint>:1033/v1"),         # the group's address stays private
+    ("https://203.0.113.7:8443/v1", "https://<endpoint>:8443/v1"),         # the group's address stays private
     ("https://endpoint.example.org/v1", "https://<endpoint>/v1"),
     ("http://localhost:11434/v1", "http://localhost:11434/v1"),
     ("http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1"),
@@ -531,5 +548,93 @@ def test_smoke_output_hides_a_remote_host(url, shown):
 def test_smoke_output_names_how_tls_is_verified():
     smoke = smoke_script()
     assert smoke.tls_line(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle())).startswith("verified against cacert.pem")
-    assert smoke.tls_line(settings(**HTTPS_URL)) == "verified against the system CAs"
+    assert smoke.tls_line(settings(**HTTPS_URL)) == "verified against the HTTP library's default trust store"
     assert smoke.tls_line(settings()).startswith("none (plain HTTP")
+
+
+def tls_error(cause: ssl.SSLError) -> openai.APIConnectionError:
+    request = httpx.Request("POST", "https://endpoint.test/v1/chat/completions")
+    error = openai.APIConnectionError(request=request)
+    error.__cause__ = httpx.ConnectError(str(cause), request=request)
+    error.__cause__.__cause__ = cause
+    return error
+
+
+def test_a_certificate_that_fails_against_the_configured_ca_names_that_file():
+    llm = client(tls_error(ssl.SSLCertVerificationError("certificate verify failed")),
+                 **HTTPS_URL, LLM_CA_CERT=ca_bundle())
+    with pytest.raises(FinSightError) as err:
+        run(llm.chat(USER))
+    assert err.value.error_type == "TLSError" and "does not verify against cacert.pem" in err.value.message
+
+
+def test_a_non_certificate_tls_error_points_at_the_url_not_the_ca():
+    llm = client(tls_error(ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number")),
+                 **HTTPS_URL, LLM_CA_CERT=ca_bundle())
+    with pytest.raises(FinSightError) as err:
+        run(llm.chat(USER))
+    assert err.value.error_type == "TLSError"
+    assert "http:// vs https://" in err.value.message and "LLM_CA_CERT" not in err.value.message
+
+
+def test_https_to_a_server_that_does_not_speak_tls_is_a_typed_error():
+    """Real sockets, no network: openai -> httpx -> httpcore -> ssl must still chain to the ssl error (the
+    hand-built chains above would not notice if the SDK stopped chaining)."""
+    import socket
+    import threading
+    server = socket.create_server(("127.0.0.1", 0))
+    port = server.getsockname()[1]
+
+    def answer_in_plain_text():
+        conn, _ = server.accept()
+        with conn:
+            conn.recv(1024)
+            conn.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+
+    thread = threading.Thread(target=answer_in_plain_text, daemon=True)
+    thread.start()
+    llm = LLMClient(settings(LLM_BASE_URL=f"https://127.0.0.1:{port}/v1", LLM_HTTP_RETRIES=0, LLM_TIMEOUT=5))
+
+    async def call():
+        async with llm:
+            return await llm.chat(USER)
+
+    try:
+        with pytest.raises(FinSightError) as err:
+            run(call())
+    finally:
+        server.close()
+        thread.join(timeout=5)
+    assert err.value.error_type == "TLSError" and "did not complete a TLS handshake" in err.value.message
+
+
+def test_smoke_output_hides_the_host_in_error_and_log_lines():
+    import logging
+    smoke = smoke_script()
+    url = "https://203.0.113.7:8443/v1"
+    message = "Hostname mismatch, certificate is not valid for '203.0.113.7'"
+    assert smoke.redact(message, url) == "Hostname mismatch, certificate is not valid for '<endpoint>'"
+    assert smoke.redact("connection refused by localhost", "http://localhost:11434/v1") == \
+        "connection refused by localhost"
+    record = logging.LogRecord("finsight.llm", logging.ERROR, __file__, 1, "TLS for %s: %s", ("m", message), None)
+    smoke.RedactHost(url).filter(record)
+    assert record.getMessage() == "TLS for m: Hostname mismatch, certificate is not valid for '<endpoint>'"
+
+
+def test_importing_the_smoke_script_configures_no_logging():
+    import logging
+    root = logging.getLogger()
+    before = list(root.handlers)
+    smoke_script()
+    assert root.handlers == before
+
+
+@pytest.mark.parametrize("a, b, same", [
+    ("https://h.test/v1", "HTTPS://H.TEST:443/v1/", True),                # case, explicit default port, slash
+    ("http://h.test/v1", "http://h.test:80/other", True),
+    ("https://h.test/v1", "https://h.test:8443/v1", False),              # another port is another server
+    ("https://h.test/v1", "http://h.test/v1", False),
+    ("https://h.test/v1", "https://embed.test/v1", False),
+])
+def test_same_server_comparison_for_the_ca(a, b, same):
+    assert (core.llm._origin(a) == core.llm._origin(b)) is same
