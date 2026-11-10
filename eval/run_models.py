@@ -4,7 +4,8 @@ Usage (the endpoint from .env; one run at a time on the team key):
     python eval/run_models.py --run M1 --label qwen3-8b --context rag
     python eval/run_models.py --run M3 --label qwen3-8b --context closed
     python eval/run_models.py --run M2 --label llama3.2-3b --context rag \\
-        --base-url http://localhost:11434/v1 --model llama3.2-3b-8k --api-key ollama --timeout 300   # local, in parallel
+        --base-url http://localhost:11434/v1 --model llama3.2-3b-8k --api-key ollama \\
+        --timeout 300 --context-window 8192                                  # local, in parallel
     python eval/run_models.py --run M1 --label qwen3-8b --context rag --ids A01 RF01 --out-dir /tmp/check
 
 Every model sees exactly the same inputs: the question, the earlier turns of a follow-up with their gold answers,
@@ -61,7 +62,10 @@ MAX_ERROR_CHARS = 800
 # Llama's tokenizer counts ~12% fewer tokens than Qwen's (4,119 vs 4,703 on the same prompt), so 0.7 separates.
 TRUNCATION_RATIO = 0.7
 # A server that reports exactly its window size (Ollama kept 2,050 of a longer prompt with a 2,048 window) cut the
-# prompt even when the ratio above cannot tell (a 4,096 window keeps 87% of a 4,703-token prompt in Llama tokens)
+# prompt even when the ratio above cannot tell (a 4,096 window keeps 87% of a 4,703-token prompt in Llama tokens).
+# These are only a guess at the server's window: a run that states its window (--context-window, e.g. 8192 for the
+# Ollama 8k model) is checked at that size instead, since a complete prompt can land near 4,096 by chance (M2 C09:
+# 4,105 Llama tokens of ~4,599 Qwen, ratio 0.89, flagged before the window was stated).
 COMMON_WINDOWS = (2048, 4096)
 WINDOW_SLACK = 16
 # The one repair applied after the JSON retry also failed: a number written with thousands separators in "value"
@@ -111,17 +115,18 @@ class FatalRunError(Exception):
     """An endpoint error that every remaining question would hit (bad key, unknown model, TLS)."""
 
 
-def truncated(prompt_tokens: int, expected_tokens: int | None) -> bool:
-    """The server saw less than the prompt: too few tokens, or exactly a common window size. 0 means the server
-    sent no token count, which is unknown, not truncated."""
+def truncated(prompt_tokens: int, expected_tokens: int | None,
+              windows: tuple[int, ...] = COMMON_WINDOWS) -> bool:
+    """The server saw less than the prompt: too few tokens, or exactly a window size in `windows` (the server's
+    stated window, else COMMON_WINDOWS). 0 means the server sent no token count, which is unknown, not truncated."""
     if not expected_tokens or prompt_tokens <= 0:
         return False
-    at_window = any(expected_tokens > w and abs(prompt_tokens - w) <= WINDOW_SLACK for w in COMMON_WINDOWS)
+    at_window = any(expected_tokens > w and abs(prompt_tokens - w) <= WINDOW_SLACK for w in windows)
     return prompt_tokens < TRUNCATION_RATIO * expected_tokens or at_window
 
 
 async def answer(llm: LLMClient, run_id: str, record: dict, messages: list[dict[str, str]],
-                 expected_tokens: int | None = None) -> RunRecord:
+                 expected_tokens: int | None = None, windows: tuple[int, ...] = COMMON_WINDOWS) -> RunRecord:
     """One question: the reply, re-asked once if it is not valid B0 JSON. Tokens and seconds add up over the
     attempts; `cached` is true only when every attempt came from the cache. With `expected_tokens` (the prompt's
     Qwen count), a reply whose server saw less than the prompt is recorded as ContextTruncated, not scored. If no
@@ -146,7 +151,7 @@ async def answer(llm: LLMClient, run_id: str, record: dict, messages: list[dict[
         cached = cached and reply.cached
         raw = reply.raw
         texts.append(reply.text)
-        if attempt == 0 and truncated(reply.prompt_tokens, expected_tokens):
+        if attempt == 0 and truncated(reply.prompt_tokens, expected_tokens, windows):
             error = (f"ContextTruncated: the server saw {reply.prompt_tokens} prompt tokens of ~{expected_tokens} "
                      f"(raise its context window, e.g. Ollama num_ctx)")
             texts.clear()                           # a reply to a cut prompt is never scored
@@ -200,7 +205,8 @@ def framing_sha256() -> str:
 
 
 def run_meta(run_id: str, settings: Settings, context: str, pack_dir: Path, system: str,
-             truncation_check: bool = False, started: str | None = None) -> RunMeta:
+             truncation_check: bool = False, started: str | None = None,
+             context_window: int | None = None) -> RunMeta:
     return RunMeta(run_id=run_id, model=settings.LLM_MODEL,
                    endpoint="hosted" if settings.LLM_BASE_URL.lower().startswith(HTTPS) else "local",
                    context=context, thinking=bool(settings.LLM_ENABLE_THINKING), temperature=TEMPERATURE,
@@ -209,7 +215,8 @@ def run_meta(run_id: str, settings: Settings, context: str, pack_dir: Path, syst
                    context_pack_sha256={n: sha256(pack_dir / n) for n in (GOLD_PACK, REFUSAL_PACK)},
                    prompt_sha256=hashlib.sha256(system.encode("utf-8")).hexdigest(),
                    framing_sha256=framing_sha256(), json_retries=JSON_RETRIES, repair=REPAIR_VERSION,
-                   truncation_check=truncation_check, git_commit=git_commit(), started=started,
+                   truncation_check=truncation_check, context_window=context_window,
+                   git_commit=git_commit(), started=started,
                    finished=datetime.now(UTC).isoformat(timespec="seconds"))
 
 
@@ -260,12 +267,13 @@ def qwen_counter() -> TokenCounter | None:
 
 
 async def run(llm: LLMClient, run_id: str, records: list[dict], context: str, system: str,
-              count: TokenCounter | None = None, progress: bool = True) -> list[RunRecord]:
+              count: TokenCounter | None = None, progress: bool = True,
+              windows: tuple[int, ...] = COMMON_WINDOWS) -> list[RunRecord]:
     out = []
     for n, record in enumerate(records, start=1):
         messages = build_messages(record, context, system)
         expected = count_prompt_tokens(messages, count) if count else None
-        result = await answer(llm, run_id, record, messages, expected)
+        result = await answer(llm, run_id, record, messages, expected, windows)
         out.append(result)
         if progress:
             status = result.error or ("ok" if result.json_valid else "invalid JSON")
@@ -284,6 +292,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model", help="model name on that server")
     ap.add_argument("--api-key", help="key for that server (Ollama accepts any, e.g. 'ollama')")
     ap.add_argument("--timeout", type=float, help="seconds per request (a CPU model needs ~300; .env default 30)")
+    ap.add_argument("--context-window", type=int,
+                    help="the server's context window in its own tokens (e.g. 8192 for llama3.2-3b-8k); "
+                         "the truncation check then looks for a cut at that size instead of 2,048 / 4,096")
     ap.add_argument("--ids", nargs="+", help="only these question ids (a check run; use --out-dir)")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
     ap.add_argument("--out-dir", type=Path, default=RUNS_DIR)
@@ -299,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
             records = [r for r in records if r["id"] in set(args.ids)]
             if args.out_dir.resolve() == RUNS_DIR.resolve():
                 raise ValueError("a run limited by --ids must not overwrite the full runs file: pass --out-dir")
+        if args.context_window is not None and args.context_window <= 0:
+            raise ValueError("--context-window must be a positive number of tokens")
         settings = settings_for(args)
         meta = run_meta(run_id, settings, args.context, args.pack_dir, system)
     except ValidationError as err:
@@ -313,10 +326,11 @@ def main(argv: list[str] | None = None) -> int:
 
     started = datetime.now(UTC).isoformat(timespec="seconds")
     count = qwen_counter()
+    windows = (args.context_window,) if args.context_window else COMMON_WINDOWS
 
     async def go() -> list[RunRecord]:
         async with LLMClient(settings) as llm:
-            results = await run(llm, run_id, records, args.context, system, count)
+            results = await run(llm, run_id, records, args.context, system, count, windows=windows)
             u = llm.usage
             print(f"{run_id}: {len(results)} answers, {sum(r.json_valid for r in results)} valid, "
                   f"{sum(r.error is not None for r in results)} errors; {u.calls} requests, {u.cache_hits} cached, "
@@ -331,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
     if all(r.error is not None for r in results):
         print("ERROR: every answer failed; nothing written (the previous runs file, if any, is kept)", file=sys.stderr)
         return 2
-    meta = run_meta(run_id, settings, args.context, args.pack_dir, system, count is not None, started)
+    meta = run_meta(run_id, settings, args.context, args.pack_dir, system, count is not None, started,
+                    args.context_window)
     print(f"written: {write_run(results, meta, args.out_dir)}")
     return 0
 

@@ -197,7 +197,7 @@ as the git commit are allowed). The runner writes records and meta with eval.run
 the scorer reads them with the same models (strict: a B0 reply with an extra field, or "2024" as a string year,
 is invalid JSON for B0, i.e. parsed null; the one exception is the thousands-separator repair in §2.4, which sets
 parsed with json_valid false). The meta also records the prompt and framing sha256, the repair version, whether
-the truncation check was on, the git commit and start/finish times; cached replies replay the original request's
+the truncation check was on (and the server's stated context window), the git commit and start/finish times; cached replies replay the original request's
 latency, so a re-run reproduces the records (only "cached" changes: measured on M1, 0 requests). Runs files are committed so every reported number traces back to them.
 
 2.6 Answer types and scoring (W1-08, implemented: python eval/score_answers.py)

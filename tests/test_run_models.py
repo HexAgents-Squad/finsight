@@ -235,6 +235,21 @@ def test_truncation_detection(seen, expected, cut):
     assert rm.truncated(seen, expected) is cut
 
 
+def test_a_stated_window_replaces_the_common_ones():
+    # M2 C09 (measured): a complete prompt that landed near 4,096 by chance on the 8k model
+    assert rm.truncated(4105, 4599) is True
+    assert rm.truncated(4105, 4599, (8192,)) is False
+    assert rm.truncated(8195, 9800, (8192,)) is True         # cut at the stated window
+    assert rm.truncated(3000, 9800, (8192,)) is True         # the ratio still applies
+
+
+def test_a_window_must_be_positive(monkeypatch, tmp_path, capsys):
+    cli_env(monkeypatch, tmp_path)
+    assert rm.main(["--run", "M2", "--label", "llama3.2-3b", "--context", "rag", "--context-window", "0",
+                    "--out-dir", str(tmp_path / "o")]) == 1
+    assert "--context-window must be a positive" in capsys.readouterr().err
+
+
 def test_errors_that_every_question_would_hit_stop_the_run():
     for kind in ("AuthenticationError", "NotFoundError", "TLSError"):
         with pytest.raises(rm.FatalRunError, match=kind):
@@ -246,14 +261,16 @@ def test_run_passes_the_prompts_qwen_count_to_the_truncation_check():
     seen = []
     original = rm.answer
 
-    async def spy(llm, run_id, record, messages, expected_tokens=None):
-        seen.append((record["id"], expected_tokens, rm.count_prompt_tokens(messages, len)))
-        return await original(llm, run_id, record, messages, expected_tokens)
+    async def spy(llm, run_id, record, messages, expected_tokens=None, windows=rm.COMMON_WINDOWS):
+        seen.append((record["id"], expected_tokens, rm.count_prompt_tokens(messages, len), windows))
+        return await original(llm, run_id, record, messages, expected_tokens, windows)
 
     import unittest.mock as mock
     with mock.patch.object(rm, "answer", spy):
         run(rm.run(FakeLLM(VALID), RUN, [RECORDS["A01"]], "rag", "S", count=len, progress=False))
+        run(rm.run(FakeLLM(VALID), RUN, [RECORDS["A01"]], "rag", "S", count=len, progress=False, windows=(8192,)))
     assert seen[0][1] == seen[0][2] > 0
+    assert (seen[0][3], seen[1][3]) == (rm.COMMON_WINDOWS, (8192,))
 
 
 def cli_env(monkeypatch, tmp_path):
@@ -320,6 +337,9 @@ def test_meta_records_how_the_run_was_made():
                        started="2026-11-10T20:51:00+00:00")
     extra = meta.model_extra
     assert (extra["repair"], extra["truncation_check"], extra["json_retries"]) == ("separators-v1", True, 1)
+    assert extra["context_window"] is None
+    assert rm.run_meta(RUN, settings(), "rag", rm.RESULTS_DIR, system, context_window=8192).model_extra[
+        "context_window"] == 8192
     assert extra["framing_sha256"] == rm.framing_sha256() and len(extra["framing_sha256"]) == 64
     assert extra["started"] == "2026-11-10T20:51:00+00:00" and extra["finished"]
     assert extra["git_commit"] is None or len(extra["git_commit"]) == 40
