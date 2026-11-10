@@ -7,4 +7,5 @@ Grades
 
 Judge only the content against the reference. Wording, length and style do not matter. A figure counts as right when it matches the reference after rounding (for example $391.0 billion = $391,035 million). Extra details are fine unless they contradict the reference.
 
-Reply with ONE JSON object and nothing else: {"score": 0, 1 or 2, "reason": "one sentence"}
+Reply with ONE JSON object and nothing else, where "score" is 0, 1 or 2, for example:
+{"score": 1, "reason": "Gives the main cause but misses the second reason the reference names."}

@@ -32,6 +32,7 @@
    `llama3.2:3b` fits a 4 GB GPU or runs (slowly) on CPU. Use `llama3.1:8b` only on a stronger machine.
    For the model comparison (M2) create the 8k-context version once, because Ollama's default window silently
    drops the start of longer prompts: `ollama create llama3.2-3b-8k -f config/ollama/llama3.2-3b-8k.Modelfile`.
+   On a CPU a long prompt takes about a minute, so pass `--timeout 300` to `eval/run_models.py` for local runs.
    Embeddings need no server: `EMBED_BACKEND=sentence-transformers` (the default) runs `all-MiniLM-L6-v2`
    locally, and the first run downloads it from Hugging Face (~90 MB, about 40 s; internet needed once). The
    retrieval index is built with this model, so keep it unless you rebuild the index (ADR-013).

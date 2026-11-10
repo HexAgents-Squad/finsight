@@ -73,7 +73,7 @@ model comparison measures the models, not retrieval; questions that list no comp
 python eval/run_models.py --run M1 --label qwen3-8b --context rag        # hosted endpoint (one run at a time)
 python eval/run_models.py --run M3 --label qwen3-8b --context closed
 python eval/run_models.py --run M2 --label llama3.2-3b --context rag --base-url http://localhost:11434/v1 \
-    --model llama3.2-3b-8k --api-key ollama                                # local Ollama, can run in parallel
+    --model llama3.2-3b-8k --api-key ollama --timeout 300                  # local Ollama (CPU: allow 300 s), in parallel
 python eval/judge_summaries.py     # LLM-as-judge for the summary answers (after the endpoint runs)
 python eval/score_answers.py       # scores, blind grading sheet, model_comparison.md
 ```

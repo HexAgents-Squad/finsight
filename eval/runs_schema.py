@@ -4,7 +4,10 @@
     eval/results/model_runs/<run_id>.jsonl       one RunRecord per question (80 gold + 22 refusal tests)
     eval/results/model_runs/<run_id>.meta.json   one RunMeta
 
-`parsed` is the B0 answer when the reply was valid JSON for B0Answer (after at most one retry), else null.
+`parsed` is the B0 answer when a reply was valid JSON for B0Answer (after at most one retry), with json_valid true.
+One documented repair (eval/run_models.py, REPAIR_VERSION) can parse a reply that stayed invalid only because a
+number in "value" or "fiscal_year" had thousands separators: then `parsed` is set and json_valid is false.
+Otherwise an invalid reply has `parsed` null.
 """
 from __future__ import annotations
 

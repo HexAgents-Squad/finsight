@@ -88,7 +88,8 @@ def test_an_invalid_reply_is_asked_again_once_with_the_error():
     assert r.json_valid and r.retries == 1 and r.prompt_tokens == 200 and r.latency_s == 1.0
     retry = llm.sent[1]
     assert retry[-2] == {"role": "assistant", "content": "not json at all"}
-    assert retry[-1]["content"].startswith("Your reply was not valid JSON in the required format:")
+    _, problem = rm.parse("not json at all")
+    assert retry[-1] == {"role": "user", "content": rm.RETRY_INSTRUCTION.format(error=problem)}
 
 
 def test_two_invalid_replies_leave_no_parsed_answer():
@@ -150,6 +151,7 @@ def args(**kw):
 
 
 def test_a_local_server_needs_no_ca_certificate(monkeypatch):
+    monkeypatch.setattr(rm, "ENV_FILE", None)                           # never the developer's .env
     for k, v in {"LLM_BASE_URL": "https://endpoint.test/v1", "LLM_API_KEY": "team-key", "LLM_MODEL": "Qwen/Qwen3-8B",
                  "SEC_USER_AGENT": "a b@c.d"}.items():
         monkeypatch.setenv(k, v)
@@ -200,3 +202,139 @@ def test_cli_guards(tmp_path, capsys):
     assert rm.main(["--run", "M1", "--label", "qwen3-8b", "--context", "rag", "--ids", "A01"]) == 1
     assert "must not overwrite the full runs file" in capsys.readouterr().err
     assert rm.main(["--run", "m1", "--label", "qwen3-8b", "--context", "rag"]) == 1     # not the run id pattern
+
+
+
+# --- added after the independent review of W1-13 ---------------------------------------------------------------
+
+def test_a_failed_retry_keeps_a_repairable_first_reply():
+    first = VALID.replace("391035", "391,035")
+    err = FinSightError("cut", error_type="TruncatedResponseError")
+    r = run(rm.answer(FakeLLM(first, err), RUN, RECORDS["A01"], [{"role": "user", "content": "q"}]))
+    assert r.error is None and r.parsed.value == 391035 and r.json_valid is False and r.retries == 1
+    prose = run(rm.answer(FakeLLM(first, "Sorry, here is prose."), RUN, RECORDS["A01"],
+                          [{"role": "user", "content": "q"}]))
+    assert prose.parsed.value == 391035 and prose.json_valid is False
+
+
+def test_an_error_without_any_usable_reply_stays_an_error():
+    err = FinSightError("cut", error_type="TruncatedResponseError")
+    r = run(rm.answer(FakeLLM("prose", err), RUN, RECORDS["A01"], [{"role": "user", "content": "q"}]))
+    assert r.parsed is None and r.error == "TruncatedResponseError: cut"
+
+
+@pytest.mark.parametrize("seen, expected, cut", [
+    (2050, 4703, True),          # Ollama's 2,048 window (measured)
+    (4100, 4703, True),          # a 4,096 window: 87% would pass the ratio, the window size gives it away
+    (4119, 4703, False),         # the 8k model, Llama's own count (measured)
+    (0, 4703, False),            # no token count sent: unknown, not truncated
+    (2050, 2000, False),         # a short prompt that happens to be near 2,048 is complete
+    (100, None, False),          # no expectation: no check
+])
+def test_truncation_detection(seen, expected, cut):
+    assert rm.truncated(seen, expected) is cut
+
+
+def test_errors_that_every_question_would_hit_stop_the_run():
+    for kind in ("AuthenticationError", "NotFoundError", "TLSError"):
+        with pytest.raises(rm.FatalRunError, match=kind):
+            run(rm.answer(FakeLLM(FinSightError("no", error_type=kind)), RUN, RECORDS["A01"],
+                          [{"role": "user", "content": "q"}]))
+
+
+def test_run_passes_the_prompts_qwen_count_to_the_truncation_check():
+    seen = []
+    original = rm.answer
+
+    async def spy(llm, run_id, record, messages, expected_tokens=None):
+        seen.append((record["id"], expected_tokens, rm.count_prompt_tokens(messages, len)))
+        return await original(llm, run_id, record, messages, expected_tokens)
+
+    import unittest.mock as mock
+    with mock.patch.object(rm, "answer", spy):
+        run(rm.run(FakeLLM(VALID), RUN, [RECORDS["A01"]], "rag", "S", count=len, progress=False))
+    assert seen[0][1] == seen[0][2] > 0
+
+
+def cli_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(rm, "ENV_FILE", None)
+    for k, v in {"LLM_BASE_URL": "https://endpoint.test/v1", "LLM_API_KEY": "k", "LLM_MODEL": "Qwen/Qwen3-8B",
+                 "SEC_USER_AGENT": "a b@c.d"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(rm, "qwen_counter", lambda: None)
+
+
+class FakeClientFactory:
+    """Stands in for LLMClient(settings) as an async context manager around a FakeLLM."""
+
+    def __init__(self, llm):
+        self.llm = llm
+
+    def __call__(self, settings):
+        llm = self.llm
+        llm.usage = type("U", (), {"calls": 0, "cache_hits": 0, "http_retries": 0, "total_tokens": 0})()
+
+        class Ctx:
+            async def __aenter__(self):
+                return llm
+
+            async def __aexit__(self, *exc):
+                return None
+
+        return Ctx()
+
+
+def test_a_fatal_error_writes_nothing(monkeypatch, tmp_path, capsys):
+    cli_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(rm, "LLMClient", FakeClientFactory(FakeLLM(FinSightError("bad key", error_type="AuthenticationError"))))
+    assert rm.main(["--run", "M1", "--label", "qwen3-8b", "--context", "rag", "--out-dir", str(tmp_path / "o")]) == 2
+    assert "stopped, nothing written: AuthenticationError" in capsys.readouterr().err and not (tmp_path / "o").exists()
+
+
+def test_a_run_where_everything_failed_is_not_written(monkeypatch, tmp_path, capsys):
+    cli_env(monkeypatch, tmp_path)
+    errors = [FinSightError("busy", error_type="RateLimitError")] * len(RECORDS)
+    monkeypatch.setattr(rm, "LLMClient", FakeClientFactory(FakeLLM(*errors)))
+    monkeypatch.setattr(rm, "load_records", lambda pack_dir: list(RECORDS.values()))
+    assert rm.main(["--run", "M1", "--label", "qwen3-8b", "--context", "rag", "--out-dir", str(tmp_path / "o")]) == 2
+    assert "every answer failed; nothing written" in capsys.readouterr().err
+
+
+def test_a_local_server_needs_a_model_name(monkeypatch, tmp_path, capsys):
+    cli_env(monkeypatch, tmp_path)
+    assert rm.main(["--run", "M2", "--label", "llama3.2-3b", "--context", "rag",
+                    "--base-url", "http://localhost:11434/v1"]) == 1
+    assert "--base-url needs --model" in capsys.readouterr().err
+
+
+def test_a_limited_run_cannot_overwrite_the_runs_file_through_a_relative_path(monkeypatch, capsys):
+    monkeypatch.chdir(rm.REPO_ROOT)
+    assert rm.main(["--run", "M1", "--label", "qwen3-8b", "--context", "rag", "--ids", "A01",
+                    "--out-dir", "eval/results/model_runs"]) == 1
+    assert "must not overwrite the full runs file" in capsys.readouterr().err
+
+
+def test_meta_records_how_the_run_was_made():
+    system = rm.prompt_file("rag").read_text(encoding="utf-8")
+    meta = rm.run_meta(RUN, settings(), "rag", rm.RESULTS_DIR, system, truncation_check=True,
+                       started="2026-11-10T20:51:00+00:00")
+    extra = meta.model_extra
+    assert (extra["repair"], extra["truncation_check"], extra["json_retries"]) == ("separators-v1", True, 1)
+    assert extra["framing_sha256"] == rm.framing_sha256() and len(extra["framing_sha256"]) == 64
+    assert extra["started"] == "2026-11-10T20:51:00+00:00" and extra["finished"]
+    assert extra["git_commit"] is None or len(extra["git_commit"]) == 40
+    assert meta.context_pack == "results/context_pack_gold.jsonl + context_pack_refusal.jsonl (cp-v1)"
+
+
+def test_a_failed_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    def disk_full(self, other):
+        raise OSError("disk full")
+
+    system = rm.prompt_file("rag").read_text(encoding="utf-8")
+    meta = rm.run_meta(RUN, settings(), "rag", rm.RESULTS_DIR, system)
+    monkeypatch.setattr(Path, "replace", disk_full)
+    with pytest.raises(OSError):
+        rm.write_run([], meta, tmp_path)
+    assert list(tmp_path.iterdir()) == []

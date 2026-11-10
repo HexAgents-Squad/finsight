@@ -218,7 +218,8 @@ class Reply:
     completion_tokens: int
     cached: bool                # answered from the disk cache, no request sent
     retries: int                # 429/5xx/network retries this call needed
-    seconds: float              # wall time, waiting for the endpoint lock and back-off included
+    seconds: float              # wall time, waiting for the endpoint lock and back-off included; for a cached
+                                # reply, the time the original request took (when the entry recorded it)
 
 
 class _Endpoint:
@@ -416,8 +417,8 @@ class LLMClient(AbstractLLMClient):
         if not answer:
             # Also a reply that was nothing but reasoning: there is no answer to return
             raise FinSightError(f"Empty reply from {target_model}", error_type="EmptyResponseError")
-        return Reply(answer, raw, entry["prompt_tokens"], entry["completion_tokens"], cached, retries,
-                     time.perf_counter() - start)
+        seconds = entry["seconds"] if cached and "seconds" in entry else time.perf_counter() - start
+        return Reply(answer, raw, entry["prompt_tokens"], entry["completion_tokens"], cached, retries, seconds)
 
     async def _fetch(self, request: dict[str, Any], target_model: str,
                      path: Path | None) -> tuple[dict[str, Any], bool, int]:
@@ -429,12 +430,16 @@ class LLMClient(AbstractLLMClient):
             entry = self._read_cache(path) if path else None
             if entry is not None:
                 return entry, True, 0
+            sent = time.perf_counter()
             response, retries = await self._send(request, target_model)
             choice = response.choices[0] if response.choices else None
+            # "seconds": the request's own time (spacing and back-off included), replayed on a cache hit so a
+            # re-run of an evaluation keeps its latency figures
             entry = {"content": choice.message.content if choice else None,
                      "finish_reason": getattr(choice, "finish_reason", None),
                      "prompt_tokens": (response.usage.prompt_tokens or 0) if response.usage else 0,
-                     "completion_tokens": (response.usage.completion_tokens or 0) if response.usage else 0}
+                     "completion_tokens": (response.usage.completion_tokens or 0) if response.usage else 0,
+                     "seconds": round(time.perf_counter() - sent, 3)}
             # Cached before the checks in complete(), so a re-run replays them exactly; an empty reply is not
             # cached (likely a one-off glitch, and a cached one would be replayed until the folder is deleted)
             if path and strip_thinking(entry["content"] or ""):
@@ -507,6 +512,8 @@ class LLMClient(AbstractLLMClient):
         types = {"content": (str, type(None)), "finish_reason": (str, type(None)), "prompt_tokens": int,
                  "completion_tokens": int}
         ok = isinstance(entry, dict) and all(isinstance(entry.get(k, ...), t) for k, t in types.items())
+        # "seconds" is optional (entries written before it was recorded) but must be a number when present
+        ok = ok and isinstance(entry.get("seconds", 0.0), int | float) and not isinstance(entry.get("seconds"), bool)
         return entry if ok else None
 
     @staticmethod

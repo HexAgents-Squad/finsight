@@ -33,16 +33,17 @@ class FakeJudge:
 
 def test_the_rubric_is_frozen():
     assert hashlib.sha256(js.RUBRIC_FILE.read_bytes()).hexdigest() == \
-        "9423ffcb4af9ba7d70ea39119954e8f7560e3ca001d024278d8b6d435dcc0917"
-    assert js.JUDGE_VERSION == "j-v1"
+        "56d65aca17eaa929250c67b3ffc448396f03d64332855791bd1af3b6338d5c11"
+    assert js.JUDGE_VERSION == "j-v2"
 
 
 def test_only_summary_answers_with_a_reply_are_judged_blind_to_the_model():
     judge = FakeJudge(2, 1)
     records = [record("E01"), record("A01"), record("E02", parsed=False), record("E03")]
     grades = asyncio.run(js.judge_run(judge, records, GOLD, "RUBRIC"))
-    assert grades == [{"id": "E01", "score": 2, "reason": "matches the key points"},
-                      {"id": "E03", "score": 1, "reason": "matches the key points"}]
+    stamp = {"judge_version": "j-v2", "rubric_sha256": hashlib.sha256(b"RUBRIC").hexdigest()}
+    assert grades == [{"id": "E01", "score": 2, "reason": "matches the key points", **stamp},
+                      {"id": "E03", "score": 1, "reason": "matches the key points", **stamp}]
     system, user = judge.sent[0]
     assert system == {"role": "system", "content": "RUBRIC"}
     question, reference = GOLD["E01"]
@@ -74,3 +75,38 @@ def test_the_scorer_reads_the_judge_file(tmp_path):
 
 def test_no_runs_exits_2(tmp_path):
     assert js.main(["--runs-dir", str(tmp_path / "none"), "--out-dir", str(tmp_path)]) == 2
+
+
+
+def test_passage_markers_are_hidden_from_the_judge():
+    judge = FakeJudge(2)
+    asyncio.run(js.judge_run(judge, [record("E01", answer="Cloud grew [P1] strongly [P12].")], GOLD, "R"))
+    assert judge.sent[0][1]["content"].endswith("Answer to grade: Cloud grew strongly.")
+
+
+def test_main_writes_one_file_per_run_and_rejects_bad_runs_files(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / f"{RUN}.jsonl").write_text(record("E01").model_dump_json() + "\n", encoding="utf-8")
+    for k, v in {"LLM_BASE_URL": "https://endpoint.test/v1", "LLM_API_KEY": "k", "LLM_MODEL": "m",
+                 "SEC_USER_AGENT": "a b@c.d"}.items():
+        monkeypatch.setenv(k, v)
+    from core.settings import Settings
+    monkeypatch.setattr(js, "get_settings", lambda: Settings(_env_file=None))      # never the developer's .env
+
+    class Ctx:
+        def __init__(self, settings):
+            self.judge = FakeJudge(2)
+
+        async def __aenter__(self):
+            return self.judge
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(js, "LLMClient", Ctx)
+    assert js.main(["--runs-dir", str(runs), "--out-dir", str(tmp_path / "grading")]) == 0
+    lines = (tmp_path / "grading" / f"judge_{RUN}.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(x)["score"] for x in lines] == [2]
+    (runs / f"{RUN}.jsonl").write_text("{not a record}\n", encoding="utf-8")
+    assert js.main(["--runs-dir", str(runs), "--out-dir", str(tmp_path / "grading")]) == 1

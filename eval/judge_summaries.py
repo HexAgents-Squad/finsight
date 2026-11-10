@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -29,10 +30,11 @@ from core.llm import LLMClient  # noqa: E402
 from core.settings import REPO_ROOT, get_settings  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 from eval.runs_schema import RunRecord  # noqa: E402
+from eval.score_answers import CITATION_MARK  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_FILE  # noqa: E402
 from eval.validate_gold import validate_file  # noqa: E402
 
-JUDGE_VERSION = "j-v1"
+JUDGE_VERSION = "j-v2"                               # j-v2: the rubric's reply example is valid JSON
 RUBRIC_FILE = REPO_ROOT / "agent" / "prompts" / "judge_summary_rubric.txt"
 RUNS_DIR, GRADING_DIR = RESULTS_DIR / "model_runs", RESULTS_DIR / "grading"
 SUMMARY_CATEGORY = "qualitative"
@@ -53,18 +55,22 @@ def judge_messages(rubric: str, question: str, gold: str, answer: str) -> list[d
 async def judge_run(llm: LLMClient, records: list[RunRecord], gold: dict[str, tuple[str, str]],
                     rubric: str) -> list[dict]:
     """Grades for the run's summary answers that have a parsed reply; a failed judge call is left out (the
-    scorer then shows no judge score for that answer) and reported."""
+    scorer then shows no judge score for that answer) and reported. [Pn] markers are removed first, as for the
+    human graders, so the judge cannot tell a RAG answer from a closed-book one. Each grade records the judge
+    version and rubric hash."""
+    stamp = {"judge_version": JUDGE_VERSION, "rubric_sha256": hashlib.sha256(rubric.encode("utf-8")).hexdigest()}
     out = []
     for rec in records:
         if rec.id not in gold or rec.parsed is None:
             continue
         question, reference = gold[rec.id]
         try:
-            grade = await llm.chat_json(judge_messages(rubric, question, reference, rec.parsed.answer), JudgeScore)
+            shown = CITATION_MARK.sub("", rec.parsed.answer).strip()
+            grade = await llm.chat_json(judge_messages(rubric, question, reference, shown), JudgeScore)
         except FinSightError as err:
             print(f"  {rec.id}: no judge grade ({err.error_type})", file=sys.stderr)
             continue
-        out.append({"id": rec.id, "score": grade.score, "reason": grade.reason})
+        out.append({"id": rec.id, "score": grade.score, "reason": grade.reason, **stamp})
     return out
 
 
@@ -84,13 +90,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     gold = {i.id: (i.question, i.gold_answer) for i in rep.items if i.category == SUMMARY_CATEGORY}
     try:
+        rubric = RUBRIC_FILE.read_text(encoding="utf-8")
         runs = {p.stem: [RunRecord.model_validate_json(line) for line in p.read_text(encoding="utf-8").splitlines()
                          if line.strip()] for p in run_files}
+    except (OSError, ValidationError) as err:
+        print(f"ERROR: unreadable rubric or runs file: {err}", file=sys.stderr)
+        return 1
+    try:
         settings = get_settings()
     except ValidationError as err:
-        print(f"ERROR: {err}", file=sys.stderr)
-        return 1 if "RunRecord" in str(err) else 2
-    rubric = RUBRIC_FILE.read_text(encoding="utf-8")
+        print(f"ERROR: settings are incomplete: {err}", file=sys.stderr)
+        return 2
 
     async def go() -> dict[str, list[dict]]:
         async with LLMClient(settings) as llm:

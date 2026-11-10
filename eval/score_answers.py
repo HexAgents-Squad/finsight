@@ -626,16 +626,18 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
         out.append(f"| {label} | " + " | ".join(cells[key]) + " |")
     out += table("### 5. Output validity, tokens, latency and human corrections", "Measure", names)
     rows = {"valid B0 JSON": [], "JSON retries": [], "no reply (errors)": [], "prompt tokens (mean)": [],
-            "completion tokens (mean)": [], "latency p50 / p95 (s, uncached calls)": [], "cached replies": [],
+            "completion tokens (mean)": [], "latency p50 / p95 (s, answered calls)": [], "cached replies": [],
             "automatic verdicts overturned by graders": []}
     for _, sc in runs:
-        lat = [s["latency_s"] for s in sc if not s["cached"]]
+        # Cached replies replay the original request's time (core.llm), so every answered call counts; error rows
+        # (no reply) would only measure the failure. Times include request spacing and retry back-off.
+        lat = [s["latency_s"] for s in sc if not s["error"]]
         rows["valid B0 JSON"].append(f"{sum(s['json_valid'] for s in sc)}/{len(sc)}")
         rows["JSON retries"].append(str(sum(s["retries"] for s in sc)))
         rows["no reply (errors)"].append(str(sum(s["error"] for s in sc)))
         rows["prompt tokens (mean)"].append(f"{statistics.fmean(s['prompt_tokens'] for s in sc):.0f}")
         rows["completion tokens (mean)"].append(f"{statistics.fmean(s['completion_tokens'] for s in sc):.0f}")
-        rows["latency p50 / p95 (s, uncached calls)"].append(
+        rows["latency p50 / p95 (s, answered calls)"].append(
             f"{percentile(lat, 50):.1f} / {percentile(lat, 95):.1f}" if lat else "–")
         rows["cached replies"].append(f"{sum(s['cached'] for s in sc)}/{len(sc)}")
         rows["automatic verdicts overturned by graders"].append(str(sum(s.get("overturned", False) for s in sc)))

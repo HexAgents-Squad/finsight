@@ -569,13 +569,16 @@ def test_the_sheet_hides_passage_markers_and_reasoning():
     assert sa.display_answer(raw) == "not json"
 
 
-def test_latency_percentiles_leave_out_cached_replies():
-    recs = [r.model_copy(update={"cached": True, "latency_s": 0.0}) if n % 2 else r.model_copy(update={"latency_s": 3.0})
+def test_latency_counts_answered_calls_cached_or_not_but_not_errors():
+    """Cached replies carry the original request's time (core.llm replays it); error rows have no reply."""
+    recs = [r.model_copy(update={"cached": True, "latency_s": 3.0}) if n % 2 else r.model_copy(update={"latency_s": 3.0})
             for n, r in enumerate(perfect_run())]
+    recs[0] = recs[0].model_copy(update={"parsed": None, "json_valid": False, "error": "RateLimitError: x",
+                                         "latency_s": 99.0})
     scored = sa.score_run(meta(), recs, QUESTIONS, PACKS, MATCHERS)
     sa.apply_grades(scored, {}, {})
     text = sa.report([(meta(), scored)])
-    assert "| latency p50 / p95 (s, uncached calls) | 3.0 / 3.0 |" in text and "| cached replies | 51/102 |" in text
+    assert "| latency p50 / p95 (s, answered calls) | 3.0 / 3.0 |" in text and "| cached replies | 51/102 |" in text
 
 
 @pytest.mark.parametrize("text, found", [

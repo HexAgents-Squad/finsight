@@ -195,7 +195,10 @@ temperature (0), max_tokens (1,024), prompt version, context-pack file and the s
 (context_pack_sha256; the scorer refuses a run made from other packs) (eval.runs_schema.RunMeta; extra keys such
 as the git commit are allowed). The runner writes records and meta with eval.runs_schema.RunRecord/RunMeta,
 the scorer reads them with the same models (strict: a B0 reply with an extra field, or "2024" as a string year,
-is invalid JSON for B0, i.e. parsed null). Runs files are committed so every reported number traces back to them.
+is invalid JSON for B0, i.e. parsed null; the one exception is the thousands-separator repair in §2.4, which sets
+parsed with json_valid false). The meta also records the prompt and framing sha256, the repair version, whether
+the truncation check was on, the git commit and start/finish times; cached replies replay the original request's
+latency, so a re-run reproduces the records (only "cached" changes: measured on M1, 0 requests). Runs files are committed so every reported number traces back to them.
 
 2.6 Answer types and scoring (W1-08, implemented: python eval/score_answers.py)
 -------------------------------------------------------------------------------
@@ -284,7 +287,19 @@ than 70% of the prompt's Qwen tokens.
 Budget: M1 and M3 102 calls each, judge ~40, all through the cache, one at a time; M2 runs locally in
 parallel (no key; ~1–2 h on a CPU).
 Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
-small n per cell, a single frozen prompt.
+small n per cell, a single frozen prompt, and these properties of B0 found in review after the runs (the prompt
+stays frozen; changing it after seeing results would be tuning on gold):
+- R2's wording ("a question about what will happen") also covers RF10 ("which bank stock will rise"), which the
+  tests and spec §6 expect as R6; no precedence among R1/R2/R6 is given (affects RF10, RF11).
+- R3 says "20 companies" without naming them: with no passages, "not reported" for Netflix (G03) or Tesla (RF04)
+  is scored as an under-refusal.
+- Closed-book "not reported" also means "I don't know": M3 earns trap credit (G08-G10) through not knowing, and
+  its unknown figures are labelled wrong_line_item.
+- The separator repair only ever applies to Llama (Qwen wrote valid JSON); JSON validity is reported unrepaired.
+- The judge is Qwen grading Qwen (and Llama); its rubric has no "grounded" criterion, unlike the human scale, so
+  agreement partly measures that difference. Human grades decide.
+- M2 ran on a laptop CPU with the 30 s request timeout of the .env: 21 requests timed out and were retried
+  (answers unaffected), so M2 latency is not comparable with the hosted endpoint's (use --timeout 300 locally).
 
 4. How-to per ticket
 ====================
