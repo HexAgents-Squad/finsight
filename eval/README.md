@@ -8,6 +8,8 @@
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
+| `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json` |
+| `judge_summaries.py` | W1-13: LLM-as-judge grades (0/1/2) for the summary answers → `results/grading/judge_<run_id>.jsonl` |
 | `runs_schema.py` | W1-08: the runs-file format (B0 answer, run record, run meta) shared by the runner (W1-13) and the scorer |
 | `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (docs/week1_plan.txt §2.6) |
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
@@ -66,10 +68,16 @@ recorded `n_tokens` is what the model sees. Filters are oracle filters (the righ
 model comparison measures the models, not retrieval; questions that list no company are annotated in
 `QUESTION_FILTERS`, and a new refusal test needs an entry there (the script stops otherwise).
 
-## Scoring the model comparison (W1-08)
+## Running and scoring the model comparison (W1-13, W1-08)
 ```bash
-python eval/score_answers.py       # after the runner (W1-13) has written eval/results/model_runs/
+python eval/run_models.py --run M1 --label qwen3-8b --context rag        # hosted endpoint (one run at a time)
+python eval/run_models.py --run M3 --label qwen3-8b --context closed
+python eval/run_models.py --run M2 --label llama3.2-3b --context rag --base-url http://localhost:11434/v1 \
+    --model llama3.2-3b-8k --api-key ollama                                # local Ollama, can run in parallel
+python eval/judge_summaries.py     # LLM-as-judge for the summary answers (after the endpoint runs)
+python eval/score_answers.py       # scores, blind grading sheet, model_comparison.md
 ```
+Calls go through the reply cache, so re-running any step is free and gives the same files.
 Re-run it after graders fill in `results/grading/grading_sheet.csv` (W1-14): summaries count once `final` is set
 (2 = correct), a `final` of 2 on a "label" row overturns the automatic verdict, and a `failure_label` entered
 there replaces the suggested one. Re-running never erases what was entered, and a grade never moves to a changed

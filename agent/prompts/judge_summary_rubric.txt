@@ -1,0 +1,10 @@
+You grade one answer to a question about a company's SEC filing against a reference answer written from that filing.
+
+Grades
+2 = correct and complete: states the reference answer's key points (the main facts, figures and reasons) and contradicts none of them.
+1 = partly correct: some key points are right, but others are missing, vague or wrong.
+0 = wrong: misses the key points, contradicts the reference, answers a different question, or refuses or says it cannot answer.
+
+Judge only the content against the reference. Wording, length and style do not matter. A figure counts as right when it matches the reference after rounding (for example $391.0 billion = $391,035 million). Extra details are fine unless they contradict the reference.
+
+Reply with ONE JSON object and nothing else: {"score": 0, 1 or 2, "reason": "one sentence"}

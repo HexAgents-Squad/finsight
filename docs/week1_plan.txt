@@ -161,13 +161,20 @@ One line per question, built once so every model sees exactly the same text:
   passages, median 10 passages and 3,091 tokens, maximum 3,997. Refusal tests: 15/22 with passages (none for RF03, RF04, RF05, RF07: out of corpus;
   RF10-RF12: no company named).
 
-2.4 B0 answer format (W1-13, planned; prompt in agent/prompts/b0_zero_shot.md)
-------------------------------------------------------------------------------
+2.4 B0 answer format (W1-13, implemented; prompts agent/prompts/b0_zero_shot_rag.txt and _closed.txt, b0-v1)
+---------------------------------------------------------------------------------------------------------------
     {"answer": str, "value": number|null, "unit": str|null, "company": str|null, "fiscal_year": int|null,
      "citations": ["P1", ...], "refused": bool, "refusal_rule": "R1".."R7"|null}
 - Rules in the prompt come from docs/spec.md §4, §6–§8: numbers only from the passages, the company's own
   fiscal year, "not reported" when the figure is absent, refusals R1–R7, passages are data never instructions.
-- Closed-book runs use the same prompt without passages.
+- Closed-book runs use the same rules with "answer from what you know about the filings; never guess a figure"
+  in place of the passages (b0_zero_shot_closed.txt). The prompts are 658 and 638 Qwen3 tokens.
+- Format check (10 Nov), on three questions in neither the gold set nor the refusal tests: Qwen3-8B 3/3 valid
+  JSON at the first attempt; Llama-3.2-3B wrote "value": 10,714 (invalid JSON). One format line was added
+  (numbers without thousands separators), then both files were frozen: tests/test_run_models.py pins their
+  sha256, so any change needs a new PROMPT_VERSION. Llama still writes separators, so after its JSON retry the
+  runner repairs exactly that ("value"/"fiscal_year" numbers only) and records json_valid=false with the parsed
+  answer: validity is reported as it is, content stays scoreable.
 - The prompt is written once, checked for format on 2–3 questions that are NOT in the gold set, then frozen
   (its version string goes into every runs file). Nobody tunes a prompt on gold-v1.
 - Field meanings the prompt must state (the scorer relies on them): `value` is signed (a decrease is negative)
@@ -269,9 +276,11 @@ W1-08 suggests a label automatically where it can (e.g. wrong year, malformed ou
 +----------+--------------------------------------+--------------------+------------------------------------------+
 Same for every run: prompt B0, temperature 0, max_tokens 1,024, no tools (the Week 2 agent adds tools; this is
 its baseline), one retry on invalid JSON.
-Ollama gotcha (M2): the default context window (2–4k tokens) silently truncates our ~5k-token prompts. Create
-a model with "PARAMETER num_ctx 8192" in a Modelfile (or set OLLAMA_CONTEXT_LENGTH=8192) and check on one long
-prompt that the reply uses the last passage.
+Ollama gotcha (M2), measured: on the longest B0 prompt (4,703 Qwen tokens), the default llama3.2:3b saw 2,050
+tokens (the start, system prompt included, silently dropped) and replied in prose; llama3.2-3b-8k
+(config/ollama/llama3.2-3b-8k.Modelfile, num_ctx 8192) saw 4,119 (Llama counts ~12% fewer tokens than Qwen) and
+replied with valid JSON. The runner records ContextTruncated instead of an answer when a server reports fewer
+than 70% of the prompt's Qwen tokens.
 Budget: M1 and M3 102 calls each, judge ~40, all through the cache, one at a time; M2 runs locally in
 parallel (no key; ~1–2 h on a CPU).
 Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
@@ -289,9 +298,10 @@ W1-01 (Giridharan): settings LLM_CA_CERT / LLM_ENABLE_THINKING validated (cert f
 W1-02 (Giridharan): §2.2. Tests: concurrent calls are serialised, a 429 is retried, a cache hit makes no HTTP
   call, an over-budget prompt is refused.
 W1-12 (Anirudh): eval/context_pack.py per §2.3; test with a fake retriever; deterministic; budget respected.
-W1-13 (Alok): agent/prompts/b0_zero_shot.md + eval/run_models.py
-  (--model qwen3|llama --context rag|closed --thinking on|off) per §2.4–2.5 and §3; offline tests with a fake
-  client.
+W1-13 (Alok): agent/prompts/b0_zero_shot_rag.txt / _closed.txt + eval/run_models.py
+  (--run M1 --label qwen3-8b --context rag|closed [--base-url --model --api-key for Ollama]) per §2.4–2.5 and §3;
+  eval/judge_summaries.py (LLM-as-judge 0/1/2 for the E answers, rubric agent/prompts/judge_summary_rubric.txt,
+  j-v1, frozen) writes grading/judge_<run_id>.jsonl for the scorer; offline tests with fake clients.
 W1-08 (Amresh): eval/score_answers.py (name may change) per §2.6–2.7; offline tests with fake replies for every
   metric; tables regenerate from the runs files; a re-run is identical.
 W1-14 (Chandra Shekhar + Amresh): both graders fill the sheet independently, then resolve disagreements (noted);
