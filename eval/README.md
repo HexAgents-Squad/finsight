@@ -8,6 +8,7 @@
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
+| `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
 | `injection_tests.jsonl` | 12 prompt-injection tests: text planted in a filing passage + the question + what must not appear in the answer |
 | `safety_tests.py` / `validate_test_sets.py` | Rules for both sets, and `check_refusal()` / `check_injection()` to score an answer contract (spec §8) |
@@ -52,6 +53,16 @@ python eval/retrieval_eval.py --runs eval/results/runs/C3_hybrid_company_year.js
 Reading the numbers:
 - recall@k is the share of an item's gold sources found. Items with two sources (two companies, or a period comparison citing each year's own 10-K) score at most 0.5 at recall@1.
 - Gold sources name where a figure is printed in the statements (Item 8, 10-Q Part I Item 1). Most figures are repeated in the MD&A (Item 7), and retrieving only that copy counts as a miss, so say so next to the recall table.
+
+## Context pack for the model comparison (W1-12)
+```bash
+python eval/context_pack.py        # needs the C3 index (data/index) and, once, internet for the Qwen3 tokenizer
+```
+Rebuild it whenever the gold set, the refusal tests or the C3 index change (a test fails when the first two no
+longer match the pack's `.meta.json`). The B0 runner must render passages with `render_passages()`, so the
+recorded `n_tokens` is what the model sees. Filters are oracle filters (the right company and year), so the
+model comparison measures the models, not retrieval; questions that list no company are annotated in
+`QUESTION_FILTERS`, and a new refusal test needs an entry there (the script stops otherwise).
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash

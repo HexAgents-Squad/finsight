@@ -14,3 +14,4 @@ openai>=1.55.0,<4
 rank-bm25>=0.2.2,<0.3
 chromadb>=1.0,<2
 sentence-transformers>=2.5.1,<7  # also installs torch (~200 MB on CPU)
+tokenizers>=0.19,<1             # core/tokens.py: exact Qwen3 token counts (also a sentence-transformers dependency)
