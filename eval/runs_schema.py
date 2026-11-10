@@ -63,3 +63,6 @@ class RunMeta(BaseModel):
     max_tokens: int = Field(gt=0)
     prompt_version: str = Field(min_length=1)
     context_pack: str = Field(min_length=1)          # e.g. "eval/results/context_pack_gold.jsonl (cp-v1)"
+    # sha256 of each pack file the run read ({"context_pack_gold.jsonl": ..., "context_pack_refusal.jsonl": ...}):
+    # the scorer refuses a run made from other packs, whose passages it would misjudge
+    context_pack_sha256: dict[str, str]

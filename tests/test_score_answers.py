@@ -20,10 +20,13 @@ NAMES = {"AAPL": "Apple", "GOOGL": "Alphabet", "JPM": "JPMorgan Chase", "C": "Ci
          "KO": "Coca-Cola", "NVDA": "NVIDIA"}
 
 
+PACK_SHA = {name: sa.sha256(sa.RESULTS_DIR / name) for name in (sa.GOLD_PACK, sa.REFUSAL_PACK)}
+
+
 def meta(run_id=RAG, context="rag"):
     return RunMeta(run_id=run_id, model="Qwen/Qwen3-8B", endpoint="hosted", context=context, thinking=False,
                    temperature=0.0, max_tokens=1024, prompt_version="b0-v1",
-                   context_pack="eval/results/context_pack_gold.jsonl (cp-v1)")
+                   context_pack="eval/results/context_pack_gold.jsonl (cp-v1)", context_pack_sha256=PACK_SHA)
 
 
 def ideal(q: sa.Question) -> B0Answer:
@@ -56,9 +59,7 @@ def perfect_run(run_id=RAG, **overrides):
 
 
 def score_one(qid, answer, context="rag", **kw):
-    q = QUESTIONS[qid]
-    passages = PACKS.get(qid, []) if context == "rag" else []
-    return sa.check(q, record(qid, answer, **kw), passages, {p["pid"] for p in passages}, MATCHERS)
+    return sa.check(QUESTIONS[qid], record(qid, answer, **kw), PACKS.get(qid, {}), context == "rag", MATCHERS)
 
 
 def answer(**kw):
@@ -80,10 +81,13 @@ def test_figures_skip_dates_years_ids_and_names_and_apply_scale_words():
     ("391,035", "391,035", True),
     ("44.6%", "44.6%", True),
     ("44.6", "44.6%", False),                   # a percentage only matches a percentage
+    ("44.65%", "44.6%", True),                  # more decimals than the gold: the coarser precision decides
+    ("$1.37 trillion", "1,371,804", True),
     ("$10.1 billion", "$10.1 billion", True),
 ])
 def test_supported_accepts_rounded_forms_only(shown, reference, ok):
-    assert all(sa.supported(f, sa.figures(reference)) == ok for f in sa.figures(shown))
+    found = sa.figures(shown)
+    assert len(found) == 1 and sa.supported(found[0], sa.figures(reference)) == ok
 
 
 @pytest.mark.parametrize("unit, scale", [("USD millions", 1e6), ("USD billions", 1e9), ("$bn", 1e9),
@@ -141,7 +145,7 @@ def test_wrong_numeric_answers_get_a_suggested_label(qid, given, label):
 
 
 def test_a_figure_from_the_passages_that_is_not_the_answer_is_a_wrong_line_item():
-    passage_figure = next(f for p in PACKS["A01"] for f in sa.figures(p["text"])
+    passage_figure = next(f for p in PACKS["A01"]["passages"] for f in sa.figures(p["text"])
                           if not f.percent and 1e4 < f.value < 1e6 and not sa.within(f.value, 391035, 1.0))
     s = score_one("A01", answer(value=passage_figure.value, unit="USD millions"))
     assert s["suggested_label"] == "wrong_line_item" and s["checks"]["unsupported_numbers"] == []
@@ -161,8 +165,10 @@ def test_d_winners_are_the_companies_the_gold_answers_name_last():
     (answer(company="AAPL"), True, None),
     (answer(company=None, answer="Apple's net income was higher."), True, None),
     (answer(company="Microsoft"), False, "wrong_company"),
-    (answer(company="Apple and Microsoft"), False, "malformed_output"),
-    (answer(company=None, answer="Apple 93,736 vs Microsoft 88,136."), False, "malformed_output"),
+    (answer(company="Apple and Microsoft"), None, None),                        # both: a human decides
+    (answer(company=None, answer="Apple's ($93,736 million) was higher than Microsoft's ($88,136 million)."),
+     None, None),
+    (answer(company="the first one", answer="Apple's was higher."), True, None),  # field unrecognised: text
 ])
 def test_entity_answers(given, correct, label):
     s = score_one("D01", given)
@@ -198,7 +204,7 @@ def test_a_value_for_a_trap_is_flagged_as_a_fabrication():
 # --- hallucination checks ----------------------------------------------------------------------------------------
 
 def test_numbers_are_checked_against_the_passages_a_rag_run_saw():
-    passage_figure = next(f for p in PACKS["E01"] for f in sa.figures(p["text"])
+    passage_figure = next(f for p in PACKS["E01"]["passages"] for f in sa.figures(p["text"])
                           if f.text.replace(",", "").isdigit() and f.value > 1000)
     text = f"Revenue grew to {passage_figure.text} and margins reached 97.3%."
     rag = score_one("E01", answer(answer=text))
@@ -247,8 +253,8 @@ def test_re_exporting_keeps_grades_and_labels_and_never_drops_graded_rows(tmp_pa
     sa.write_sheet(sa.sheet_rows(runs, QUESTIONS), tmp_path)
     path = tmp_path / sa.SHEET_NAME
     rows = list(csv.DictReader(path.open(encoding="utf-8")))
-    e01 = sa.sheet_key(RAG, "E01")
-    a01 = sa.sheet_key(RAG, "A01")
+    keys = {x["id"]: x["sheet_key"] for x in runs[0][2]}
+    e01, a01 = keys["E01"], keys["A01"]
     for r in rows:
         if r["key"] == e01:
             r.update(grader_1="2", grader_2="1", final="2", note="close call")
@@ -282,10 +288,11 @@ def test_invalid_grades_or_labels_are_rejected(tmp_path):
 
 def test_human_grades_decide_summaries_and_confirmed_labels_win():
     _, _, scored = runs_with_one_wrong()[0]
-    entered = {sa.sheet_key(RAG, "E01"): {"final": "2", "failure_label": ""},
-               sa.sheet_key(RAG, "E02"): {"final": "1", "failure_label": ""},
-               sa.sheet_key(RAG, "A01"): {"final": "", "failure_label": "wrong_line_item"}}
-    sa.apply_grades(scored, RAG, entered, {"E01": 2, "E02": 2})
+    keys = {x["id"]: x["sheet_key"] for x in scored}
+    entered = {keys["E01"]: {"final": "2", "failure_label": ""},
+               keys["E02"]: {"final": "1", "failure_label": ""},
+               keys["A01"]: {"final": "", "failure_label": "wrong_line_item"}}
+    sa.apply_grades(scored, entered, {"E01": 2, "E02": 2})
     by_id = {s["id"]: s for s in scored}
     assert by_id["E01"]["correct"] is True and by_id["E01"]["judge_score"] == 2
     assert by_id["E02"]["correct"] is False and by_id["E02"]["failure_label"] == "incomplete_summary"
@@ -296,10 +303,13 @@ def test_human_grades_decide_summaries_and_confirmed_labels_win():
 def test_judge_scores_must_be_0_1_or_2(tmp_path):
     path = tmp_path / "judge.jsonl"
     path.write_text('{"id": "E01", "score": 2, "reason": "ok"}\n', encoding="utf-8")
-    assert sa.read_judge(path) == {"E01": 2}
+    assert sa.read_judge(path, set(QUESTIONS)) == {"E01": 2}
     path.write_text('{"id": "E01", "score": true}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="0, 1 or 2"):
-        sa.read_judge(path)
+        sa.read_judge(path, set(QUESTIONS))
+    path.write_text('{"score": 2}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown question id"):
+        sa.read_judge(path, set(QUESTIONS))
 
 
 # --- statistics and report ----------------------------------------------------------------------------------------
@@ -323,7 +333,7 @@ def test_kappa():
 
 def test_report_tables_count_correctly():
     _, _, scored = runs_with_one_wrong()[0]
-    sa.apply_grades(scored, RAG, {}, {})
+    sa.apply_grades(scored, {}, {})
     text = sa.report([(meta(), scored)])
     assert "| Short: numeric | 47/48 = 98% [89%–100%] |" in text
     assert "| Summary | pending (12) |" in text
@@ -401,9 +411,9 @@ def test_a_flipped_sign_is_named_in_the_reason():
     assert s["suggested_label"] == "arithmetic_slip" and "sign flipped" in s["reason"]
 
 
-def test_an_unrecognised_company_field_is_not_replaced_by_the_answer_text():
-    s = score_one("D01", answer(company="the first company", answer="Apple's was higher."))
-    assert s["correct"] is False and s["suggested_label"] == "malformed_output"
+def test_a_company_field_naming_one_company_beats_the_answer_text():
+    s = score_one("D01", answer(company="Microsoft", answer="Apple's was higher than Microsoft's."))
+    assert s["correct"] is False and s["suggested_label"] == "wrong_company"
 
 
 def test_numbers_in_a_refusal_are_not_hallucination_checked():
@@ -414,6 +424,163 @@ def test_numbers_in_a_refusal_are_not_hallucination_checked():
 def test_refusing_an_answerable_question_lowers_precision():
     recs = perfect_run(A01=answer(refused=True, refusal_rule="R3"))
     scored = sa.score_run(meta(), recs, QUESTIONS, PACKS, MATCHERS)
-    sa.apply_grades(scored, RAG, {}, {})
+    sa.apply_grades(scored, {}, {})
     text = sa.report([(meta(), scored)])
     assert "| precision (refused and should) | 20/21 |" in text and "| over-refusals | 1 |" in text
+
+
+# --- added after the independent review ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("unit, value", [("USD trillions", 1.371804), ("$", 1371804e6), ("$B", 1371.804),
+                                         ("USD M", 1371804), ("USD", 1371804)])        # A06: 1,371,804 USD millions
+def test_more_unit_spellings_are_converted(unit, value):
+    s = score_one("A06", answer(value=value, unit=unit))
+    assert s["correct"] is True, (unit, s["reason"])
+
+
+def test_bare_currency_and_fractions_are_accepted_with_a_note():
+    usd = score_one("A01", answer(value=391035, unit="USD"))
+    assert usd["correct"] is True and "bare currency unit 'USD'" in usd["unit_note"]
+    frac = score_one("B01", answer(value=0.446, unit=None))
+    assert frac["correct"] is True and frac["unit_note"] == "fraction 0.446 read as 44.6%"
+    assert score_one("B01", answer(value=0.446, unit="%"))["suggested_label"] == "unit_confusion"
+
+
+def test_a_decrease_stated_in_words_accepts_an_unsigned_value():
+    s = score_one("C12", answer(answer="Net earnings decreased 16.3%.", value=16.3, unit="%"))
+    assert s["correct"] is True and "decrease in words" in s["unit_note"]
+
+
+@pytest.mark.parametrize("text", ["JPMorgan does not report a gross profit line.",
+                                  "Gross profit is not separately reported by JPMorgan.",
+                                  "Not disclosed: banks show net revenue instead.",
+                                  "JPMorgan doesn't report gross profit."])
+def test_trap_answers_in_other_words(text):
+    assert score_one("G08", answer(answer=text))["correct"] is True
+
+
+def test_numbers_from_the_conversation_history_are_supported():
+    previous = PACKS["F01"]["history"][0]["answer"]
+    figure = sa.figures(previous)[0].text
+    s = score_one("F01", answer(answer=f"Down from {figure} the year before.", value=383285, unit="USD millions"),
+                  context="closed")
+    assert s["checks"]["unsupported_numbers"] == [] and s["correct"] is True
+
+
+def test_bracketed_citations_are_the_same_passage():
+    assert score_one("A01", answer(value=391035, unit="USD millions", citations=["[P1]", " p2 "]))[
+        "checks"]["bad_citations"] == []
+
+
+def test_a_control_answered_with_a_refusal_rule_is_an_over_refusal():
+    s = score_one("RF17", answer(refusal_rule="R1"))
+    assert s["correct"] is False and s["suggested_label"] == "over_refusal"
+
+
+def test_duplicate_records_are_rejected():
+    recs = perfect_run()
+    with pytest.raises(ValueError, match="duplicate"):
+        sa.score_run(meta(), [*recs, recs[0]], QUESTIONS, PACKS, MATCHERS)
+
+
+def test_a_run_made_from_other_packs_is_refused(tmp_path):
+    runs_dir = tmp_path / "runs"
+    other = meta().model_copy(update={"context_pack_sha256": {sa.GOLD_PACK: "0" * 64, sa.REFUSAL_PACK: "0" * 64}})
+    write_run(runs_dir, perfect_run(), other)
+    assert sa.main(["--runs-dir", str(runs_dir), "--out-dir", str(tmp_path / "out")]) == 1
+
+
+def test_keys_are_text_safe_and_tied_to_the_answer():
+    k1, k2 = sa.sheet_key(RAG, "E01", "answer one"), sa.sheet_key(RAG, "E01", "answer two")
+    assert k1 != k2 and k1.startswith("k") and len(k1) == 1 + sa.KEY_HEX
+
+
+def test_a_changed_answer_never_inherits_the_old_grade(tmp_path):
+    runs = runs_with_one_wrong()
+    sa.write_sheet(sa.sheet_rows(runs, QUESTIONS), tmp_path)
+    path = tmp_path / sa.SHEET_NAME
+    old_key = next(x["sheet_key"] for x in runs[0][2] if x["id"] == "E01")
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    for r in rows:
+        if r["key"] == old_key:
+            r.update(final="2")
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=sa.SHEET_COLUMNS, lineterminator="\n")
+        w.writeheader()
+        w.writerows(rows)
+    rerun = perfect_run(E01=answer(answer="Totally different, wrong answer."))
+    scored = sa.score_run(meta(), rerun, QUESTIONS, PACKS, MATCHERS)
+    entered = sa.write_sheet(sa.sheet_rows([(meta(), rerun, scored)], QUESTIONS), tmp_path)
+    sa.apply_grades(scored, entered, {})
+    e01 = next(x for x in scored if x["id"] == "E01")
+    assert e01["correct"] is None and e01["sheet_key"] != old_key
+    after = {r["key"]: r for r in csv.DictReader(path.open(encoding="utf-8"))}
+    assert after[old_key]["task"] == sa.STALE and after[e01["sheet_key"]]["final"] == ""
+
+
+def test_a_sheet_saved_by_excel_is_read(tmp_path):
+    sa.write_sheet(sa.sheet_rows(runs_with_one_wrong(), QUESTIONS), tmp_path)
+    path = tmp_path / sa.SHEET_NAME
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes().replace(b"\n", b"\r\n"))       # BOM + CRLF
+    assert len(sa.read_sheet(path)) == 13
+
+
+@pytest.mark.parametrize("damage, message", [("short", "wrong number of cells"), ("key", "was changed")])
+def test_a_damaged_sheet_is_an_error_not_a_crash(tmp_path, damage, message):
+    sa.write_sheet(sa.sheet_rows(runs_with_one_wrong(), QUESTIONS), tmp_path)
+    path = tmp_path / sa.SHEET_NAME
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if damage == "short":
+        lines.append("k123,grade")
+    else:
+        lines[1] = lines[1][1:]                         # Excel turned "k6544…" into a number-like key
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        sa.read_sheet(path)
+
+
+def test_graders_can_overturn_an_automatic_verdict():
+    _, _, scored = runs_with_one_wrong()[0]
+    a01 = next(x for x in scored if x["id"] == "A01")
+    sa.apply_grades(scored, {a01["sheet_key"]: {"final": "2", "failure_label": ""}}, {})
+    assert a01["correct"] is True and a01["overturned"] is True and a01["failure_label"] is None
+    text = sa.report([(meta(), scored)])
+    assert "| automatic verdicts overturned by graders | 1 |" in text
+
+
+def test_an_undecided_entity_answer_goes_to_the_graders():
+    recs = perfect_run(D01=answer(company=None, answer="Apple 93,736 vs Microsoft 88,136."))
+    scored = sa.score_run(meta(), recs, QUESTIONS, PACKS, MATCHERS)
+    rows = sa.sheet_rows([(meta(), recs, scored)], QUESTIONS)
+    d01 = next(x for x in scored if x["id"] == "D01")
+    assert any(r["key"] == d01["sheet_key"] and r["task"] == "grade" for r in rows)
+    sa.apply_grades(scored, {d01["sheet_key"]: {"final": "2", "failure_label": ""}}, {})
+    assert d01["correct"] is True
+
+
+def test_the_sheet_hides_passage_markers_and_reasoning():
+    rec = record("E01", answer(answer="Cloud grew [P1] strongly [P12]."))
+    assert sa.display_answer(rec) == "Cloud grew strongly."
+    raw = record("E01", None, raw_reply="<think>The model is Qwen and RAG.</think>not json")
+    assert sa.display_answer(raw) == "not json"
+
+
+def test_latency_percentiles_leave_out_cached_replies():
+    recs = [r.model_copy(update={"cached": True, "latency_s": 0.0}) if n % 2 else r.model_copy(update={"latency_s": 3.0})
+            for n, r in enumerate(perfect_run())]
+    scored = sa.score_run(meta(), recs, QUESTIONS, PACKS, MATCHERS)
+    sa.apply_grades(scored, {}, {})
+    text = sa.report([(meta(), scored)])
+    assert "| latency p50 / p95 (s, uncached calls) | 3.0 / 3.0 |" in text and "| cached replies | 51/102 |" in text
+
+
+@pytest.mark.parametrize("text, found", [
+    ("Microsoft's operating margin for fiscal 2024 (ended 30 June 2024) was 44.6%.", ["44.6%"]),   # spec §8 example
+    ("For the fiscal year ended June 30, revenue(1) rose; see 12/31/2024 and 2024-12-31.", []),
+    ("COVID-19 costs in the 10-Ks, 1Q25 and the 3rd quarter; the S&P 500.", []),
+    ("Margins grew 10-12% and 0.3 pp.", ["10%", "12%", "0.3 pp"]),
+    ("In March 44.6% of sales were online; on May 2 sales were 12,345.", ["44.6%", "12,345"]),
+    ("Deposits were $1.37 trillion.", ["1.37 trillion"]),
+])
+def test_what_counts_as_a_figure(text, found):
+    assert [f.text for f in sa.figures(text)] == found

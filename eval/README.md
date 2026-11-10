@@ -71,8 +71,10 @@ model comparison measures the models, not retrieval; questions that list no comp
 python eval/score_answers.py       # after the runner (W1-13) has written eval/results/model_runs/
 ```
 Re-run it after graders fill in `results/grading/grading_sheet.csv` (W1-14): summaries count once `final` is set
-(2 = correct), and a `failure_label` entered there replaces the suggested one. Re-running never erases what was
-entered. Graders work from the sheet only; `grading_key.csv` says which model wrote each answer.
+(2 = correct), a `final` of 2 on a "label" row overturns the automatic verdict, and a `failure_label` entered
+there replaces the suggested one. Re-running never erases what was entered, and a grade never moves to a changed
+answer (it becomes a "stale" row). Graders work from the sheet only; `grading_key.csv` says which model wrote
+each answer. Save from Excel as "CSV UTF-8" so names with accents survive.
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
