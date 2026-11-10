@@ -444,6 +444,10 @@ def test_bare_currency_and_fractions_are_accepted_with_a_note():
     frac = score_one("B01", answer(value=0.446, unit=None))
     assert frac["correct"] is True and frac["unit_note"] == "fraction 0.446 read as 44.6%"
     assert score_one("B01", answer(value=0.446, unit="%"))["suggested_label"] == "unit_confusion"
+    wrong = score_one("B01", answer(value=0.43, unit=None))                       # 43% vs 44.6%: a slip, not invented
+    assert wrong["correct"] is False and wrong["suggested_label"] == "arithmetic_slip" and wrong["reason"].startswith("43 vs")
+    whole = score_one("B01", answer(value=46.0, unit=None))                       # not a fraction: judged as given
+    assert whole["suggested_label"] == "arithmetic_slip" and whole["reason"].startswith("46 vs")
 
 
 def test_a_decrease_stated_in_words_accepts_an_unsigned_value():

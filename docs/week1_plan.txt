@@ -194,7 +194,8 @@ is invalid JSON for B0, i.e. parsed null). Runs files are committed so every rep
 Details fixed in the scorer:
 - short_numeric: the model's unit is converted to the gold unit (thousand/million/billion/trillion, "$B",
   "USD M"; % and ratio are not scaled). Also accepted, each logged in unit_note: a bare currency unit ("USD",
-  "$") with the value already in the gold scale, a fraction for a percentage when the unit is not "%", and an
+  "$") with the value already in the gold scale, a fraction (below 1) for a percentage when the unit is not "%"
+  (a wrong fraction is judged and labelled as that percentage), and an
   unsigned value when the answer states the decrease in words. Otherwise the sign must match.
 - short_entity: the gold winner per D item is D_WINNERS (the company the gold answer names last; a test checks
   it). The `company` field decides when it names one company, else the answer text when it names one; an

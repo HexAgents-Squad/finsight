@@ -18,7 +18,7 @@ Answer types (the mentor's split) and when an answer is correct:
     short_numeric  A, B, C, F: `value` within the item's tolerance_pct of gold_value, after converting the model's
                    unit to the gold unit (thousand/million/billion/trillion, "$B", "USD M"; % and ratio unscaled);
                    also accepted, with a note: a bare currency unit ("USD") whose value is already in the gold
-                   scale, a fraction for a percentage when the unit is not "%", and an unsigned value when the
+                   scale, a fraction (below 1) for a percentage when the unit is not "%", and an unsigned value when the
                    answer states the direction in words ("decreased 16.3%"). Every conversion is logged.
     short_entity   D: the gold winner (D_WINNERS) is the one company in `company`, or else the one company the
                    answer names; when neither names exactly one company, a human decides (grading sheet)
@@ -382,7 +382,8 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
     readings = [(value, None)]
     if model_scale == 1.0 and gold_scale not in (None, 1.0):
         readings.append((raw, f"bare currency unit {a.unit!r} read as {q.unit}"))
-    if q.unit == "%" and (a.unit or "").strip().lower() in FRACTION_UNITS:
+    fraction = q.unit == "%" and (a.unit or "").strip().lower() in FRACTION_UNITS and abs(raw) < 1
+    if fraction:
         readings.append((raw * 100, f"fraction {raw:g} read as {raw * 100:g}%"))
     if gold < 0 < value and DECREASE_RE.search(a.answer):
         readings.append((-value, "unsigned value; the answer states the decrease in words"))
@@ -392,6 +393,8 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
             if note:
                 out["unit_note"] = note
             return out
+    if fraction:
+        value = raw * 100                               # a wrong fraction is judged (and labelled) as a percentage
     out["reason"] = f"{value:g} vs gold {gold:g} {q.unit} (tolerance {q.tolerance_pct}%)"
     checks = out["checks"]
     if gold and within(-value, gold, q.tolerance_pct):
