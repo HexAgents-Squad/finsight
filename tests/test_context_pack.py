@@ -10,7 +10,7 @@ import core.tokens
 import eval.context_pack as cp
 from core.exceptions import FinSightError
 from eval.retrieval_eval import build_query
-from eval.schema import corpus_scope
+from eval.schema import CorpusScope, corpus_scope
 from eval.validate_gold import validate_file
 from eval.validate_test_sets import validate_set
 from retrieval.common import NO_FILTERS, Filters, SearchResult
@@ -20,6 +20,12 @@ GOLD = validate_file(cp.GOLD_PATH).items
 REFUSALS, _ = validate_set("refusal", cp.REFUSAL_PATH)
 SCOPE = corpus_scope()
 COMPANY_NAMES = {"NFLX": ["Netflix"], "TSLA": ["Tesla"]}          # the out-of-corpus companies questions name
+ALIASES = {c["ticker"]: c["aliases"] for c in yaml.safe_load(
+    (ROOT / "config" / "companies.yaml").read_text(encoding="utf-8"))["companies"]} | COMPANY_NAMES
+NAME_PATTERNS = {t: re.compile(r"\b(?:" + "|".join(map(re.escape, names)) + r")\b", re.IGNORECASE)
+                 for t, names in ALIASES.items()}
+YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
+QUARTER = re.compile(r"\bQ[1-4]\b")
 
 
 def words(text: str) -> int:
@@ -65,17 +71,25 @@ def test_every_question_without_companies_is_annotated_and_nothing_else():
 
 
 @pytest.mark.parametrize("qid", sorted(cp.QUESTION_FILTERS))
-def test_annotations_name_only_what_the_question_says(qid):
+def test_annotations_name_exactly_what_the_question_says(qid):
+    """Both directions: every annotated company, year and quarter is in the question, and every one the question
+    names is annotated, except the documented readings ("latest" = FY2025, "Q4" = the annual report)."""
     text = next(x.question for x in [*GOLD, *REFUSALS] if x.id == qid)
-    aliases = {c["ticker"]: c["aliases"] for c in yaml.safe_load(
-        (ROOT / "config" / "companies.yaml").read_text(encoding="utf-8"))["companies"]}
     tickers, years, period = cp.QUESTION_FILTERS[qid]
-    for t in tickers:
-        names = aliases.get(t, []) + COMPANY_NAMES.get(t, [])
-        assert any(re.search(rf"\b{re.escape(n)}\b", text, re.IGNORECASE) for n in names), (qid, t)
-    for y in years:
-        assert str(y) in text, (qid, y)
-    assert period is None or period in text
+    named = (sorted(t for t, pattern in NAME_PATTERNS.items() if pattern.search(text)),
+             sorted(int(y) for y in YEAR.findall(text)), QUARTER.findall(text))
+    annotated = (sorted(tickers), sorted(years), [period] if period else [])
+    if qid in cp.ANNOTATION_READINGS:
+        assert named != annotated, f"{qid} needs no reading any more; remove it from ANNOTATION_READINGS"
+        assert named[0] == annotated[0]                  # a reading changes a year or quarter, never the company
+    else:
+        assert named == annotated
+
+
+def test_the_readings_are_the_spec_rules():
+    assert cp.QUESTION_FILTERS["RF22"] == (("MSFT",), (2025,), None)     # latest indexed 10-K (spec §4.3)
+    assert cp.QUESTION_FILTERS["RF21"] == (("AAPL",), (2024,), None)     # Q4 -> the annual report (spec §4.2)
+    assert set(cp.ANNOTATION_READINGS) == {"RF21", "RF22"}
 
 
 def test_annotated_filters_cover_every_name_year_and_quarter():
@@ -118,6 +132,16 @@ def test_out_of_corpus_matches_what_search_filings_would_refuse(f, reason):
     assert cp.out_of_corpus(f, SCOPE) == reason
 
 
+def test_the_period_decides_the_form_whose_years_count():
+    """As search_filings.check_period: FY means the 10-K years, a quarter the 10-Q years, no period either."""
+    scope = CorpusScope(frozenset({"AAPL"}), frozenset({2024}), frozenset({2025}), frozenset({"Q1", "Q2", "Q3"}))
+    assert cp.out_of_corpus(Filters.of(ticker="AAPL", fiscal_year=2025, fiscal_period="FY"), scope) == \
+        "AAPL fiscal 2025 FY is not indexed"
+    assert cp.out_of_corpus(Filters.of(ticker="AAPL", fiscal_year=2024, fiscal_period="Q1"), scope) == \
+        "AAPL fiscal 2024 Q1 is not indexed"
+    assert cp.out_of_corpus(Filters.of(ticker="AAPL", fiscal_year=2025), scope) is None
+
+
 # --- packing -------------------------------------------------------------------------------------------------
 
 def test_passages_fill_the_budget_in_rank_order_and_count_the_rendered_block():
@@ -141,7 +165,8 @@ def test_record_searches_each_filter_interleaves_and_reports_evidence():
     record = cp.build_record(question("D01"), retriever, words, SCOPE)
     assert [s[2] for s in retriever.searches] == list(question("D01").filters)
     assert all(s[1] == cp.HITS_PER_FILTER for s in retriever.searches)
-    assert [p["chunk_id"] for p in record["passages"]][:4] == ["AAPL_0", "MSFT_0", "AAPL_1", "MSFT_1"]
+    assert [p["chunk_id"] for p in record["passages"]] == ["AAPL_0", "MSFT_0", "AAPL_1", "MSFT_1", "AAPL_2",
+                                                         "MSFT_2"]
     assert record["evidence_in_pack"] is True and record["out_of_corpus"] == []
     assert list(record) == ["id", "question", "history", "filters", "out_of_corpus", "passages", "n_tokens",
                             "evidence_in_pack"]
@@ -178,15 +203,18 @@ def test_pack_files_are_deterministic_and_written_atomically(tmp_path):
     records = [cp.build_record(question(q), FakeRetriever(), words, SCOPE) for q in ("A01", "D01", "G06")]
     chunks = tmp_path / "chunks_C3.jsonl"
     chunks.write_text("{}\n", encoding="utf-8")
-    info = cp.meta(records, cp.GOLD_PATH, chunks, "sentence-transformers:test", "tok@rev")
+    bm25 = tmp_path / "bm25_C3.pkl"
+    bm25.write_bytes(b"index")
+    info = cp.meta(records, cp.GOLD_PATH, chunks, bm25, "sentence-transformers:test", "tok@rev")
     out = tmp_path / "out" / cp.GOLD_PACK
     cp.write_pack(records, out, info)
     first = (out.read_bytes(), out.with_name("context_pack_gold.meta.json").read_bytes())
-    cp.write_pack(records, out, cp.meta(records, cp.GOLD_PATH, chunks, "sentence-transformers:test", "tok@rev"))
+    cp.write_pack(records, out, cp.meta(records, cp.GOLD_PATH, chunks, bm25, "sentence-transformers:test", "tok@rev"))
     assert (out.read_bytes(), out.with_name("context_pack_gold.meta.json").read_bytes()) == first
     assert sorted(p.name for p in out.parent.iterdir()) == ["context_pack_gold.jsonl", "context_pack_gold.meta.json"]
     saved = json.loads(first[1])
-    assert saved["inputs"] == {"gold_set.jsonl": cp.sha256(cp.GOLD_PATH), "chunks_C3.jsonl": cp.sha256(chunks)}
+    assert saved["inputs"] == {"gold_set.jsonl": cp.sha256(cp.GOLD_PATH), "chunks_C3.jsonl": cp.sha256(chunks),
+                               "bm25_C3.pkl": cp.sha256(bm25)}
     assert (saved["questions"], saved["with_passages"], saved["with_gold_sources"]) == (3, 2, 2)
     assert set(saved) == {"pack_version", "questions", "retrieval", "token_budget", "tokenizer", "history",
                           "with_passages", "evidence_in_pack", "with_gold_sources", "max_n_tokens", "inputs"}
@@ -200,9 +228,23 @@ def test_an_invalid_gold_set_exits_1(tmp_path):
     assert cp.main(["--gold", str(bad), "--out-dir", str(tmp_path)]) == 1
 
 
-def test_a_question_without_an_annotation_exits_1(monkeypatch, tmp_path):
+def test_a_failed_write_keeps_the_old_file_and_leaves_no_temporary_file(monkeypatch, tmp_path):
+    target = tmp_path / "pack.jsonl"
+    target.write_text("old\n", encoding="utf-8")
+
+    def disk_full(self, other):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", disk_full)
+    with pytest.raises(OSError):
+        cp.write_atomic("new\n", target)
+    assert target.read_text(encoding="utf-8") == "old\n" and [p.name for p in tmp_path.iterdir()] == ["pack.jsonl"]
+
+
+def test_a_question_without_an_annotation_exits_1(monkeypatch, tmp_path, capsys):
     monkeypatch.delitem(cp.QUESTION_FILTERS, "G01")
     assert cp.main(["--out-dir", str(tmp_path)]) == 1
+    assert "no QUESTION_FILTERS entry for G01" in capsys.readouterr().err
 
 
 def test_a_missing_tokenizer_or_index_exits_2(monkeypatch, tmp_path, capsys):
@@ -220,6 +262,40 @@ def test_a_missing_tokenizer_or_index_exits_2(monkeypatch, tmp_path, capsys):
                         lambda: retrieval.dense.Embedder(lambda texts: [], "fake:model", lambda: closed.append(1)))
     assert cp.main(["--out-dir", str(tmp_path), "--index-dir", str(tmp_path / "no-index")]) == 2
     assert closed == [1] and not (tmp_path / cp.GOLD_PACK).exists()      # embedder closed, nothing written
+
+
+@pytest.mark.parametrize("failure", [ValueError("collection chunks_C3 was built with ollama:nomic-embed-text"),
+                                     RuntimeError("vector count 10 != chunk count 12"),
+                                     ImportError("No module named 'chromadb'")])
+def test_a_mismatched_or_unloadable_index_exits_2_without_writing(monkeypatch, tmp_path, capsys, failure):
+    import retrieval.dense
+
+    def broken(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(core.tokens, "count_tokens", words)
+    monkeypatch.setattr(retrieval.dense, "embedder_from_settings",
+                        lambda: retrieval.dense.Embedder(lambda texts: [], "fake:model"))
+    monkeypatch.setattr(cp, "load_retrievers", broken)
+    assert cp.main(["--out-dir", str(tmp_path)]) == 2
+    assert type(failure).__name__ in capsys.readouterr().err and list(tmp_path.iterdir()) == []
+
+
+def test_a_failure_while_building_the_second_pack_writes_neither(monkeypatch, tmp_path):
+    import retrieval.dense
+
+    class FailsOnRefusals(FakeRetriever):
+        def search(self, query, k=5, filters=NO_FILTERS):
+            if query.startswith("Should I buy"):                  # RF01, the first refusal test searched
+                raise RuntimeError("index went away")
+            return super().search(query, k, filters)
+
+    monkeypatch.setattr(core.tokens, "count_tokens", words)
+    monkeypatch.setattr(retrieval.dense, "embedder_from_settings",
+                        lambda: retrieval.dense.Embedder(lambda texts: [], "fake:model"))
+    monkeypatch.setattr(cp, "load_retrievers", lambda *args: {cp.RETRIEVER: FailsOnRefusals()})
+    assert cp.main(["--out-dir", str(tmp_path)]) == 2
+    assert list(tmp_path.iterdir()) == []
 
 
 # --- core/tokens.py ------------------------------------------------------------------------------------------
@@ -263,14 +339,34 @@ def test_an_unavailable_tokenizer_is_a_typed_error_and_not_cached(monkeypatch):
     (cp.REFUSAL_PACK, cp.REFUSAL_PATH, [t.id for t in REFUSALS]),
 ])
 def test_committed_packs_match_their_inputs_and_the_budget(name, source, ids):
+    """The packs are committed, so everything that does not need the index is checked against the current code
+    and inputs: a change to the gold set, the refusal tests, QUESTION_FILTERS, out_of_corpus, the history rule,
+    the citation format or the meta counts fails here until the pack is rebuilt (python eval/context_pack.py)."""
     path = cp.RESULTS_DIR / name
-    if not path.exists():
-        pytest.skip(f"{name} not built")
+    assert path.exists(), f"{name} missing: run python eval/context_pack.py"
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    info = json.loads(path.with_name(path.stem + cp.META_SUFFIX).read_text(encoding="utf-8"))
+    info = json.loads(cp.meta_path(path).read_text(encoding="utf-8"))
     assert [r["id"] for r in records] == ids
-    # a gold set or refusal file changed after the pack was built: rebuild it (python eval/context_pack.py)
     assert info["inputs"][source.name] == cp.sha256(source)
-    assert all(r["n_tokens"] <= info["token_budget"] == cp.TOKEN_BUDGET for r in records)
-    assert all([p["pid"] for p in r["passages"]] == [f"P{n}" for n in range(1, len(r["passages"]) + 1)]
-               for r in records)
+    questions = {q.id: q for q in cp.gold_questions(GOLD) + cp.refusal_questions(REFUSALS)}
+    for r in records:
+        q = questions[r["id"]]
+        assert r["question"] == q.question
+        assert r["history"] == [{"question": hq, "answer": ha} for hq, ha in q.history]
+        assert r["filters"] == [f.active() for f in q.filters]
+        assert r["out_of_corpus"] == [x for f in q.filters if (x := cp.out_of_corpus(f, SCOPE))]
+        searchable = [f for f in q.filters if cp.out_of_corpus(f, SCOPE) is None]
+        assert [p["pid"] for p in r["passages"]] == [f"P{n}" for n in range(1, len(r["passages"]) + 1)]
+        for p in r["passages"]:
+            hit_ = hit(p["chunk_id"], p["ticker"], p["fiscal_year"], p["fiscal_period"], p["item"])
+            assert p["citation"] == cp.citation(hit_) and p["form"] == hit_.form
+            assert any(f.matches(hit_) for f in searchable)        # Chunk-like: ticker/year/period/item
+        assert (r["n_tokens"] == 0) == (r["passages"] == []) and r["n_tokens"] <= cp.TOKEN_BUDGET
+        keys = q.gold_keys
+        assert r["evidence_in_pack"] == (None if keys is None else any(
+            (p["ticker"], p["fiscal_year"], p["fiscal_period"], p["item"]) in keys for p in r["passages"]))
+    assert info["token_budget"] == cp.TOKEN_BUDGET and info["questions"] == len(records)
+    assert info["with_passages"] == sum(bool(r["passages"]) for r in records)
+    assert info["evidence_in_pack"] == sum(r["evidence_in_pack"] is True for r in records)
+    assert info["with_gold_sources"] == sum(r["evidence_in_pack"] is not None for r in records)
+    assert info["max_n_tokens"] == max(r["n_tokens"] for r in records)

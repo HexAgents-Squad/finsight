@@ -126,19 +126,21 @@ One line per question, built once so every model sees exactly the same text:
 - Retrieval: C3 hybrid, one search per filter (10 hits each), rankings interleaved, then passages in rank order
   while the block fits 4,000 tokens. Filters are ORACLE: the gold item's companies x fiscal years, so the
   comparison measures the model, not retrieval (the report says so). Questions that list none (G01-G07, the 22
-  refusal tests) use QUESTION_FILTERS, annotated by hand from the question text (tests check each name and year
-  appears in it).
+  refusal tests) use QUESTION_FILTERS, annotated by hand from the question text; a test checks the annotation
+  names exactly the companies, years and quarters the question does, except two readings of the spec: RF22
+  "latest fiscal year" = FY2025 (§4.3) and RF21 "fiscal 2024 Q4" = the fiscal 2024 annual report (§4.2).
 - A filter outside config/companies.yaml (company, or year/quarter not indexed) gets no search, as
   search_filings answers out_of_corpus; it is listed in out_of_corpus. A question naming no company gets [].
 - evidence_in_pack: a passage comes from one of the item's gold sources (null without sources); it separates
   "evidence missing" (retrieval) from "evidence ignored" (model) in the failure analysis.
 - Sidecar <pack>.meta.json: version, retrieval settings, tokenizer revision, counts and the sha256 of the inputs
-  (questions file, chunks_C3.jsonl), no timestamps; a re-run produces byte-identical files, and a test fails
-  if gold_set.jsonl or refusal_tests.jsonl changes after the pack was built.
+  (questions file, chunks_C3.jsonl, the C3 BM25 index), no timestamps; a re-run produces byte-identical files.
+  A test re-derives every record field that needs no index (question, history, filters, out_of_corpus,
+  citations, evidence, meta counts) from the current code and inputs, so a stale committed pack fails CI.
 - Built 10 Nov (gold-v1): 77/80 gold questions have passages (G03 Netflix, G06, G07 have none); evidence in the
   pack for 69/73 questions with gold sources (B12, B13, B15, D09: the Item 8 statement is outranked by MD&A or
-  10-Q text that repeats the figures, the known ADR-013 pattern W1-05 works on); median 10 passages and 3,091
-  tokens, maximum 3,997. Refusal tests: 15/22 with passages (none for RF03, RF04, RF05, RF07: out of corpus;
+  10-Q text that repeats the figures, the known ADR-013 pattern W1-05 works on); for the 77 questions with
+  passages, median 10 passages and 3,091 tokens, maximum 3,997. Refusal tests: 15/22 with passages (none for RF03, RF04, RF05, RF07: out of corpus;
   RF10-RF12: no company named).
 
 2.4 B0 answer format (W1-13, planned; prompt in agent/prompts/b0_zero_shot.md)

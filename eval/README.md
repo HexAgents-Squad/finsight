@@ -56,10 +56,10 @@ Reading the numbers:
 
 ## Context pack for the model comparison (W1-12)
 ```bash
-python eval/context_pack.py        # needs the C3 index (data/index) and, once, internet for the Qwen3 tokenizer
+python eval/context_pack.py        # needs the C3 index (data/index), .env (embedding settings) and, once, internet for the Qwen3 tokenizer
 ```
-Rebuild it whenever the gold set, the refusal tests or the C3 index change (a test fails when the first two no
-longer match the pack's `.meta.json`). The B0 runner must render passages with `render_passages()`, so the
+Rebuild it whenever the gold set, the refusal tests, `QUESTION_FILTERS` or the C3 index change (a test fails
+when the committed pack no longer matches the current inputs and code). The B0 runner must render passages with `render_passages()`, so the
 recorded `n_tokens` is what the model sees. Filters are oracle filters (the right company and year), so the
 model comparison measures the models, not retrieval; questions that list no company are annotated in
 `QUESTION_FILTERS`, and a new refusal test needs an entry there (the script stops otherwise).
