@@ -25,6 +25,7 @@ and the evaluation can report cost and latency.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -519,7 +520,10 @@ class LLMClient(AbstractLLMClient):
         except OSError as err:
             logger.warning("could not write cache entry %s: %s", path.name, err)
         finally:
-            tmp.unlink(missing_ok=True)
+            # missing_ok covers FileNotFoundError only: where a path component is a file, Linux raises
+            # NotADirectoryError (Windows FileNotFoundError), and cleanup must never fail the reply either
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
     async def chat_json(self, messages: list[Message], schema: type[T], *, model: str | None = None) -> T:
         """A reply validated against `schema`. Invalid output is sent back with the validation error,

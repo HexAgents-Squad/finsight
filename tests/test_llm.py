@@ -1129,3 +1129,16 @@ def test_cancelled_waiters_never_let_a_later_caller_overlap_the_active_request()
         return started_early
 
     assert run(scenario()) is False and state["peak"] == 1
+
+
+def test_a_cache_cleanup_error_never_fails_the_reply(tmp_path, monkeypatch):
+    """CI (Linux) raised NotADirectoryError from the cleanup, which missing_ok does not cover; Windows raises
+    FileNotFoundError there, so this simulates Linux to keep the regression visible on every platform."""
+    def linux_unlink(self, missing_ok=False):
+        raise NotADirectoryError(20, "Not a directory", str(self))
+
+    blocker = tmp_path / "cache"
+    blocker.write_text("a file where the cache folder should be", encoding="utf-8")
+    monkeypatch.setattr(Path, "unlink", linux_unlink)
+    llm = client(reply("OK"), LLM_CACHE_DIR=str(blocker))
+    assert run(llm.chat(USER)) == "OK"
