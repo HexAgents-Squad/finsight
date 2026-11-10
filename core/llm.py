@@ -1,7 +1,9 @@
 """The single access point to the chat model and embeddings (CLAUDE.md "core/llm.py").
 
-Talks to any OpenAI-compatible endpoint through the `openai` client (Ollama locally, the official endpoint
-from 8 Nov), so switching provider means editing `.env` only.
+Talks to any OpenAI-compatible endpoint through the `openai` client (Ollama locally; the hosted Qwen3-8B
+endpoint over HTTPS verified against the group's CA certificate, LLM_CA_CERT), so switching provider means
+editing `.env` only. Qwen3's reasoning mode is off unless LLM_ENABLE_THINKING says otherwise, and any
+<think>...</think> block is removed from replies before they are returned or parsed as JSON.
 
     chat(messages) -> str
     chat_json(messages, Schema) -> Schema instance (extract JSON, validate, re-prompt with the error)
@@ -18,9 +20,11 @@ import asyncio
 import json
 import logging
 import re
+import ssl
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Any, TypeVar
 
 import openai
@@ -40,7 +44,13 @@ JSON_SYSTEM_PROMPT = (
 )
 CODE_FENCE = re.compile(r"```[A-Za-z]*\s*(.*?)```", re.DOTALL)     # any language tag, e.g. ```json
 OBJECT_START = re.compile(r"\{")
+# Qwen3 reasoning: complete blocks, a closing tag whose opening tag was part of the prompt template, and an
+# opening tag never closed. IGNORECASE: the tags are model output, not a fixed protocol.
+THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
+THINK_OPEN = re.compile(r"<think>", re.IGNORECASE)
 FINISH_LENGTH = "length"          # finish_reason when a reply stopped at max_tokens
+MAX_CAUSE_DEPTH = 10             # exception-chain links searched for the TLS error behind a connection error
 MAX_ERROR_CHARS = 2_000          # validation errors sent back to the model are cut to this length
 
 
@@ -66,6 +76,22 @@ class Usage:
             setattr(self, f.name, f.default)
 
 
+def strip_thinking(reply: str) -> str:
+    """The reply without Qwen3 reasoning. With thinking off, Qwen3 still emits an empty <think></think> pair;
+    with it on, the reasoning comes first. Reasoning is never part of the answer: it may contain draft numbers
+    or JSON-looking text that must not reach the critic or the JSON parser. Text after a lone closing tag is
+    the answer (some templates put the opening tag in the prompt); text after a lone opening tag is unfinished
+    reasoning and is dropped."""
+    text = THINK_BLOCK.sub("", reply)
+    closes = list(THINK_CLOSE.finditer(text))
+    if closes:
+        text = text[closes[-1].end():]
+    opening = THINK_OPEN.search(text)
+    if opening:
+        text = text[:opening.start()]
+    return text.strip()
+
+
 def _is_object(text: str) -> bool:
     try:
         return isinstance(json.loads(text), dict)
@@ -76,8 +102,10 @@ def _is_object(text: str) -> bool:
 def extract_json(reply: str) -> str:
     """The JSON object in a model reply, tried in this order: the whole reply, each ``` fence, then the first
     position where a complete JSON object decodes (so braces in prose and backticks inside JSON strings do not
-    break it). If nothing decodes, the stripped reply is returned so validation reports the real error."""
-    text = reply.strip()
+    break it). Reasoning blocks are removed first (strip_thinking), so a draft object inside <think> is never
+    picked. If nothing decodes, the stripped reply is returned so validation reports the real error."""
+    reply = strip_thinking(reply)
+    text = reply
     for candidate in [text, *(m.group(1).strip() for m in CODE_FENCE.finditer(reply))]:
         if _is_object(candidate):
             return candidate
@@ -92,9 +120,45 @@ def extract_json(reply: str) -> str:
     return text
 
 
+def build_ssl_context(ca_file: Path) -> ssl.SSLContext:
+    """A client TLS context that trusts exactly `ca_file` (the group's CA), with certificate and hostname
+    checks on. `create_default_context(cafile=...)` loads only that file, not the system store: the endpoint
+    is the only host these clients talk to, and its issuer is in no system store anyway."""
+    try:
+        return ssl.create_default_context(cafile=str(ca_file))
+    except (ssl.SSLError, OSError) as err:      # not PEM, no certificate inside, unreadable
+        raise FinSightError(f"LLM_CA_CERT {ca_file} is not a readable PEM CA certificate: {err}",
+                            error_type="TLSConfigError") from err
+
+
+def _http_client(ssl_context: ssl.SSLContext | None) -> Any:
+    """None keeps the openai client's own HTTP client (system CAs); otherwise the openai default client
+    (same timeouts, limits and redirects) verifying against the given context."""
+    return None if ssl_context is None else openai.DefaultAsyncHttpxClient(verify=ssl_context)
+
+
+def _tls_failure(err: BaseException) -> ssl.SSLError | None:
+    """The ssl error behind a connection error, if any (openai -> httpx -> httpcore -> ssl, chained)."""
+    current: BaseException | None = err
+    for _ in range(MAX_CAUSE_DEPTH):
+        if current is None:
+            return None
+        if isinstance(current, ssl.SSLError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _api_error(err: openai.APIError, model: str) -> FinSightError:
     """The openai client has already retried what is retryable (network, 429, 5xx); report what is left."""
     if isinstance(err, openai.APIConnectionError):          # includes timeouts
+        tls = _tls_failure(err)
+        if tls is not None:
+            # A wrong or missing certificate looks like a network error to openai; name the actual fix
+            logger.error("TLS handshake with the endpoint for %s failed: %s", model, tls)
+            return FinSightError(f"TLS verification failed for {model}: {tls}. Check that LLM_CA_CERT points at "
+                                 f"your group's CA certificate (LOCAL_SETUP.md, Hosted endpoint).",
+                                 error_type="TLSError")
         kind = "NetworkError"
     else:
         kind = type(err).__name__                           # e.g. AuthenticationError, RateLimitError
@@ -124,17 +188,23 @@ class LLMClient(AbstractLLMClient):
     def __init__(self, settings: Settings, *, chat_client: Any = None, embed_client: Any = None) -> None:
         self.settings = settings
         self.usage = Usage()
+        needs_client = chat_client is None or embed_client is None
+        ssl_context = build_ssl_context(settings.LLM_CA_CERT) if settings.LLM_CA_CERT and needs_client else None
         self.client = chat_client or AsyncOpenAI(
             base_url=settings.LLM_BASE_URL,
-            api_key=settings.LLM_API_KEY,
+            api_key=settings.LLM_API_KEY.get_secret_value(),
             timeout=settings.LLM_TIMEOUT,
             max_retries=settings.LLM_HTTP_RETRIES,
+            http_client=_http_client(ssl_context),
         )
+        # The group CA vouches for the LLM endpoint only; a separate embeddings host keeps the system CAs
+        embed_url = settings.EMBED_BASE_URL or settings.LLM_BASE_URL
         self.embed_client = embed_client or AsyncOpenAI(
-            base_url=settings.EMBED_BASE_URL or settings.LLM_BASE_URL,
-            api_key=settings.EMBED_API_KEY or settings.LLM_API_KEY,
+            base_url=embed_url,
+            api_key=(settings.EMBED_API_KEY or settings.LLM_API_KEY).get_secret_value(),
             timeout=settings.LLM_TIMEOUT,
             max_retries=settings.LLM_HTTP_RETRIES,
+            http_client=_http_client(ssl_context if embed_url == settings.LLM_BASE_URL else None),
         )
         self._st_model: Any = None
         self._st_lock = asyncio.Lock()
@@ -154,14 +224,17 @@ class LLMClient(AbstractLLMClient):
         await self.aclose()
 
     async def chat(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None) -> str:
-        """One completion for a message list (system, previous turns, tool results, user)."""
+        """One completion for a message list (system, previous turns, tool results, user), without any
+        reasoning block (strip_thinking)."""
         target_model = model or self.settings.LLM_MODEL
+        request: dict[str, Any] = {"model": target_model, "messages": messages, "temperature": temperature,
+                                   "max_tokens": self.settings.LLM_MAX_COMPLETION_TOKENS}
+        if self.settings.LLM_ENABLE_THINKING is not None:
+            # Not a standard OpenAI parameter: vLLM passes it to the chat template (Qwen3), Ollama ignores it
+            request["extra_body"] = {"chat_template_kwargs": {"enable_thinking": self.settings.LLM_ENABLE_THINKING}}
         start = time.perf_counter()
         try:
-            response = await self.client.chat.completions.create(
-                model=target_model, messages=messages, temperature=temperature,
-                max_tokens=self.settings.LLM_MAX_COMPLETION_TOKENS,
-            )
+            response = await self.client.chat.completions.create(**request)
         except openai.APIError as err:
             raise _api_error(err, target_model) from err
         finally:
@@ -176,9 +249,11 @@ class LLMClient(AbstractLLMClient):
             raise FinSightError(f"Reply from {target_model} hit the {self.settings.LLM_MAX_COMPLETION_TOKENS}-"
                                 f"token cap (LLM_MAX_COMPLETION_TOKENS)", error_type="TruncatedResponseError")
         content = response.choices[0].message.content if response.choices else None
-        if not content or not content.strip():
+        answer = strip_thinking(content or "")
+        if not answer:
+            # Also a reply that was nothing but reasoning: there is no answer to return
             raise FinSightError(f"Empty reply from {target_model}", error_type="EmptyResponseError")
-        return content.strip()
+        return answer
 
     async def chat_json(self, messages: list[Message], schema: type[T], *, model: str | None = None) -> T:
         """A reply validated against `schema`. Invalid output is sent back with the validation error,

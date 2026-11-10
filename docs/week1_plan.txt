@@ -81,13 +81,16 @@ fakes so they never wait.
 =============================================
 As in Week 0, contracts let everyone work in parallel against fakes and sample files.
 
-2.1 Endpoint settings (W1-01, planned; .env only)
--------------------------------------------------
+2.1 Endpoint settings (W1-01, implemented; .env only; setup in LOCAL_SETUP.md "Hosted endpoint")
+---------------------------------------------------------------------------------------------------
     LLM_BASE_URL=<group URL from the learner guide>     LLM_API_KEY=<team key>     LLM_MODEL=Qwen/Qwen3-8B
     LLM_CA_CERT=<path to the group .crt>                LLM_ENABLE_THINKING=false
 - HTTPS verification uses the group CA certificate (an ssl context passed to httpx); it is never switched off.
-- Qwen3 "thinking" is off by default (chat_template_kwargs enable_thinking=false, or "/no_think" in the prompt;
-  W1-03 confirms which the endpoint honours). Any <think>…</think> block is stripped before JSON parsing.
+- Qwen3 "thinking" is off by default, sent as chat_template_kwargs.enable_thinking (empty LLM_ENABLE_THINKING =
+  not sent; Ollama ignores the field; W1-03 also probes "/no_think"). core.llm.strip_thinking removes every
+  <think>…</think> block from replies and before JSON extraction.
+- The certificate is the group's CA (Caddy local root, valid for years); the server certificate is renewed every
+  few hours, so never pin it. Relative LLM_CA_CERT paths start at the repo root; certs/ is git-ignored.
 - The key, the URL and the certificate stay out of git, logs, screenshots and chat outside the team.
 - Embeddings stay local (the endpoint has none): EMBED_BACKEND=sentence-transformers, as the index was built.
 

@@ -1,8 +1,8 @@
 # FinSight - Local Development Setup (about 15 minutes)
 
-> **Note:** These instructions are for local development and smoke testing using Ollama as a stand-in for the
-> provided endpoint. Connecting to the hosted Qwen3-8B endpoint (group CA certificate, key in `.env` only) is
-> Week 1 ticket W1-01 (UPGRAD-43), which adds a "Hosted endpoint" section here; see `docs/week1_plan.txt` §2.1.
+> **Note:** Steps 1–5 set up local development with Ollama as a stand-in model. To use the provided Qwen3-8B
+> endpoint instead, follow [Hosted endpoint](#hosted-endpoint-qwen3-8b) after them: only `.env` and one
+> certificate file change, never the code.
 
 ## Prerequisites & Installation
 
@@ -50,6 +50,53 @@ python scripts/smoke_llm.py
 ```
 It ends with `OK: ...` (exit code 0) when everything works. A `FAILED [...]` line names the problem, e.g.
 `NetworkError` when Ollama is not running.
+
+## Hosted endpoint (Qwen3-8B)
+
+The provided endpoint speaks the same OpenAI-compatible API as Ollama, over HTTPS with a certificate issued by
+your group's own CA, which no system trust store knows. The client verifies the connection against that CA
+file; verification is never switched off.
+
+1. **Put the group's CA certificate in `certs/`** (git-ignored), e.g. `certs/vm05-ca.crt`. Use the file for your
+   group from the learner guide. It is the CA's certificate (valid for years); the server's own certificate is
+   renewed every few hours and must not be used instead.
+2. **Edit `.env`** with your group's values from the learner guide:
+   ```
+   LLM_BASE_URL=https://<group host>:<port>/v1
+   LLM_API_KEY=<team key>
+   LLM_MODEL=Qwen/Qwen3-8B
+   LLM_CA_CERT=certs/<group>-ca.crt
+   LLM_ENABLE_THINKING=false
+   ```
+   Relative certificate paths are taken from the repo root. Keep `EMBED_BACKEND=sentence-transformers`: the
+   endpoint has no embeddings, and the retrieval index was built with the local model.
+3. **Check TLS without the key** (Windows: `curl.exe`; keep the key off the command line and out of shell history):
+   ```bash
+   curl --cacert certs/<group>-ca.crt https://<group host>:<port>/v1/models
+   ```
+   `{"detail":"missing or invalid bearer token"}` means the certificate and address are right. A certificate
+   error means the wrong file or group.
+4. **Run the smoke test**: `python scripts/smoke_llm.py`. It shows `TLS: verified against <group>-ca.crt` and
+   `Thinking: off`, hides the endpoint's address, and ends with `OK: ...`. Post that output (never the key) in
+   the team chat as your smoke-test check.
+
+Rules for the team key: **one active request at a time for the whole team**, 60 requests per minute and 8,192
+tokens per call (prompt + reply). Never commit, screenshot or share the key, the address or the certificate
+outside the team. Qwen3's reasoning mode stays off (`LLM_ENABLE_THINKING=false`): with it on, the model reasons
+first, which costs output tokens and can hit `LLM_MAX_COMPLETION_TOKENS`; any `<think>` block is removed from
+replies either way.
+
+| Smoke-test failure | Meaning and fix |
+|---|---|
+| `TLSError` | The certificate does not match: check `LLM_CA_CERT` points at your group's CA file |
+| `TLSConfigError` | `LLM_CA_CERT` is not a PEM certificate (e.g. the wrong download) |
+| settings error `no certificate file at ...` | The path in `LLM_CA_CERT` is wrong (relative paths start at the repo root) |
+| `AuthenticationError` | TLS works; the key in `LLM_API_KEY` is wrong or missing |
+| `RateLimitError` | Someone else is using the team key right now (one active request per key); try again shortly |
+| `NotFoundError` | `LLM_MODEL` is not `Qwen/Qwen3-8B`, or the URL does not end in `/v1` |
+| `NetworkError` | The address or port is wrong, or the endpoint is unreachable from your network |
+
+To go back to Ollama, restore the three `LLM_*` lines from `.env.example` and empty `LLM_CA_CERT`.
 
 ## Running the tests
 ```bash
