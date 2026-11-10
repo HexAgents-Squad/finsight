@@ -9,7 +9,7 @@ from functools import cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Always the repo root's .env, whichever folder a script is started from; relative paths in it (LLM_CA_CERT)
@@ -80,24 +80,22 @@ class Settings(SecSettings):
 
     @field_validator("LLM_CA_CERT")
     @classmethod
-    def _ca_file_exists(cls, value: Path | None) -> Path | None:
+    def _ca_file_for_https(cls, value: Path | None, info: ValidationInfo) -> Path | None:
         """A wrong path must fail at start-up with the path in the message, not as a TLS error on the first
-        call. Relative paths are taken from the repo root, so every script finds the same file."""
+        call. Relative paths are taken from the repo root, so every script finds the same file. A CA only means
+        something for an https:// URL; with http:// it would be silently unused while the user believes the
+        connection is verified. A field validator, not a model validator: a model-level error message would
+        quote every input value, the API key included."""
         if value is None:
             return None
+        base_url = info.data.get("LLM_BASE_URL")        # declared above, so already validated (absent if invalid)
+        if base_url is not None and not base_url.lower().startswith(HTTPS):
+            raise ValueError("LLM_CA_CERT is set but LLM_BASE_URL is not an https:// URL")
         path = value.expanduser()
         path = path if path.is_absolute() else REPO_ROOT / path
         if not path.is_file():
             raise ValueError(f"no certificate file at {path}")
         return path
-
-    @model_validator(mode="after")
-    def _ca_needs_https(self) -> Settings:
-        """A CA certificate only means something for an https:// URL; with http:// it would be silently unused
-        while the user believes the connection is verified."""
-        if self.LLM_CA_CERT is not None and not self.LLM_BASE_URL.lower().startswith(HTTPS):
-            raise ValueError("LLM_CA_CERT is set but LLM_BASE_URL is not an https:// URL")
-        return self
 
     @field_validator("EMBED_BACKEND", mode="before")
     @classmethod

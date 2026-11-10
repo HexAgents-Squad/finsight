@@ -239,6 +239,7 @@ def test_env_example_covers_every_setting():
 
 
 def test_get_settings_is_read_once(monkeypatch):
+    monkeypatch.setitem(Settings.model_config, "env_file", None)       # independent of a developer's .env
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
@@ -399,12 +400,15 @@ def test_ca_cert_with_a_plain_http_url_is_a_configuration_error():
     assert settings(LLM_BASE_URL="HTTPS://Endpoint.test/v1", LLM_CA_CERT=ca_bundle()).LLM_CA_CERT is not None
 
 
-def test_the_api_key_never_appears_in_a_repr_or_a_validation_error():
+@pytest.mark.parametrize("broken", [{"EMBED_BACKEND": "faiss"},
+                                    {"LLM_CA_CERT": "README.md"},                 # CA with an http:// URL
+                                    {**HTTPS_URL, "LLM_CA_CERT": "missing.crt"}])
+def test_the_api_key_never_appears_in_a_repr_or_a_validation_error(broken):
     secret = "sk-team-key-0123456789"
     assert secret not in repr(settings(LLM_API_KEY=secret, EMBED_API_KEY=secret))
     with pytest.raises(ValueError) as err:
-        settings(LLM_API_KEY=secret, EMBED_BACKEND="faiss")
-    assert secret not in str(err.value)
+        settings(LLM_API_KEY=secret, **broken)
+    assert secret not in str(err.value) and secret not in str(err.value.errors())    # errors(): untruncated inputs
     assert LLMClient(settings(LLM_API_KEY=secret)).client.api_key == secret   # the client still gets the key
 
 

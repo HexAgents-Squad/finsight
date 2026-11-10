@@ -82,9 +82,9 @@ file; verification is never switched off.
 
 Rules for the team key: **one active request at a time for the whole team**, 60 requests per minute and 8,192
 tokens per call (prompt + reply). Never commit, screenshot or share the key, the address or the certificate
-outside the team. Qwen3's reasoning mode stays off (`LLM_ENABLE_THINKING=false`): with it on, the model reasons
-first, which costs output tokens and can hit `LLM_MAX_COMPLETION_TOKENS`; any `<think>` block is removed from
-replies either way.
+outside the team. Qwen3's reasoning mode stays off (`LLM_ENABLE_THINKING=false`); any `<think>` block is
+removed from replies either way. The provided endpoint currently ignores the switch and never reasons (checked on
+10 Nov), so setting it to `true` changes nothing there.
 
 | Smoke-test failure | Meaning and fix |
 |---|---|
