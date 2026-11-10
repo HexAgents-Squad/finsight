@@ -154,19 +154,21 @@ One line per question, built once so every model sees exactly the same text:
   (its version string goes into every runs file). Nobody tunes a prompt on gold-v1.
 - This is a deliberately small format for the comparison; the full answer contract (spec §8) is W1-07.
 
-2.5 Runs file (W1-13, planned): eval/results/model_runs/<run_id>.jsonl
----------------------------------------------------------------------
+2.5 Runs file (written by W1-13; format fixed in eval/runs_schema.py by W1-08): eval/results/model_runs/<run_id>.jsonl
+----------------------------------------------------------------------------------------------------------------------
 run_id = <M#>_<model>_<rag|closed>_think-<on|off>_<prompt version>, e.g. M1_qwen3-8b_rag_think-off_b0-v1.
 One line per question:
     {"id": "B01", "run_id": "...", "raw_reply": "...", "parsed": {...B0 fields...} | null, "json_valid": true,
      "retries": 0, "prompt_tokens": 3954, "completion_tokens": 88, "latency_s": 2.4, "cached": false,
      "error": null}
-The sidecar <run_id>.meta.json records model, endpoint kind (hosted/local), temperature (0), max_tokens (1,024),
-thinking, prompt version, context-pack file and git commit. Runs files are committed so every reported number
-traces back to them.
+The sidecar <run_id>.meta.json records model, endpoint (hosted/local), context (rag/closed), thinking,
+temperature (0), max_tokens (1,024), prompt version and context-pack file (eval.runs_schema.RunMeta; extra keys
+such as the git commit are allowed). The runner writes records and meta with eval.runs_schema.RunRecord/RunMeta,
+the scorer reads them with the same models (strict: a B0 reply with an extra field, or "2024" as a string year,
+is invalid JSON for B0, i.e. parsed null). Runs files are committed so every reported number traces back to them.
 
-2.6 Answer types and scoring (W1-08, planned)
----------------------------------------------
+2.6 Answer types and scoring (W1-08, implemented: python eval/score_answers.py)
+-------------------------------------------------------------------------------
 +------------------------------+-----------------------------------------------+--------------------------------------------+
 | Answer type (mentor's split) | Gold items                                    | Correct when                               |
 +==============================+===============================================+============================================+
@@ -184,15 +186,33 @@ traces back to them.
 |                              | 7 controls, 2 partial)                        | controls answered; partials answer the     |
 |                              |                                               | factual part and name the rule             |
 +------------------------------+-----------------------------------------------+--------------------------------------------+
-Hallucination checks (automatic): a number in answer/value found neither in the passages nor in the gold
-answer (normalised: "$245.1 billion" ↔ 245122); a value given for a "not reported" trap; fiscal_year or company
-different from the gold item's; a citation id that does not exist or whose passage lacks the number; JSON
-invalid after one retry.
-Output: eval/results/model_comparison.md (generated tables + a hand-written interpretation section) with
-accuracy per model × answer type and per category, counts and Wilson 95% intervals (n is 10–48 per cell),
-hallucination rates (RAG vs closed-book), refusal precision/recall, tokens, latency p50/p95, JSON validity.
-Grading sheet for W1-14: eval/results/grading/<run_id>_grades.csv
-(id, question, gold_answer, model_answer, grader_1, grader_2, final, failure_label, note), model names hidden.
+Details fixed in the scorer:
+- short_numeric: the model's unit is converted to the gold unit (thousand/million/billion; % and ratio are not
+  scaled) and the conversion is logged in unit_note; the sign must match (gold growth is signed).
+- short_entity: the gold winner per D item is D_WINNERS (the company the gold answer names last; a test checks
+  it); the `company` field decides when set, else the answer text, and it must name exactly one company.
+- refusal tests: kind refusal = refused with the expected rule; partial = not refused and refusal_rule set to
+  the expected rule; control = not refused (controls have no gold value, so their content is not scored).
+  A right decision with the wrong rule is wrong but gets no automatic label (W1-14 decides).
+- An answer with no reply (endpoint error) or invalid B0 JSON is wrong (malformed_output) and counted in table 5.
+Hallucination checks (automatic): a number in answer/value found neither in the passages the run saw (none for a
+closed-book run) nor in the gold answer: a rounded figure matches the figure it rounds in any scale ("$391.0
+billion" = 391,035 in millions), a percentage only matches a percentage, the sign is ignored (text states it in
+words), and dates, bare years, Item/form/quarter names and passage ids are not figures; a value given for a "not
+reported" trap; fiscal_year or company different from the gold item's; a cited passage id the run was not given.
+Refused answers are not hallucination-checked.
+Output: eval/results/model_comparison.md (generated tables between markers + a hand-written interpretation
+that re-runs keep): accuracy per model × answer type and per category, counts and Wilson 95% intervals (n is
+10–48 per cell), hallucination checks (RAG vs closed-book), refusal precision/recall/rule, JSON validity, tokens,
+latency p50/p95, failure labels, human-vs-judge agreement (exact and Cohen's kappa). Per run:
+eval/results/scores/<run_id>.jsonl (every check per question).
+Grading sheet for W1-14: one blind sheet for all runs, eval/results/grading/grading_sheet.csv
+(key, task, question, gold_answer, model_answer, suggested_label, grader_1, grader_2, final, failure_label, note):
+task "grade" = every summary answer, "label" = every wrong answer; rows keyed and ordered by an opaque hash, the
+key -> run mapping in grading_key.csv (graders do not open it). Re-running the scorer keeps every grade and label
+already entered; a graded row no longer needed stays as task "stale". Grades are 0/1/2, labels from §2.7.
+LLM-as-judge scores for summaries are imported from grading/judge_<run_id>.jsonl ({"id", "score", "reason"}),
+written with the runner (W1-13).
 
 2.7 Failure taxonomy (fixed labels; one per wrong answer)
 ---------------------------------------------------------

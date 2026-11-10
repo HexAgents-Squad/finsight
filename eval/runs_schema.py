@@ -1,0 +1,65 @@
+"""The model-comparison runs files (docs/week1_plan.txt §2.4-2.5): written by the runner (W1-13), read by the scorer
+(W1-08, eval/score_answers.py). Both sides use these models, so the format cannot drift between them.
+
+    eval/results/model_runs/<run_id>.jsonl       one RunRecord per question (80 gold + 22 refusal tests)
+    eval/results/model_runs/<run_id>.meta.json   one RunMeta
+
+`parsed` is the B0 answer when the reply was valid JSON for B0Answer (after at most one retry), else null.
+"""
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from eval.schema import RefusalRule
+
+RUN_ID_PATTERN = r"^M\d+_[a-z0-9.\-]+_(rag|closed)_think-(on|off)_[a-z0-9.\-]+$"   # M1_qwen3-8b_rag_think-off_b0-v1
+PID_PATTERN = r"^P\d+$"
+
+
+class B0Answer(BaseModel):
+    """The zero-shot answer format (week1_plan §2.4). Strict, as the model must produce exactly this."""
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    answer: str
+    value: float | int | None = None
+    unit: str | None = None
+    company: str | None = None
+    fiscal_year: int | None = None
+    citations: list[str] = []
+    refused: bool
+    refusal_rule: RefusalRule | None = None
+
+
+class RunRecord(BaseModel):
+    """One question's result. `error` is set when no reply was obtained (endpoint failure after retries)."""
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    id: str
+    run_id: str = Field(pattern=RUN_ID_PATTERN)
+    raw_reply: str | None
+    parsed: B0Answer | None
+    json_valid: bool
+    retries: int = Field(ge=0)
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    latency_s: float = Field(ge=0)
+    cached: bool
+    error: str | None = None
+
+
+class RunMeta(BaseModel):
+    """The run's settings. `context` decides what counts as evidence when scoring: the pack's passages for
+    "rag", nothing but the gold answer for "closed" (a closed-book model saw no passages)."""
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    run_id: str = Field(pattern=RUN_ID_PATTERN)
+    model: str = Field(min_length=1)
+    endpoint: Literal["hosted", "local"]
+    context: Literal["rag", "closed"]
+    thinking: bool
+    temperature: float
+    max_tokens: int = Field(gt=0)
+    prompt_version: str = Field(min_length=1)
+    context_pack: str = Field(min_length=1)          # e.g. "eval/results/context_pack_gold.jsonl (cp-v1)"
