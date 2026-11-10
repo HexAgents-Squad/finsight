@@ -28,8 +28,9 @@ models rather than retrieval (the report must say so):
 A filter outside config/companies.yaml (a company, or a year/quarter not indexed) gets no search, as
 search_filings would answer out_of_corpus; it is listed in `out_of_corpus`. A question naming no company gets no
 passages. `history` holds the earlier turns of a follow-up, oldest first, with their GOLD answers (the same
-history for every model). `evidence_in_pack` says whether a passage comes from one of the item's gold sources (null without
-sources), so a wrong answer can be told apart: evidence missing (retrieval) vs evidence ignored (model).
+history for every model). `evidence_in_pack` says whether a passage comes from one of the item's gold sources
+(null without sources), so a wrong answer can be told apart: evidence missing (retrieval) vs evidence ignored
+(model).
 
 Deterministic: same index, chunks and inputs -> byte-identical files (no timestamps; the meta file records the
 sha256 of the questions file, chunks_C3.jsonl and the C3 BM25 index instead of a commit; the dense collection is
@@ -115,7 +116,7 @@ QUESTION_FILTERS: dict[str, tuple[tuple[str, ...], tuple[int, ...], str | None]]
 # Annotations that are a reading of the question, not its literal words; the annotation test allows exactly these
 ANNOTATION_READINGS: dict[str, str] = {
     "RF21": "'fiscal 2024 Q4': Q4 is not derived (spec §4.2), so the fiscal 2024 annual report is searched",
-    "RF22": "'latest fiscal year' = FY2025, the latest indexed 10-K (spec §4.3; the test's rationale)",
+    "RF22": "'latest fiscal year' = FY2025, the latest indexed 10-K (spec §4.3; RF22's own rationale)",
 }
 
 TokenCounter = Callable[[str], int]
