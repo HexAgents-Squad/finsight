@@ -104,23 +104,44 @@ Limits of the provided endpoint: one active request per team key (for the whole 
   FinSightError (service unavailable); the openai SDK's own retries are off (max_retries=0) so they do not stack.
 - Disk cache data/cache/llm/ (git-ignored), key = sha256(model, messages, temperature, max_tokens, thinking,
   sample index): a re-run of an evaluation is identical and costs no calls; client.usage counts cache hits.
-- Thu (full version): count_tokens (Qwen tokenizer, chars/3.5 fallback); a prompt + max_tokens over 8,192 is
-  refused before sending; fit_context(chunks, budget) trims passages.
+- Thu (full version): core.tokens.count_tokens (exists since W1-12: the pinned Qwen3 tokenizer, exact against
+  the endpoint) checks prompt + max_tokens <= 8,192 before sending. No characters-per-token fallback: filing
+  text measured 2.2 (tables) to 4.6 (prose) characters per token, so a fixed ratio overruns on tables.
 - Team etiquette: announce long runs in the team chat; key freeze for the evaluation runs Tue 21:00 – Wed 07:00.
 
-2.3 Context pack (W1-12, planned): eval/results/context_pack_gold.jsonl, context_pack_refusal.jsonl
-------------------------------------------------------------------------------------------------------
-One line per question, built once so every model sees exactly the same text and no run needs the index:
-    {"id": "B01", "question": "...", "history": [{"question": "...", "answer": "..."}],
-     "passages": [{"pid": "P1", "chunk_id": "MSFT_10-K_2024_Item8_C3_0012",
-                   "citation": "[MSFT 10-K FY2024 · Item 8]", "text": "..."}],
-     "n_tokens": 3870}
-- history: the previous turn for F items (previous_turn_id), else [].
-- Retrieval: C3 hybrid with ORACLE company + fiscal-year filters taken from the gold item, so the comparison
-  measures the model, not retrieval (the report says so); passages trimmed to ~4,000 tokens.
-- Refusal tests: passages where the question names an in-corpus company and year, else [].
-- The settings (variant, retriever, filters, k, token budget, embedding model, git commit) go in a sidecar
-  context_pack_gold.meta.json; a re-run must produce byte-identical files.
+2.3 Context pack (W1-12, implemented: python eval/context_pack.py): eval/results/context_pack_gold.jsonl,
+    context_pack_refusal.jsonl (committed, so no run needs the index)
+--------------------------------------------------------------------------------------------------------------
+One line per question, built once so every model sees exactly the same text:
+    {"id": "A01", "question": "...", "history": [{"question": "...", "answer": "..."}],
+     "filters": [{"ticker": "AAPL", "fiscal_year": 2024}], "out_of_corpus": [],
+     "passages": [{"pid": "P1", "chunk_id": "AAPL_10-K_2024_Item8_C3_0019", "citation": "[AAPL 10-K FY2024 · Item 8]",
+                   "ticker": "AAPL", "form": "10-K", "fiscal_year": 2024, "fiscal_period": "FY", "item": "Item 8",
+                   "text": "..."}],
+     "n_tokens": 3091, "evidence_in_pack": true}
+- Prompt rendering: eval.context_pack.render_passages ("[P1] <citation>\n<text>", blocks joined by a blank
+  line). The B0 runner must render with it: n_tokens is the exact Qwen3 count of that block (core/tokens.py,
+  pinned tokenizer; equal to the endpoint's count) and is at most 4,000.
+- history: the earlier turns of an F item with their GOLD answers (the same history for every model), else [].
+- Retrieval: C3 hybrid, one search per filter (10 hits each), rankings interleaved, then passages in rank order
+  while the block fits 4,000 tokens. Filters are ORACLE: the gold item's companies x fiscal years, so the
+  comparison measures the model, not retrieval (the report says so). Questions that list none (G01-G07, the 22
+  refusal tests) use QUESTION_FILTERS, annotated by hand from the question text; a test checks the annotation
+  names exactly the companies, years and quarters the question does, except two readings of the spec: RF22
+  "latest fiscal year" = FY2025 (§4.3) and RF21 "fiscal 2024 Q4" = the fiscal 2024 annual report (§4.2).
+- A filter outside config/companies.yaml (company, or year/quarter not indexed) gets no search, as
+  search_filings answers out_of_corpus; it is listed in out_of_corpus. A question naming no company gets [].
+- evidence_in_pack: a passage comes from one of the item's gold sources (null without sources); it separates
+  "evidence missing" (retrieval) from "evidence ignored" (model) in the failure analysis.
+- Sidecar <pack>.meta.json: version, retrieval settings, tokenizer revision, counts and the sha256 of the inputs
+  (questions file, chunks_C3.jsonl, the C3 BM25 index), no timestamps; a re-run produces byte-identical files.
+  A test re-derives every record field that needs no index (question, history, filters, out_of_corpus,
+  citations, evidence, meta counts) from the current code and inputs, so a stale committed pack fails CI.
+- Built 10 Nov (gold-v1): 77/80 gold questions have passages (G03 Netflix, G06, G07 have none); evidence in the
+  pack for 69/73 questions with gold sources (B12, B13, B15, D09: the Item 8 statement is outranked by MD&A or
+  10-Q text that repeats the figures, the known ADR-013 pattern W1-05 works on); for the 77 questions with
+  passages, median 10 passages and 3,091 tokens, maximum 3,997. Refusal tests: 15/22 with passages (none for RF03, RF04, RF05, RF07: out of corpus;
+  RF10-RF12: no company named).
 
 2.4 B0 answer format (W1-13, planned; prompt in agent/prompts/b0_zero_shot.md)
 ------------------------------------------------------------------------------
