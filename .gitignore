@@ -2,6 +2,11 @@
 .env
 .env.*
 !.env.example
+# TLS certificates for the hosted endpoint (group-specific; keep them out of the repo). Root-level patterns
+# only, so a test fixture certificate under tests/ can still be committed.
+certs/
+/*.crt
+/*.pem
 
 # Downloaded / generated data (keep only the folder placeholders)
 data/raw/*

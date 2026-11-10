@@ -4,6 +4,7 @@ pydantic>=2.6,<3
 pyyaml>=6.0
 openai>=1.55             # core/llm.py tests use fake clients, but import the SDK (<1.55 breaks with httpx 0.28)
 httpx>=0.27              # tests build openai error objects from httpx requests
+certifi                  # tests use its PEM bundle as a stand-in CA file (already an httpx dependency)
 pydantic-settings>=2.2
 requests>=2.31           # ingest/edgar.py (tests use a fake session)
 beautifulsoup4>=4.12.3   # ingest/sections.py

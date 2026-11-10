@@ -81,13 +81,18 @@ fakes so they never wait.
 =============================================
 As in Week 0, contracts let everyone work in parallel against fakes and sample files.
 
-2.1 Endpoint settings (W1-01, planned; .env only)
--------------------------------------------------
+2.1 Endpoint settings (W1-01, implemented; .env only; setup in LOCAL_SETUP.md "Hosted endpoint")
+---------------------------------------------------------------------------------------------------
     LLM_BASE_URL=<group URL from the learner guide>     LLM_API_KEY=<team key>     LLM_MODEL=Qwen/Qwen3-8B
     LLM_CA_CERT=<path to the group .crt>                LLM_ENABLE_THINKING=false
 - HTTPS verification uses the group CA certificate (an ssl context passed to httpx); it is never switched off.
-- Qwen3 "thinking" is off by default (chat_template_kwargs enable_thinking=false, or "/no_think" in the prompt;
-  W1-03 confirms which the endpoint honours). Any <think>…</think> block is stripped before JSON parsing.
+- Qwen3 "thinking" is off by default, sent as chat_template_kwargs.enable_thinking (empty LLM_ENABLE_THINKING =
+  not sent; Ollama ignores the field). core.llm.strip_thinking removes every <think>…</think> block from
+  replies and before JSON extraction. Measured on 10 Nov: the endpoint ignores the switch (enable_thinking
+  true/false, no switch and the "/think" soft switch gave identical replies with no reasoning), i.e. it serves
+  Qwen3-8B with thinking off; W1-03 records this in ADR-016.
+- The certificate is the group's CA (Caddy local root, valid for years); the server certificate is renewed every
+  few hours, so never pin it. Relative LLM_CA_CERT paths start at the repo root; certs/ is git-ignored.
 - The key, the URL and the certificate stay out of git, logs, screenshots and chat outside the team.
 - Embeddings stay local (the endpoint has none): EMBED_BACKEND=sentence-transformers, as the index was built.
 
@@ -182,14 +187,16 @@ W1-08 suggests a label automatically where it can (e.g. wrong year, malformed ou
 | M1 must  | Qwen3-8B (endpoint), thinking off    | RAG (context pack) | how good is the model we build on        |
 | M2 must  | Llama-3.2-3B (local Ollama, 8k ctx)  | RAG (same pack)    | a smaller open model on identical inputs |
 | M3 should| Qwen3-8B, thinking off               | closed-book        | how much it invents without retrieval    |
-| M4 could | Qwen3-8B, thinking on                | RAG                | does reasoning help short or summary     |
+| M4       | Qwen3-8B, thinking on: DROPPED       | RAG                | not possible: the endpoint ignores the   |
+|          |                                      |                    | thinking switch (§2.1); S2 chain-of-     |
+|          |                                      |                    | thought in W1-09 covers reasoning        |
 +----------+--------------------------------------+--------------------+------------------------------------------+
 Same for every run: prompt B0, temperature 0, max_tokens 1,024, no tools (the Week 2 agent adds tools; this is
 its baseline), one retry on invalid JSON.
 Ollama gotcha (M2): the default context window (2–4k tokens) silently truncates our ~5k-token prompts. Create
 a model with "PARAMETER num_ctx 8192" in a Modelfile (or set OLLAMA_CONTEXT_LENGTH=8192) and check on one long
 prompt that the reply uses the last passage.
-Budget: M1 and M3 102 calls each, M4 80, judge ~40, all through the cache, one at a time; M2 runs locally in
+Budget: M1 and M3 102 calls each, judge ~40, all through the cache, one at a time; M2 runs locally in
 parallel (no key; ~1–2 h on a CPU).
 Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
 small n per cell, a single frozen prompt.
@@ -248,7 +255,7 @@ W1-11 (Alok): one-page and detailed Week 1 notes generated from repo data; porta
             by 15:00  W1-12 context pack (80 gold + 22 refusal tests)            Anirudh (Alok)
             by 17:00  W1-13 runner + B0 frozen; Ollama 8k-context model ready    Alok (Giridharan)
             by 20:00  W1-08 automatic scoring, tested on fake replies            Amresh (Alok)
-            night     runs: M1 → M3 → M4 on the endpoint, M2 locally in parallel Alok
+            night     runs: M1 → M3 on the endpoint, M2 locally in parallel      Alok
     Wed 11  09–12     W1-14 summary grading (2 graders) + failure labels         Chandra Shekhar + Amresh
             12–14     tables generated, interpretation written                   Alok
             15:00     W1-15 report sent to the mentor                            Alok
