@@ -185,7 +185,8 @@ def test_entity_answers(given, correct, label):
     ("G08", answer(refused=True, refusal_rule="R3"), False, "over_refusal"),
     ("G01", answer(refused=True, refusal_rule="R1"), True, None),
     ("G01", answer(answer="Yes, buy it."), False, "under_refusal"),
-    ("G01", answer(refused=True, refusal_rule="R4"), False, None),               # right decision, wrong rule
+    ("G01", answer(refused=True, refusal_rule="R4"), False, "wrong_refusal_rule"),  # right decision, wrong rule
+    ("RF14", answer(refusal_rule="R3"), False, "wrong_refusal_rule"),             # partial with the wrong rule
     ("RF14", answer(refusal_rule="R1"), True, None),                              # partial: answers facts, names rule
     ("RF14", answer(refused=True, refusal_rule="R1"), False, "over_refusal"),
     ("RF14", answer(), False, "under_refusal"),                                   # answered the advice part too
@@ -283,7 +284,7 @@ def test_invalid_grades_or_labels_are_rejected(tmp_path):
         w = csv.DictWriter(f, fieldnames=sa.SHEET_COLUMNS, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
-    with pytest.raises(ValueError, match="grades must be 0/1/2"):
+    with pytest.raises(ValueError, match=r"line 2, column final: '3' is not 0, 1 or 2"):
         sa.read_sheet(path)
 
 
@@ -669,3 +670,74 @@ def test_another_figure_in_the_wrong_scale_is_not_a_unit_confusion():
     s = score_one("A12", answer(value=12535, unit="USD"))
     assert s["correct"] is False and s["suggested_label"] == "wrong_line_item"
     assert score_one("A12", answer(value=12455, unit="USD thousands"))["suggested_label"] == "unit_confusion"
+
+
+# --- added for W1-14: sheets as spreadsheets save them, the graders' agreement ----------------------------------
+
+def excel_sheet(tmp_path, edit=None):
+    sa.write_sheet(sa.sheet_rows(runs_with_one_wrong(), QUESTIONS), tmp_path)
+    path = tmp_path / sa.SHEET_NAME
+    rows = list(csv.reader(path.open(encoding="utf-8")))
+    if edit:
+        edit(rows)
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f, lineterminator="\r\n").writerows(rows)
+    return path
+
+
+def test_what_a_spreadsheet_adds_harmlessly_is_undone(tmp_path):
+    def edit(rows):
+        col = {c: i for i, c in enumerate(rows[0])}
+        rows[1][col["grader_1"]] = " 2 "
+        rows[1][col["failure_label"]] = "Invented_Number "
+        for r in rows:
+            r.append("")                                         # an empty column after the last one
+        rows.append([""] * len(rows[0]))                         # an empty row at the end
+    rows = sa.read_sheet_rows(excel_sheet(tmp_path, edit))
+    assert len(rows) == 13 and rows[0]["grader_1"] == "2" and rows[0]["failure_label"] == "invented_number"
+
+
+@pytest.mark.parametrize("column, value, message", [
+    ("final", "2.0", "column final: '2.0' is not 0, 1 or 2"),
+    ("failure_label", "invented number", "column failure_label: 'invented number' is not one of"),
+])
+def test_a_bad_cell_is_named_by_line_column_and_value(tmp_path, column, value, message):
+    def edit(rows):
+        rows[3][rows[0].index(column)] = value
+    with pytest.raises(ValueError, match=f"line 4, {message}"):
+        sa.read_sheet_rows(excel_sheet(tmp_path, edit))
+
+
+def test_a_sheet_saved_as_plain_csv_says_how_to_save_it(tmp_path):
+    path = excel_sheet(tmp_path)
+    path.write_bytes(path.read_bytes().replace(b"\xef\xbb\xbf", b"") + "note – dash\r\n".encode("cp1252"))
+    with pytest.raises(ValueError, match="CSV UTF-8"):
+        sa.read_sheet_rows(path)
+
+
+def test_a_filled_extra_column_is_still_an_error(tmp_path):
+    def edit(rows):
+        for r in rows:
+            r.append("x")
+    with pytest.raises(ValueError, match="columns changed"):
+        sa.read_sheet_rows(excel_sheet(tmp_path, edit))
+
+
+def test_a_human_decided_entity_graded_wrong_is_labelled_wrong_company():
+    recs = perfect_run(D01=answer(company=None, answer="Apple 93,736 vs Microsoft 88,136."))
+    scored = sa.score_run(meta(), recs, QUESTIONS, PACKS, MATCHERS)
+    d01 = next(s for s in scored if s["id"] == "D01")
+    sa.apply_grades(scored, {d01["sheet_key"]: {"final": "0", "failure_label": "", "grader_1": "0",
+                                                 "grader_2": "1"}}, {})
+    assert d01["correct"] is False and d01["failure_label"] == "wrong_company" and d01["grader_grades"] == [0, 1]
+
+
+def test_the_report_shows_the_graders_agreement_and_the_judges():
+    _, _, scored = runs_with_one_wrong()[0]
+    keys = {x["id"]: x["sheet_key"] for x in scored}
+    entered = {keys["E01"]: {"final": "2", "grader_1": "2", "grader_2": "2", "failure_label": ""},
+               keys["E02"]: {"final": "1", "grader_1": "1", "grader_2": "2", "failure_label": ""}}
+    sa.apply_grades(scored, entered, {"E01": 2, "E02": 2})
+    text = sa.report([(meta(), scored)])
+    assert "| graders' exact agreement (independent grades) | 1/2 |" in text
+    assert "| final grade vs judge: exact agreement | 1/2 |" in text

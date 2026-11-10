@@ -12,6 +12,7 @@
 | `judge_summaries.py` | W1-13: LLM-as-judge grades (0/1/2) for the summary answers → `results/grading/judge_<run_id>.jsonl` |
 | `runs_schema.py` | W1-08: the runs-file format (B0 answer, run record, run meta) shared by the runner (W1-13) and the scorer |
 | `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (docs/week1_plan.txt §2.6) |
+| `grading.py` | W1-14: tools for the human grading (guide: `GRADING.md`): a blind copy of the sheet per grader, a passages handout, the merge of both graders' copies, and `results/failure_examples.md` |
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
 | `injection_tests.jsonl` | 12 prompt-injection tests: text planted in a filing passage + the question + what must not appear in the answer |
@@ -83,6 +84,7 @@ Re-run it after graders fill in `results/grading/grading_sheet.csv` (W1-14): sum
 there replaces the suggested one. Re-running never erases what was entered, and a grade never moves to a changed
 answer (it becomes a "stale" row). Graders work from the sheet only; `grading_key.csv` says which model wrote
 each answer. Save from Excel as "CSV UTF-8" so names with accents survive.
+The grading workflow (copies, handout, merge, examples) and the graders' instructions are in [`GRADING.md`](GRADING.md).
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
