@@ -136,6 +136,7 @@ def test_tolerance_is_the_items_own():
     ("C12", answer(value=16.3, unit="%"), "arithmetic_slip"),                      # gold -16.3: sign flipped
     ("A01", answer(value=123456, unit="USD millions"), "invented_number"),
     ("A01", answer(answer="not reported", value=None), "wrong_line_item"),
+    ("A01", answer(answer="Not directly reported in the passages.", value=None), "wrong_line_item"),  # M1 B14
     ("A01", answer(value=None), "malformed_output"),
     ("A01", answer(refused=True, refusal_rule="R3"), "over_refusal"),
 ])
@@ -458,9 +459,19 @@ def test_a_decrease_stated_in_words_accepts_an_unsigned_value():
 @pytest.mark.parametrize("text", ["JPMorgan does not report a gross profit line.",
                                   "Gross profit is not separately reported by JPMorgan.",
                                   "Not disclosed: banks show net revenue instead.",
-                                  "JPMorgan doesn't report gross profit."])
+                                  "JPMorgan doesn't report gross profit.",
+                                  "Gross profit is not directly reported in the provided passages.",
+                                  "JPMorgan does not explicitly disclose gross profit.",
+                                  "JPMorgan did not report gross profit in fiscal 2024.",       # M3 G10's wording
+                                  "Banks don't report a gross profit line."])
 def test_trap_answers_in_other_words(text):
     assert score_one("G08", answer(answer=text))["correct"] is True
+
+
+def test_a_trap_answer_that_works_the_figure_out_gets_no_credit():
+    s = score_one("G08", answer(answer="Gross profit is not directly reported; it can be derived as net revenue "
+                                       "minus expenses = $45.2 billion."))
+    assert s["correct"] is False and s["suggested_label"] == "ignored_not_reported"
 
 
 def test_numbers_from_the_conversation_history_are_supported():
@@ -569,13 +580,16 @@ def test_the_sheet_hides_passage_markers_and_reasoning():
     assert sa.display_answer(raw) == "not json"
 
 
-def test_latency_percentiles_leave_out_cached_replies():
-    recs = [r.model_copy(update={"cached": True, "latency_s": 0.0}) if n % 2 else r.model_copy(update={"latency_s": 3.0})
+def test_latency_counts_answered_calls_cached_or_not_but_not_errors():
+    """Cached replies carry the original request's time (core.llm replays it); error rows have no reply."""
+    recs = [r.model_copy(update={"cached": True, "latency_s": 3.0}) if n % 2 else r.model_copy(update={"latency_s": 3.0})
             for n, r in enumerate(perfect_run())]
+    recs[0] = recs[0].model_copy(update={"parsed": None, "json_valid": False, "error": "RateLimitError: x",
+                                         "latency_s": 99.0})
     scored = sa.score_run(meta(), recs, QUESTIONS, PACKS, MATCHERS)
     sa.apply_grades(scored, {}, {})
     text = sa.report([(meta(), scored)])
-    assert "| latency p50 / p95 (s, uncached calls) | 3.0 / 3.0 |" in text and "| cached replies | 51/102 |" in text
+    assert "| latency p50 / p95 (s, answered calls) | 3.0 / 3.0 |" in text and "| cached replies | 51/102 |" in text
 
 
 @pytest.mark.parametrize("text, found", [
@@ -588,3 +602,70 @@ def test_latency_percentiles_leave_out_cached_replies():
 ])
 def test_what_counts_as_a_figure(text, found):
     assert [f.text for f in sa.figures(text)] == found
+
+
+# --- added after the review of PR #21 ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value, step", [(12535, 1.0), (62600000000, 1e8), (391.04, 0.01), (391.0, 1.0), (0, 1.0),
+                                         (-1250, 10.0)])
+def test_printed_step(value, step):
+    assert sa.printed_step(value) == step
+
+
+@pytest.mark.parametrize("given, correct", [
+    (answer(value=391035, unit="USD millions"), True),
+    (answer(value=391.0, unit="USD billions"), True),                   # rounded at the precision printed
+    (answer(value=391.04, unit="USD billions"), True),
+    (answer(value=391035000000, unit="USD"), True),
+    (answer(value=391000, unit="USD millions"), True),                  # whole thousands of millions: rounding
+    (answer(value=391100, unit="USD millions"), False),                 # 0.02% away, but a different figure
+    (answer(value=389.5, unit="USD billions"), False),
+])
+def test_a_reported_figure_must_match_at_its_printed_precision(given, correct):
+    s = score_one("A01", given)                                         # gold 391,035 USD millions
+    assert s["correct"] is correct
+    if not correct:
+        assert "not the reported figure" in s["reason"] or "vs gold" in s["reason"]
+
+
+def test_the_next_quarters_figure_is_a_wrong_line_item_not_a_rounding():
+    s = score_one("A12", answer(value=12535, unit="USD millions"))      # Q2 revenue for the Q3 question (measured)
+    assert s["correct"] is False and s["suggested_label"] == "wrong_line_item"
+    assert s["reason"].endswith("close, but not the reported figure at the precision given")
+
+
+def test_a_computed_figure_keeps_its_tolerance():
+    gold = QUESTIONS["B01"].gold_value                                  # a ratio: rounding of the inputs allowed
+    assert score_one("B01", answer(value=round(gold - 0.1, 1), unit="%"))["correct"] is True
+
+
+def test_a_company_field_and_an_answer_naming_different_companies_go_to_the_graders():
+    s = score_one("D10", answer(company="Alphabet Inc.", answer="Microsoft"))       # M2 D10 (measured)
+    assert s["correct"] is None and "a human decides" in s["reason"]
+
+
+def test_a_sheet_that_cannot_be_written_leaves_sheet_and_key_as_they_were(tmp_path, monkeypatch):
+    from pathlib import Path
+    runs = runs_with_one_wrong()
+    sa.write_sheet(sa.sheet_rows(runs, QUESTIONS), tmp_path)
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    real_replace = Path.replace
+
+    def locked(self, target):
+        if Path(target).name == sa.SHEET_NAME:
+            raise PermissionError("[WinError 5] Access is denied")       # the sheet is open in Excel
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", locked)
+    changed = [r | {"key": "kchanged0001", "_id": "A02"} if i == 0 else r
+               for i, r in enumerate(sa.sheet_rows(runs, QUESTIONS))]
+    with pytest.raises(PermissionError):
+        sa.write_sheet(changed, tmp_path)
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before   # no .part left, key untouched
+
+
+def test_another_figure_in_the_wrong_scale_is_not_a_unit_confusion():
+    # M2 A12 (measured): the next quarter's 12,535 with unit "USD" is a wrong figure first, a scale slip second
+    s = score_one("A12", answer(value=12535, unit="USD"))
+    assert s["correct"] is False and s["suggested_label"] == "wrong_line_item"
+    assert score_one("A12", answer(value=12455, unit="USD thousands"))["suggested_label"] == "unit_confusion"

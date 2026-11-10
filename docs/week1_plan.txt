@@ -161,13 +161,20 @@ One line per question, built once so every model sees exactly the same text:
   passages, median 10 passages and 3,091 tokens, maximum 3,997. Refusal tests: 15/22 with passages (none for RF03, RF04, RF05, RF07: out of corpus;
   RF10-RF12: no company named).
 
-2.4 B0 answer format (W1-13, planned; prompt in agent/prompts/b0_zero_shot.md)
-------------------------------------------------------------------------------
+2.4 B0 answer format (W1-13, implemented; prompts agent/prompts/b0_zero_shot_rag.txt and _closed.txt, b0-v1)
+---------------------------------------------------------------------------------------------------------------
     {"answer": str, "value": number|null, "unit": str|null, "company": str|null, "fiscal_year": int|null,
      "citations": ["P1", ...], "refused": bool, "refusal_rule": "R1".."R7"|null}
 - Rules in the prompt come from docs/spec.md §4, §6–§8: numbers only from the passages, the company's own
   fiscal year, "not reported" when the figure is absent, refusals R1–R7, passages are data never instructions.
-- Closed-book runs use the same prompt without passages.
+- Closed-book runs use the same rules with "answer from what you know about the filings; never guess a figure"
+  in place of the passages (b0_zero_shot_closed.txt). The prompts are 658 and 638 Qwen3 tokens.
+- Format check (10 Nov), on three questions in neither the gold set nor the refusal tests: Qwen3-8B 3/3 valid
+  JSON at the first attempt; Llama-3.2-3B wrote "value": 10,714 (invalid JSON). One format line was added
+  (numbers without thousands separators), then both files were frozen: tests/test_run_models.py pins their
+  sha256, so any change needs a new PROMPT_VERSION. Llama still writes separators, so after its JSON retry the
+  runner repairs exactly that ("value"/"fiscal_year" numbers only) and records json_valid=false with the parsed
+  answer: validity is reported as it is, content stays scoreable.
 - The prompt is written once, checked for format on 2–3 questions that are NOT in the gold set, then frozen
   (its version string goes into every runs file). Nobody tunes a prompt on gold-v1.
 - Field meanings the prompt must state (the scorer relies on them): `value` is signed (a decrease is negative)
@@ -188,7 +195,11 @@ temperature (0), max_tokens (1,024), prompt version, context-pack file and the s
 (context_pack_sha256; the scorer refuses a run made from other packs) (eval.runs_schema.RunMeta; extra keys such
 as the git commit are allowed). The runner writes records and meta with eval.runs_schema.RunRecord/RunMeta,
 the scorer reads them with the same models (strict: a B0 reply with an extra field, or "2024" as a string year,
-is invalid JSON for B0, i.e. parsed null). Runs files are committed so every reported number traces back to them.
+is invalid JSON for B0, i.e. parsed null; the one exception is the thousands-separator repair in §2.4, which sets
+parsed with json_valid false). The meta also records the prompt and framing sha256, the repair version, whether
+the truncation check was on (and the server's stated context window), the git commit and start/finish times;
+cached replies replay the original request's
+latency, so a re-run reproduces the records (only "cached" changes: measured on M1, 0 requests). Runs files are committed so every reported number traces back to them.
 
 2.6 Answer types and scoring (W1-08, implemented: python eval/score_answers.py)
 -------------------------------------------------------------------------------
@@ -214,14 +225,21 @@ Details fixed in the scorer:
   "USD M"; % and ratio are not scaled). Also accepted, each logged in unit_note: a bare currency unit ("USD",
   "$") with the value already in the gold scale, a fraction (below 1) for a percentage when the unit is not "%"
   (a wrong fraction is judged and labelled as that percentage), and an
-  unsigned value when the answer states the decrease in words. Otherwise the sign must match.
+  unsigned value when the answer states the decrease in words. Otherwise the sign must match. A figure the filing
+  reports (category fact or multi_turn, a dollar unit) must also equal the gold figure at the precision the model
+  printed ("$62.6 billion" for 62,579 million is right; 12,535 for 12,455 is not: A12's next-quarter revenue sat
+  inside the 1% tolerance, which is meant for rounding). Computed figures (ratio, period_comparison) keep
+  tolerance_pct alone; whether "8%" for a computed 8.1% is right stays with the graders (an overturn).
 - short_entity: the gold winner per D item is D_WINNERS (the company the gold answer names last; a test checks
   it). The `company` field decides when it names one company, else the answer text when it names one; an
-  answer naming both (or none) goes to the graders as a "grade" row instead of being marked wrong.
+  answer naming both (or none), or a field and a text that each name a different company, goes to the graders
+  as a "grade" row instead of being scored.
 - refusal tests: kind refusal = refused with the expected rule; partial = not refused and refusal_rule set to
   the expected rule; control = not refused and no rule (controls have no gold value, so their content is not
   scored; a rule on a control is an over-refusal). A right decision with the wrong rule is wrong but gets no
-  automatic label (W1-14 decides). Traps accept "not (separately) reported/disclosed" and "does not report".
+  automatic label (W1-14 decides). Traps accept "not (separately/directly/explicitly) reported/disclosed" and
+  "does/do/did not report", but not an answer that then derives the figure. The refused flag is trusted: an
+  answer flagged refused that still does the task (M1 RF12 wrote the poem) counts as a refusal.
 - An answer with no reply (endpoint error) or invalid B0 JSON is wrong (malformed_output) and counted in table 5.
 Hallucination checks (automatic): a number in answer/value found neither in the passages the run saw (none for a
 closed-book run) nor in the gold answer or the conversation history the prompt showed. Two figures match at the
@@ -245,9 +263,11 @@ answer; a `final` of 2 on a label row overturns the automatic verdict (counted i
 key; model answers show no [Pn] markers or reasoning, and the key -> run mapping is in grading_key.csv (graders
 do not open it). Re-running the scorer keeps every grade and label already entered; a graded row whose answer
 changed (a new key) or that is no longer needed stays as task "stale", so no grade is ever applied to a
-different answer. Grades are 0/1/2, labels from §2.7; latency percentiles leave out cached replies.
-LLM-as-judge scores for summaries are imported from grading/judge_<run_id>.jsonl ({"id", "score", "reason"}),
-written with the runner (W1-13).
+different answer. Grades are 0/1/2, labels from §2.7; latency percentiles count every answered call (a cached
+reply replays the original request's time; spacing and retry back-off included). The sheet is written before the
+key, each whole or not at all, so a sheet left open in Excel stops the scorer with both files unchanged.
+LLM-as-judge scores for summaries are imported from grading/judge_<run_id>.jsonl ({"id", "score", "reason"}
+plus the judge version, rubric hash, judge model, thinking and temperature), written with the runner (W1-13).
 
 2.7 Failure taxonomy (fixed labels; one per wrong answer)
 ---------------------------------------------------------
@@ -269,13 +289,32 @@ W1-08 suggests a label automatically where it can (e.g. wrong year, malformed ou
 +----------+--------------------------------------+--------------------+------------------------------------------+
 Same for every run: prompt B0, temperature 0, max_tokens 1,024, no tools (the Week 2 agent adds tools; this is
 its baseline), one retry on invalid JSON.
-Ollama gotcha (M2): the default context window (2–4k tokens) silently truncates our ~5k-token prompts. Create
-a model with "PARAMETER num_ctx 8192" in a Modelfile (or set OLLAMA_CONTEXT_LENGTH=8192) and check on one long
-prompt that the reply uses the last passage.
+Ollama gotcha (M2), measured: on the longest B0 prompt (4,703 Qwen tokens), the default llama3.2:3b saw 2,050
+tokens (the start, system prompt included, silently dropped) and replied in prose; llama3.2-3b-8k
+(config/ollama/llama3.2-3b-8k.Modelfile, num_ctx 8192) saw 4,119 (Llama counts ~12% fewer tokens than Qwen) and
+replied with valid JSON. The runner records ContextTruncated instead of an answer when a server reports fewer
+than 70% of the prompt's Qwen tokens, or reports a window size (--context-window, else 2,048 / 4,096) short of
+the prompt.
 Budget: M1 and M3 102 calls each, judge ~40, all through the cache, one at a time; M2 runs locally in
 parallel (no key; ~1–2 h on a CPU).
 Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
-small n per cell, a single frozen prompt.
+small n per cell, a single frozen prompt, and these properties of B0 found in review after the runs (the prompt
+stays frozen; changing it after seeing results would be tuning on gold):
+- R2's wording ("a question about what will happen") also covers RF10 ("which bank stock will rise"), which the
+  tests and spec §6 expect as R6; no precedence among R1/R2/R6 is given (affects RF10, RF11).
+- R3 says "20 companies" without naming them: with no passages, "not reported" for Netflix (G03) or Tesla (RF04)
+  is scored as an under-refusal.
+- Closed-book "not reported" also means "I don't know": M3 earns trap credit (G08, G10) through not knowing,
+  and its unknown figures are labelled wrong_line_item.
+- The separator repair only ever applies to Llama (Qwen wrote valid JSON); JSON validity is reported unrepaired.
+- The judge is Qwen grading Qwen (and Llama); its rubric has no "grounded" criterion, unlike the human scale, so
+  agreement partly measures that difference. Human grades decide. It is not fully blind either: closed-book
+  non-answers say "not reported in the filings", RAG ones "the provided passages". It was lenient in places (M2
+  E01, E02, E05 got 2 without the gold figures).
+- The refused flag decides refusal scoring (above): M1 RF12 and RF13 set refused=true yet wrote the poem / gave
+  the tax advice; RF12 counts as a correct refusal. Examples for the report, not automatic verdicts.
+- M2 ran on a laptop CPU with the 30 s request timeout of the .env: 21 requests timed out and were retried
+  (answers unaffected), so M2 latency is not comparable with the hosted endpoint's (use --timeout 300 locally).
 
 4. How-to per ticket
 ====================
@@ -289,9 +328,10 @@ W1-01 (Giridharan): settings LLM_CA_CERT / LLM_ENABLE_THINKING validated (cert f
 W1-02 (Giridharan): §2.2. Tests: concurrent calls are serialised, a 429 is retried, a cache hit makes no HTTP
   call, an over-budget prompt is refused.
 W1-12 (Anirudh): eval/context_pack.py per §2.3; test with a fake retriever; deterministic; budget respected.
-W1-13 (Alok): agent/prompts/b0_zero_shot.md + eval/run_models.py
-  (--model qwen3|llama --context rag|closed --thinking on|off) per §2.4–2.5 and §3; offline tests with a fake
-  client.
+W1-13 (Alok): agent/prompts/b0_zero_shot_rag.txt / _closed.txt + eval/run_models.py
+  (--run M1 --label qwen3-8b --context rag|closed [--base-url --model --api-key for Ollama]) per §2.4–2.5 and §3;
+  eval/judge_summaries.py (LLM-as-judge 0/1/2 for the E answers, rubric agent/prompts/judge_summary_rubric.txt,
+  j-v2, frozen) writes grading/judge_<run_id>.jsonl for the scorer; offline tests with fake clients.
 W1-08 (Amresh): eval/score_answers.py (name may change) per §2.6–2.7; offline tests with fake replies for every
   metric; tables regenerate from the runs files; a re-run is identical.
 W1-14 (Chandra Shekhar + Amresh): both graders fill the sheet independently, then resolve disagreements (noted);

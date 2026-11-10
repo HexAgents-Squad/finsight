@@ -796,6 +796,18 @@ def test_an_identical_request_is_answered_from_the_cache(tmp_path):
     assert len(list(tmp_path.rglob("*.json"))) == 1 and not list(tmp_path.rglob("*.part"))
 
 
+def test_a_replayed_reply_reports_the_seconds_of_the_live_one(tmp_path):
+    llm = client(finished("OK"), LLM_CACHE_DIR=str(tmp_path))
+    first = run(llm.complete(USER))
+    second = run(llm.complete(USER))
+    entry = json.loads(next(tmp_path.rglob("*.json")).read_text(encoding="utf-8"))
+    assert first.seconds == second.seconds == entry["seconds"]
+    del entry["seconds"]                                     # written before seconds were recorded
+    next(tmp_path.rglob("*.json")).write_text(json.dumps(entry), encoding="utf-8")
+    old = run(llm.complete(USER))
+    assert old.cached and old.seconds >= 0 and len(llm.client.requests) == 1
+
+
 @pytest.mark.parametrize("change", [{"sample": 1}, {"temperature": 0.7}, {"model": "other-model"}])
 def test_a_different_request_is_not_a_cache_hit(tmp_path, change):
     llm = client(reply("a"), reply("b"), LLM_CACHE_DIR=str(tmp_path))

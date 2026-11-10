@@ -1,0 +1,24 @@
+{
+  "run_id": "M3_qwen3-8b_closed_think-off_b0-v1",
+  "model": "Qwen/Qwen3-8B",
+  "endpoint": "hosted",
+  "context": "closed",
+  "thinking": false,
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "prompt_version": "b0-v1",
+  "context_pack": "results/context_pack_gold.jsonl + context_pack_refusal.jsonl (cp-v1)",
+  "context_pack_sha256": {
+    "context_pack_gold.jsonl": "028cd87c5721dc5bb4058112746dc9d455d706a8064416f4f07cf1f51c77bca9",
+    "context_pack_refusal.jsonl": "2ed6aa48a069ca4662556c5d118cd59fc5d404f909eaf9f99e4bb8ea39ac6aba"
+  },
+  "prompt_sha256": "4c53a30ec2ba6d7e30bd9533fd482468ab6f83add72b454250d7113f7b9da485",
+  "framing_sha256": "a1b659cdd867f27b4b8e8609e6a24e6431ea092fb75679641e0bc932f2f8b023",
+  "json_retries": 1,
+  "repair": "separators-v1",
+  "truncation_check": true,
+  "context_window": null,
+  "git_commit": "d8dd86e2982928bc1a3e9167aaa96aeef39ad139",
+  "started": "2026-11-10T17:54:11+00:00",
+  "finished": "2026-11-10T17:54:13+00:00"
+}
