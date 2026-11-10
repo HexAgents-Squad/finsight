@@ -229,6 +229,8 @@ def test_an_error_without_any_usable_reply_stays_an_error():
     (4119, 4703, False),         # the 8k model, Llama's own count (measured)
     (0, 4703, False),            # no token count sent: unknown, not truncated
     (2050, 2000, False),         # a short prompt that happens to be near 2,048 is complete
+    (4100, 4100, False),         # the hosted endpoint's exact count: a complete prompt that is 4,100 tokens long
+    (4105, 4110, False),         # within the window slack of its own count: no shortfall, no cut
     (100, None, False),          # no expectation: no check
 ])
 def test_truncation_detection(seen, expected, cut):
@@ -371,3 +373,15 @@ def test_a_failed_write_leaves_no_temporary_file(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         rm.write_run([], meta, tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+# --- added after the review of PR #21 ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("qid", ["A01", "F01", "RF01"])
+def test_rag_and_closed_book_differ_only_in_the_passages(qid):
+    rag, closed = (rm.build_messages(RECORDS[qid], c, "S") for c in ("rag", "closed"))
+    assert rag[:-1] == closed[:-1]                                       # system prompt and earlier turns
+    assert rag[-1]["role"] == closed[-1]["role"] == "user"
+    assert rag[-1]["content"].startswith("Passages:\n")
+    assert rag[-1]["content"].endswith("\n\n" + closed[-1]["content"])
+    assert closed[-1]["content"] == f"Question: {RECORDS[qid]['question']}"

@@ -461,7 +461,9 @@ def test_a_decrease_stated_in_words_accepts_an_unsigned_value():
                                   "Not disclosed: banks show net revenue instead.",
                                   "JPMorgan doesn't report gross profit.",
                                   "Gross profit is not directly reported in the provided passages.",
-                                  "JPMorgan does not explicitly disclose gross profit."])
+                                  "JPMorgan does not explicitly disclose gross profit.",
+                                  "JPMorgan did not report gross profit in fiscal 2024.",       # M3 G10's wording
+                                  "Banks don't report a gross profit line."])
 def test_trap_answers_in_other_words(text):
     assert score_one("G08", answer(answer=text))["correct"] is True
 
@@ -600,3 +602,63 @@ def test_latency_counts_answered_calls_cached_or_not_but_not_errors():
 ])
 def test_what_counts_as_a_figure(text, found):
     assert [f.text for f in sa.figures(text)] == found
+
+
+# --- added after the review of PR #21 ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value, step", [(12535, 1.0), (62600000000, 1e8), (391.04, 0.01), (391.0, 1.0), (0, 1.0),
+                                         (-1250, 10.0)])
+def test_printed_step(value, step):
+    assert sa.printed_step(value) == step
+
+
+@pytest.mark.parametrize("given, correct", [
+    (answer(value=391035, unit="USD millions"), True),
+    (answer(value=391.0, unit="USD billions"), True),                   # rounded at the precision printed
+    (answer(value=391.04, unit="USD billions"), True),
+    (answer(value=391035000000, unit="USD"), True),
+    (answer(value=391000, unit="USD millions"), True),                  # whole thousands of millions: rounding
+    (answer(value=391100, unit="USD millions"), False),                 # 0.02% away, but a different figure
+    (answer(value=389.5, unit="USD billions"), False),
+])
+def test_a_reported_figure_must_match_at_its_printed_precision(given, correct):
+    s = score_one("A01", given)                                         # gold 391,035 USD millions
+    assert s["correct"] is correct
+    if not correct:
+        assert "not the reported figure" in s["reason"] or "vs gold" in s["reason"]
+
+
+def test_the_next_quarters_figure_is_a_wrong_line_item_not_a_rounding():
+    s = score_one("A12", answer(value=12535, unit="USD millions"))      # Q2 revenue for the Q3 question (measured)
+    assert s["correct"] is False and s["suggested_label"] == "wrong_line_item"
+    assert s["reason"].endswith("close, but not the reported figure at the precision given")
+
+
+def test_a_computed_figure_keeps_its_tolerance():
+    gold = QUESTIONS["B01"].gold_value                                  # a ratio: rounding of the inputs allowed
+    assert score_one("B01", answer(value=round(gold - 0.1, 1), unit="%"))["correct"] is True
+
+
+def test_a_company_field_and_an_answer_naming_different_companies_go_to_the_graders():
+    s = score_one("D10", answer(company="Alphabet Inc.", answer="Microsoft"))       # M2 D10 (measured)
+    assert s["correct"] is None and "a human decides" in s["reason"]
+
+
+def test_a_sheet_that_cannot_be_written_leaves_sheet_and_key_as_they_were(tmp_path, monkeypatch):
+    from pathlib import Path
+    runs = runs_with_one_wrong()
+    sa.write_sheet(sa.sheet_rows(runs, QUESTIONS), tmp_path)
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    real_replace = Path.replace
+
+    def locked(self, target):
+        if Path(target).name == sa.SHEET_NAME:
+            raise PermissionError("[WinError 5] Access is denied")       # the sheet is open in Excel
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", locked)
+    changed = [r | {"key": "kchanged0001", "_id": "A02"} if i == 0 else r
+               for i, r in enumerate(sa.sheet_rows(runs, QUESTIONS))]
+    with pytest.raises(PermissionError):
+        sa.write_sheet(changed, tmp_path)
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before   # no .part left, key untouched

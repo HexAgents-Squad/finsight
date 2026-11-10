@@ -110,3 +110,57 @@ def test_main_writes_one_file_per_run_and_rejects_bad_runs_files(tmp_path, monke
     assert [json.loads(x)["score"] for x in lines] == [2]
     (runs / f"{RUN}.jsonl").write_text("{not a record}\n", encoding="utf-8")
     assert js.main(["--runs-dir", str(runs), "--out-dir", str(tmp_path / "grading")]) == 1
+
+
+# --- added after the review of PR #21 ----------------------------------------------------------------------------
+
+def test_grades_record_the_judge_model_and_settings():
+    about = {"judge_model": "Qwen/Qwen3-8B", "judge_thinking": False, "judge_temperature": 0.0}
+    grades = asyncio.run(js.judge_run(FakeJudge(2), [record("E01")], GOLD, "R", about))
+    assert {k: grades[0][k] for k in about} == about and grades[0]["judge_version"] == "j-v2"
+
+
+def test_an_error_every_call_would_hit_stops_the_judge():
+    import pytest
+    for kind in ("AuthenticationError", "NotFoundError", "TLSError"):
+        with pytest.raises(js.FatalJudgeError, match=kind):
+            asyncio.run(js.judge_run(FakeJudge(FinSightError("no", error_type=kind)), [record("E01")], GOLD, "R"))
+
+
+def _main_with(tmp_path, monkeypatch, judge_outcomes):
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
+    (runs / f"{RUN}.jsonl").write_text(record("E01").model_dump_json() + "\n", encoding="utf-8")
+    for k, v in {"LLM_BASE_URL": "https://endpoint.test/v1", "LLM_API_KEY": "k", "LLM_MODEL": "m",
+                 "SEC_USER_AGENT": "a b@c.d"}.items():
+        monkeypatch.setenv(k, v)
+    from core.settings import Settings
+    monkeypatch.setattr(js, "get_settings", lambda: Settings(_env_file=None))
+
+    class Ctx:
+        def __init__(self, settings):
+            self.judge = FakeJudge(*judge_outcomes)
+
+        async def __aenter__(self):
+            return self.judge
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(js, "LLMClient", Ctx)
+    return js.main(["--runs-dir", str(runs), "--out-dir", str(tmp_path / "grading")])
+
+
+def test_a_failed_judge_never_overwrites_earlier_grades(tmp_path, monkeypatch, capsys):
+    good = tmp_path / "grading" / f"judge_{RUN}.jsonl"
+    good.parent.mkdir()
+    good.write_text('{"id": "E01", "score": 2}\n', encoding="utf-8")
+    assert _main_with(tmp_path, monkeypatch, [FinSightError("bad key", error_type="AuthenticationError")]) == 2
+    assert "stopped, nothing written: AuthenticationError" in capsys.readouterr().err
+    assert _main_with(tmp_path, monkeypatch, [FinSightError("bad JSON", error_type="JSONValidationError")]) == 2
+    assert "no answer could be judged" in capsys.readouterr().err
+    assert good.read_text(encoding="utf-8") == '{"id": "E01", "score": 2}\n'
+    assert not list(good.parent.glob("*.part"))
+    assert _main_with(tmp_path, monkeypatch, [1]) == 0
+    written = json.loads(good.read_text(encoding="utf-8"))
+    assert written["score"] == 1 and written["judge_model"] == "m" and written["judge_temperature"] == 0.0

@@ -120,7 +120,10 @@ def truncated(prompt_tokens: int, expected_tokens: int | None,
     stated window, else COMMON_WINDOWS). 0 means the server sent no token count, which is unknown, not truncated."""
     if not expected_tokens or prompt_tokens <= 0:
         return False
-    at_window = any(expected_tokens > w and abs(prompt_tokens - w) <= WINDOW_SLACK for w in windows)
+    # A cut needs a shortfall too: on the hosted endpoint the count is exact, so a complete 4,100-token prompt
+    # reports 4,100 and must not be taken for a 4,096 window
+    at_window = any(expected_tokens > w and abs(prompt_tokens - w) <= WINDOW_SLACK
+                    and prompt_tokens < expected_tokens - WINDOW_SLACK for w in windows)
     return prompt_tokens < TRUNCATION_RATIO * expected_tokens or at_window
 
 

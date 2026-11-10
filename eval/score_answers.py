@@ -44,8 +44,10 @@ Exit codes: 0 = scored, 1 = invalid input files, 2 = no runs found.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
+import io
 import json
 import math
 import re
@@ -76,6 +78,9 @@ REPORT_NAME = "model_comparison.md"
 SHEET_NAME, KEY_NAME = "grading_sheet.csv", "grading_key.csv"
 START, END = "<!-- GENERATED:START (eval/score_answers.py) -->", "<!-- GENERATED:END -->"
 
+# Categories whose value the filing states (a fact; a follow-up asking for another year or company); ratio and
+# period_comparison values are computed, so their tolerance_pct also absorbs rounding of the inputs
+REPORTED_CATEGORIES = ("fact", "multi_turn")
 ANSWER_TYPES = ("short_numeric", "short_entity", "summary", "refusal", "trap", "partial", "control")
 TYPE_OF_CATEGORY = {"fact": "short_numeric", "ratio": "short_numeric", "period_comparison": "short_numeric",
                     "multi_turn": "short_numeric", "multi_company": "short_entity", "qualitative": "summary"}
@@ -127,7 +132,8 @@ YEAR_RANGE = range(1990, 2040)
 # One adverb may sit in between: Qwen wrote "not directly reported in the provided passages" (M1 B14)
 NOT_REPORTED_ADVERB = r"(?:(?:separately|directly|explicitly|specifically)\s+)?"
 NOT_REPORTED_RE = re.compile(rf"\bnot\s+{NOT_REPORTED_ADVERB}(?:reported|disclosed)\b"
-                             rf"|\bdoes(?:\s+not|n['’]t)\s+{NOT_REPORTED_ADVERB}(?:report|disclose)\b", re.IGNORECASE)
+                             rf"|\b(?:does|do|did)(?:\s+not|n['’]t)\s+{NOT_REPORTED_ADVERB}(?:report|disclose)\b",
+                             re.IGNORECASE)
 # "Not directly reported; it can be derived as ... = $45.2B" works the unreported figure out after all
 DERIVED_RE = re.compile(r"\b(?:deriv|calculat|comput|estimat|approximat)\w*", re.IGNORECASE)
 DECREASE_RE = re.compile(r"\b(?:decreas\w*|declin\w*|fell|fall\w*|dropp?\w*|lower\w*|down|reduc\w*|shr[aiu]nk\w*)\b",
@@ -206,6 +212,23 @@ def value_figure(a: B0Answer) -> Figure:
 
 def within(value: float, gold: float, tolerance_pct: float) -> bool:
     return abs(value - gold) <= tolerance_pct / 100 * abs(gold) + 1e-12
+
+
+def printed_step(value: int | float) -> float:
+    """The last printed digit of a JSON value: 12535 -> 1, 62600000000 -> 1e8 (trailing zeros of a whole number
+    are rounding), 391.04 -> 0.01."""
+    if isinstance(value, float) and not value.is_integer():
+        return 10.0 ** -len(format(value, "f").rstrip("0").split(".")[1])
+    digits = str(int(abs(value)))
+    return 10.0 ** (len(digits) - len(digits.rstrip("0"))) if value else 1.0
+
+
+def same_reported_figure(reading: float, raw: int | float, gold: float) -> bool:
+    """A figure the filing reports (not one the model computes) is right only when it equals the gold figure at
+    the precision the model printed: "62.6 billion" for 62,579 million, never 12,535 for 12,455 (A12: the next
+    quarter's revenue, 0.6% away, inside the 1% tolerance meant for rounding)."""
+    step = printed_step(raw) * (abs(reading / raw) if raw else 1.0)
+    return abs(reading - gold) <= 0.5 * step + 1e-9 * max(1.0, abs(gold))
 
 
 # --------------------------------------------------------------------------------------------- inputs
@@ -363,6 +386,11 @@ def entity_outcome(q: Question, a: B0Answer, in_field: set[str], in_answer: set[
     """The `company` field decides when it names one company; else the answer text when it names one; else a
     human decides (an answer naming both companies may still say clearly which had more)."""
     winner = D_WINNERS[q.id]
+    if len(in_field) == 1 and len(in_answer) == 1 and in_field != in_answer:
+        # M2 D10: company "Alphabet Inc." while the answer says "Microsoft": neither can be trusted alone
+        out.update(correct=None, reason=f"the company field names {next(iter(in_field))}, the answer "
+                                        f"{next(iter(in_answer))}: a human decides whether it picks {winner}")
+        return out
     picked = in_field if len(in_field) == 1 else in_answer if len(in_answer) == 1 else set()
     if picked == {winner}:
         out.update(correct=True, reason=f"named {winner}")
@@ -394,8 +422,9 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
         readings.append((raw * 100, f"fraction {raw:g} read as {raw * 100:g}%"))
     if gold < 0 < value and DECREASE_RE.search(a.answer):
         readings.append((-value, "unsigned value; the answer states the decrease in words"))
+    reported = q.category in REPORTED_CATEGORIES and gold_scale is not None   # a dollar figure from the filing
     for v, note in readings:
-        if within(v, gold, q.tolerance_pct):
+        if within(v, gold, q.tolerance_pct) and (not reported or same_reported_figure(v, a.value, gold)):
             out.update(correct=True, reason=f"{v:g} within {q.tolerance_pct}% of {gold:g}")
             if note:
                 out["unit_note"] = note
@@ -403,6 +432,8 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
     if fraction:
         value = raw * 100                               # a wrong fraction is judged (and labelled) as a percentage
     out["reason"] = f"{value:g} vs gold {gold:g} {q.unit} (tolerance {q.tolerance_pct}%)"
+    if reported and within(value, gold, q.tolerance_pct):
+        out["reason"] += ": close, but not the reported figure at the precision given"
     checks = out["checks"]
     if gold and within(-value, gold, q.tolerance_pct):
         out.update(reason=out["reason"] + ": sign flipped (a decrease given as an increase, or the reverse)",
@@ -485,31 +516,39 @@ def read_sheet(path: Path) -> dict[str, dict]:
     return {r["key"]: r for r in rows}
 
 
+def replace_file(path: Path, text: str) -> None:
+    """`path` gets `text` whole or keeps its old content (temporary file, then rename; never half a file)."""
+    tmp = path.with_name(path.name + ".part")
+    try:
+        tmp.write_text(text, encoding="utf-8", newline="")
+        tmp.replace(path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+
+
 def write_sheet(rows: list[dict], directory: Path) -> dict[str, dict]:
     """Write the sheet and key, keeping what graders already entered (a graded row whose answer changed or is no
-    longer needed stays, as task "stale"); returns the entered grades by key."""
+    longer needed stays, as task "stale"); returns the entered grades by key. The sheet is replaced first and the
+    key only after it: a sheet that cannot be written (open in Excel) leaves both files as they were."""
     sheet_path = directory / SHEET_NAME
     entered = read_sheet(sheet_path)
     directory.mkdir(parents=True, exist_ok=True)
-    with (directory / KEY_NAME).open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, lineterminator="\n")
-        w.writerow(["key", "run_id", "id"])
-        w.writerows([r["key"], r["_run_id"], r["_id"]] for r in rows)
     current = {r["key"] for r in rows}
     stale = [dict(r, task=STALE) for k, r in entered.items()
              if k not in current and any(r[c].strip() for c in HUMAN_COLUMNS)]
-    tmp = sheet_path.with_name(sheet_path.name + ".part")
-    try:
-        with tmp.open("w", encoding="utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=SHEET_COLUMNS, lineterminator="\n")
-            w.writeheader()
-            for r in rows:
-                kept = entered.get(r["key"], {})
-                w.writerow({c: kept.get(c, "") if c in HUMAN_COLUMNS else r[c] for c in SHEET_COLUMNS})
-            w.writerows({c: r[c] for c in SHEET_COLUMNS} for r in stale)
-        tmp.replace(sheet_path)
-    finally:
-        tmp.unlink(missing_ok=True)
+    sheet, key = io.StringIO(), io.StringIO()
+    w = csv.DictWriter(sheet, fieldnames=SHEET_COLUMNS, lineterminator="\n")
+    w.writeheader()
+    for r in rows:
+        kept = entered.get(r["key"], {})
+        w.writerow({c: kept.get(c, "") if c in HUMAN_COLUMNS else r[c] for c in SHEET_COLUMNS})
+    w.writerows({c: r[c] for c in SHEET_COLUMNS} for r in stale)
+    k = csv.writer(key, lineterminator="\n")
+    k.writerow(["key", "run_id", "id"])
+    k.writerows([r["key"], r["_run_id"], r["_id"]] for r in rows)
+    replace_file(sheet_path, sheet.getvalue())
+    replace_file(directory / KEY_NAME, key.getvalue())
     return entered
 
 
@@ -724,7 +763,8 @@ def main(argv: list[str] | None = None) -> int:
                 "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in scored), encoding="utf-8", newline="\n")
         write_report(report([(m, sc) for m, _, sc in runs]), args.out_dir / REPORT_NAME)
     except (OSError, ValueError, ValidationError, KeyError) as err:
-        print(f"ERROR: {type(err).__name__}: {err}", file=sys.stderr)
+        hint = " (is the file open in Excel? close it and run again)" if isinstance(err, PermissionError) else ""
+        print(f"ERROR: {type(err).__name__}: {err}{hint}", file=sys.stderr)
         return 1
     for meta, _, scored in runs:
         print(f"{meta.run_id}: " + ", ".join(f"{label} {rate([s for s in scored if s['answer_type'] in types])}"
