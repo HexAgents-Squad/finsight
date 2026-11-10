@@ -1,0 +1,282 @@
+==============================================================================================================
+WEEK 1 PLAN: ENDPOINT, MODEL COMPARISON, PROMPTING BASELINES, RETRIEVAL EXPERIMENTS (10 – 14 NOV 2026)
+==============================================================================================================
+Jira epic: UPGRAD-42 (tickets UPGRAD-43 … UPGRAD-57; dependencies are entered as "Blocks" links in Jira).
+
+Goal: move from the local stand-in model to the provided Qwen3-8B endpoint and measure answer quality for the
+first time, before any agent code (Week 2).
+
+The mentor's request (7 Nov feedback), due Wed 11 Nov: accuracy numbers and a model comparison: which model
+gives which type of answer and how accurately, split into short ("one-word") answers and summary answers, and
+where the models are less accurate, fail or hallucinate.
+
+The week has two sprints:
+- Sprint A (Tue 10 – Wed 11 15:00): the model comparison on all 80 gold questions + the 22 refusal tests.
+- Sprint B (Thu 12 – Sat 14): the rest of Week 1 (prompting baselines, retrieval experiments, re-index,
+  Week 0 carry-overs), reusing the Sprint A evaluation harness.
+
+Exit gate shown to the mentor (Sat 14 Nov):
+- model comparison (Sprint A report);
+- prompting baseline table: B0 zero-shot and S1/S2/S3 on Qwen3-8B, with failure modes;
+- retrieval table: chunking × retriever × rerank × filters.
+
+Everything below marked "planned" does not exist yet; the ticket that creates it is named.
+
+1. Tickets, owners and execution order
+======================================
+Every ticket has exactly one owner and one backup; the backup reviews the PR. "Depends on" = the ticket cannot
+be FINISHED before those are delivered (it can be started earlier against fakes or sample files).
+
++----+-----------+--------------------------------------------+-----------------+-----------------+--------+---------------------+
+| #  | Jira      | Ticket                                     | Owner           | Backup          | Due    | Depends on          |
++====+===========+============================================+=================+=================+========+=====================+
+| 1  | UPGRAD-43 | W1-01 Connect to the Qwen3-8B endpoint     | Giridharan      | Alok            | Tue 10 | –                   |
+| 2  | UPGRAD-45 | W1-12 Context pack (same passages for      | Anirudh         | Alok            | Tue 10 | –                   |
+|    |           | every model)                               |                 |                 |        |                     |
+| 3  | UPGRAD-47 | W1-08 Answer scoring: short, summary,      | Amresh          | Alok            | Tue 10 | –                   |
+|    |           | refusal, hallucination, failure taxonomy   |                 |                 |        |                     |
+| 4  | UPGRAD-44 | W1-02 Request lock, 429/503 retry,         | Giridharan      | Amresh          | Tue 10 | W1-01               |
+|    |           | response cache (full version Thu 12)       |                 |                 |        |                     |
+| 5  | UPGRAD-46 | W1-13 Comparison runner + frozen B0 prompt | Alok            | Giridharan      | Tue 10 | W1-01, W1-02, W1-12 |
+| 6  | UPGRAD-48 | W1-14 Human grading + failure labels       | Chandra Shekhar | Amresh          | Wed 11 | W1-13, W1-08        |
+| 7  | UPGRAD-49 | W1-15 Model comparison report to mentor    | Alok            | Amresh          | Wed 11 | W1-14, W1-08, W1-13 |
++----+-----------+--------------------------------------------+-----------------+-----------------+--------+---------------------+
+| 8  | UPGRAD-50 | W1-03 Endpoint capability probe + ADR-016  | Giridharan      | Alok            | Thu 12 | W1-01               |
+| 9  | UPGRAD-51 | W1-06 Development question set (15)        | Amresh          | All members     | Thu 12 | –                   |
+| 10 | UPGRAD-52 | W1-07 Answer contract + critic checks      | Amresh          | Alok            | Fri 13 | –                   |
+| 11 | UPGRAD-53 | W1-04 Remove page furniture + re-index     | Chandra Shekhar | Alok            | Fri 13 | –                   |
+| 12 | UPGRAD-56 | W1-10 Close Week 0 carry-overs             | Alok            | Amresh, Chandra | Fri 13 | W1-01               |
+|    |           |                                            |                 | Shekhar, all    |        |                     |
+| 13 | UPGRAD-55 | W1-05 Retrieval experiments (reranker,     | Anirudh         | Giridharan      | Sat 14 | W1-04               |
+|    |           | form/quarter + question-derived filters)   |                 |                 |        |                     |
+| 14 | UPGRAD-54 | W1-09 Prompting baselines S1/S2/S3         | Alok (S1 Amresh,| per strategy    | Sat 14 | W1-13, W1-08,       |
+|    |           |                                            | S2 Giridharan,  |                 |        | W1-06, W1-07        |
+|    |           |                                            | S3 Chandra)     |                 |        |                     |
+| 15 | UPGRAD-57 | W1-11 Week 1 results note + Week 2 kick-off| Alok            | Amresh          | Sat 14 | W1-15, W1-09,       |
+|    |           |                                            |                 |                 |        | W1-05, W1-10        |
++----+-----------+--------------------------------------------+-----------------+-----------------+--------+---------------------+
+Rows 1–7 are Sprint A (label sprint-a in Jira), rows 8–15 Sprint B.
+
+1.1 Dependencies and waves
+--------------------------
+    Wave 1  Tue, start now, in parallel   W1-01   W1-12   W1-08
+    Wave 2  Tue                          W1-02            after W1-01
+    Wave 3  Tue evening, runs overnight  W1-13            after W1-01, W1-02, W1-12
+    Wave 4  Wed morning                  W1-14            after W1-13, W1-08
+    Wave 5  Wed 15:00                    W1-15            after W1-14, W1-08, W1-13
+    Wave 6  Thu-Fri                      W1-06  W1-07  W1-04   (no dependencies; may start earlier)
+                                         W1-03  W1-10          after W1-01
+    Wave 7  Fri-Sat                      W1-05            after W1-04
+                                         W1-09            after W1-13, W1-08, W1-06, W1-07
+    Wave 8  Sat                          W1-11            after W1-15, W1-09, W1-05, W1-10
+
+Related, not blocking: W1-03 ↔ W1-09 (the probe decides the JSON and thinking strategy the baselines use);
+W1-12 ↔ W1-05 (both use the C3 hybrid retriever settings).
+
+Critical path: W1-01 → W1-02 → W1-13 → W1-14 → W1-15. A slip here moves the mentor report, so the backup
+(Alok) pairs with Giridharan at 13:00 on Tue if the endpoint is not green, and W1-12/W1-08 are built against
+fakes so they never wait.
+
+2. Interfaces: agree these on Tuesday morning
+=============================================
+As in Week 0, contracts let everyone work in parallel against fakes and sample files.
+
+2.1 Endpoint settings (W1-01, planned; .env only)
+-------------------------------------------------
+    LLM_BASE_URL=<group URL from the learner guide>     LLM_API_KEY=<team key>     LLM_MODEL=Qwen/Qwen3-8B
+    LLM_CA_CERT=<path to the group .crt>                LLM_ENABLE_THINKING=false
+- HTTPS verification uses the group CA certificate (an ssl context passed to httpx); it is never switched off.
+- Qwen3 "thinking" is off by default (chat_template_kwargs enable_thinking=false, or "/no_think" in the prompt;
+  W1-03 confirms which the endpoint honours). Any <think>…</think> block is stripped before JSON parsing.
+- The key, the URL and the certificate stay out of git, logs, screenshots and chat outside the team.
+- Embeddings stay local (the endpoint has none): EMBED_BACKEND=sentence-transformers, as the index was built.
+
+2.2 Shared-key rules (W1-02, planned)
+-------------------------------------
+Limits of the provided endpoint: one active request per team key (for the whole team), 60 requests/min,
+8,192 tokens per call (input + output), output default 512 / max 1,024.
+- core/llm.py serialises calls (process-wide lock), retries 429/503 after 2, 4 and 8 s, then raises
+  FinSightError (service unavailable); the openai SDK's own retries are off (max_retries=0) so they do not stack.
+- Disk cache data/cache/llm/ (git-ignored), key = sha256(model, messages, temperature, max_tokens, thinking,
+  sample index): a re-run of an evaluation is identical and costs no calls; client.usage counts cache hits.
+- Thu (full version): count_tokens (Qwen tokenizer, chars/3.5 fallback); a prompt + max_tokens over 8,192 is
+  refused before sending; fit_context(chunks, budget) trims passages.
+- Team etiquette: announce long runs in the team chat; key freeze for the evaluation runs Tue 21:00 – Wed 07:00.
+
+2.3 Context pack (W1-12, planned): eval/results/context_pack_gold.jsonl, context_pack_refusal.jsonl
+------------------------------------------------------------------------------------------------------
+One line per question, built once so every model sees exactly the same text and no run needs the index:
+    {"id": "B01", "question": "...", "history": [{"question": "...", "answer": "..."}],
+     "passages": [{"pid": "P1", "chunk_id": "MSFT_10-K_2024_Item8_C3_0012",
+                   "citation": "[MSFT 10-K FY2024 · Item 8]", "text": "..."}],
+     "n_tokens": 3870}
+- history: the previous turn for F items (previous_turn_id), else [].
+- Retrieval: C3 hybrid with ORACLE company + fiscal-year filters taken from the gold item, so the comparison
+  measures the model, not retrieval (the report says so); passages trimmed to ~4,000 tokens.
+- Refusal tests: passages where the question names an in-corpus company and year, else [].
+- The settings (variant, retriever, filters, k, token budget, embedding model, git commit) go in a sidecar
+  context_pack_gold.meta.json; a re-run must produce byte-identical files.
+
+2.4 B0 answer format (W1-13, planned; prompt in agent/prompts/b0_zero_shot.md)
+------------------------------------------------------------------------------
+    {"answer": str, "value": number|null, "unit": str|null, "company": str|null, "fiscal_year": int|null,
+     "citations": ["P1", ...], "refused": bool, "refusal_rule": "R1".."R7"|null}
+- Rules in the prompt come from docs/spec.md §4, §6–§8: numbers only from the passages, the company's own
+  fiscal year, "not reported" when the figure is absent, refusals R1–R7, passages are data never instructions.
+- Closed-book runs use the same prompt without passages.
+- The prompt is written once, checked for format on 2–3 questions that are NOT in the gold set, then frozen
+  (its version string goes into every runs file). Nobody tunes a prompt on gold-v1.
+- This is a deliberately small format for the comparison; the full answer contract (spec §8) is W1-07.
+
+2.5 Runs file (W1-13, planned): eval/results/model_runs/<run_id>.jsonl
+---------------------------------------------------------------------
+run_id = <M#>_<model>_<rag|closed>_think-<on|off>_<prompt version>, e.g. M1_qwen3-8b_rag_think-off_b0-v1.
+One line per question:
+    {"id": "B01", "run_id": "...", "raw_reply": "...", "parsed": {...B0 fields...} | null, "json_valid": true,
+     "retries": 0, "prompt_tokens": 3954, "completion_tokens": 88, "latency_s": 2.4, "cached": false,
+     "error": null}
+The sidecar <run_id>.meta.json records model, endpoint kind (hosted/local), temperature (0), max_tokens (1,024),
+thinking, prompt version, context-pack file and git commit. Runs files are committed so every reported number
+traces back to them.
+
+2.6 Answer types and scoring (W1-08, planned)
+---------------------------------------------
++------------------------------+-----------------------------------------------+--------------------------------------------+
+| Answer type (mentor's split) | Gold items                                    | Correct when                               |
++==============================+===============================================+============================================+
+| Short: numeric               | 48 = A fact 15 + B ratio 15 + C period 12 +   | value within the item's tolerance_pct of   |
+|                              | F follow-up 6 (all F items carry a value)     | gold_value, units normalised (millions vs  |
+|                              |                                               | billions) and the normalisation logged     |
+| Short: entity                | D multi-company 10                            | the named company matches (and the value,  |
+|                              |                                               | when the gold item has one)                |
+| Summary                      | E qualitative 12                              | human grade 2 of 2 (0 wrong / 1 partly /   |
+|                              |                                               | 2 correct and grounded), two graders;      |
+|                              |                                               | LLM-as-judge rubric as a second opinion,   |
+|                              |                                               | agreement reported                         |
+| Refusal / not reported       | G 10 (7 refusals R1–R7 + 3 "not reported"     | refusals: refused with the right rule;     |
+|                              | traps) + 22 refusal tests (13 refusals,       | traps: "not reported" and no value;        |
+|                              | 7 controls, 2 partial)                        | controls answered; partials answer the     |
+|                              |                                               | factual part and name the rule             |
++------------------------------+-----------------------------------------------+--------------------------------------------+
+Hallucination checks (automatic): a number in answer/value found neither in the passages nor in the gold
+answer (normalised: "$245.1 billion" ↔ 245122); a value given for a "not reported" trap; fiscal_year or company
+different from the gold item's; a citation id that does not exist or whose passage lacks the number; JSON
+invalid after one retry.
+Output: eval/results/model_comparison.md (generated tables + a hand-written interpretation section) with
+accuracy per model × answer type and per category, counts and Wilson 95% intervals (n is 10–48 per cell),
+hallucination rates (RAG vs closed-book), refusal precision/recall, tokens, latency p50/p95, JSON validity.
+Grading sheet for W1-14: eval/results/grading/<run_id>_grades.csv
+(id, question, gold_answer, model_answer, grader_1, grader_2, final, failure_label, note), model names hidden.
+
+2.7 Failure taxonomy (fixed labels; one per wrong answer)
+---------------------------------------------------------
+    wrong_fiscal_year · unit_confusion · arithmetic_slip · invented_number · wrong_line_item ·
+    ignored_not_reported · wrong_company · over_refusal · under_refusal · malformed_output · incomplete_summary
+W1-08 suggests a label automatically where it can (e.g. wrong year, malformed output); W1-14 confirms or sets it.
+
+3. Model comparison design (Sprint A)
+=====================================
++----------+--------------------------------------+--------------------+------------------------------------------+
+| Run      | Model                                | Context            | Question it answers                      |
++==========+======================================+====================+==========================================+
+| M1 must  | Qwen3-8B (endpoint), thinking off    | RAG (context pack) | how good is the model we build on        |
+| M2 must  | Llama-3.2-3B (local Ollama, 8k ctx)  | RAG (same pack)    | a smaller open model on identical inputs |
+| M3 should| Qwen3-8B, thinking off               | closed-book        | how much it invents without retrieval    |
+| M4 could | Qwen3-8B, thinking on                | RAG                | does reasoning help short or summary     |
++----------+--------------------------------------+--------------------+------------------------------------------+
+Same for every run: prompt B0, temperature 0, max_tokens 1,024, no tools (the Week 2 agent adds tools; this is
+its baseline), one retry on invalid JSON.
+Ollama gotcha (M2): the default context window (2–4k tokens) silently truncates our ~5k-token prompts. Create
+a model with "PARAMETER num_ctx 8192" in a Modelfile (or set OLLAMA_CONTEXT_LENGTH=8192) and check on one long
+prompt that the reply uses the last passage.
+Budget: M1 and M3 102 calls each, M4 80, judge ~40, all through the cache, one at a time; M2 runs locally in
+parallel (no key; ~1–2 h on a CPU).
+Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
+small n per cell, a single frozen prompt.
+
+4. How-to per ticket
+====================
+Full steps and acceptance criteria are in each Jira ticket; the essentials:
+
+W1-01 (Giridharan): settings LLM_CA_CERT / LLM_ENABLE_THINKING validated (cert file exists); core/llm.py builds
+  an httpx client from the certificate and passes it to AsyncOpenAI; <think> stripping in chat and chat_json;
+  LOCAL_SETUP.md section "Hosted endpoint" (where the .crt goes, a curl.exe check, key only in .env);
+  scripts/smoke_llm.py passes against the endpoint. Offline tests for TLS client construction, think-stripping
+  and settings validation.
+W1-02 (Giridharan): §2.2. Tests: concurrent calls are serialised, a 429 is retried, a cache hit makes no HTTP
+  call, an over-budget prompt is refused.
+W1-12 (Anirudh): eval/context_pack.py per §2.3; test with a fake retriever; deterministic; budget respected.
+W1-13 (Alok): agent/prompts/b0_zero_shot.md + eval/run_models.py
+  (--model qwen3|llama --context rag|closed --thinking on|off) per §2.4–2.5 and §3; offline tests with a fake
+  client.
+W1-08 (Amresh): eval/score_answers.py (name may change) per §2.6–2.7; offline tests with fake replies for every
+  metric; tables regenerate from the runs files; a re-run is identical.
+W1-14 (Chandra Shekhar + Amresh): both graders fill the sheet independently, then resolve disagreements (noted);
+  every wrong answer labelled; 5–6 clear examples picked (question, answer, gold, why it is wrong).
+W1-15 (Alok): "Model comparison v1": tables, failure taxonomy with examples, interpretation, caveats, next steps;
+  sent Wed 15:00 (portal + email); ADR-019 records the comparison setup.
+W1-03 (Giridharan): scripts/probe_endpoint.py (key never printed): tool calling (tools + tool_choice with a
+  tools.registry schema), response_format json_object/json_schema, the thinking switch, latency by output
+  length, seed/temperature behaviour, a 429 on a second concurrent request. ADR-016 "Endpoint usage".
+W1-06 (Amresh + all): eval/dev_set.jsonl, 15 items in the gold format (each member writes 3, another member
+  verifies), on companies/periods no gold item uses; validated in CI; a script shows no overlap with gold-v1.
+  Prompts for S1–S3 are tuned on this set only.
+W1-07 (Amresh): agent/contract.py (spec §8 AnswerContract as a pydantic model) and agent/critic_checks.py
+  (every number in the answer is in values; each value supported by a citation or calculation; calculations
+  equal tools.calculator.compute; refusal invariants). Tests for each invariant, passing and failing.
+W1-04 (Chandra Shekhar): ingest/sections.py drops lone "Table of Contents" lines, bare page numbers and page
+  footers (precompiled patterns, positive and negative tests); re-parse to a temporary --out-dir and diff
+  (1,260 documents, no Item lost, gold verbatim-figure check passes); promote; re-chunk; rebuild BM25 and dense
+  overnight; re-run eval/run_retrieval.py. Closes ADR-015 item 6 ("Table of Contents" lines 2,455 → ~0).
+W1-10 (Alok, with Amresh, Chandra Shekhar, all): second verifier for the 22 refusal and 12 injection tests
+  (validate_test_sets.py --final passes); independent WP2 spot check; smoke test against the endpoint on every
+  laptop; LOCAL_SETUP wording fix; docs/mentor_meetings.md entry for 7 Nov; UPGRAD-41 closed.
+W1-05 (Anirudh): retrieval/rerank.py (cross-encoder/ms-marco-MiniLM-L-6-v2 on the hybrid top 30);
+  retrieval/entities.py (company, fiscal year and quarter from the question); filter settings none /
+  question-derived / company+year / +form-period; Item 8 preference trial; run_retrieval.py --rerank.
+  ADR-017 sets the retrieval default.
+W1-09 (Alok + sub-owners): same context pack, runner and scorer as Sprint A; B0 is the zero-shot reference.
+  S1 few-shot structured output (examples from the dev set), S2 chain-of-thought + self-consistency (3–5
+  samples, majority vote on the value), S3 decomposition. Prompts frozen and tagged before the gold runs (Fri
+  night). ADR-018 records the baseline setup and results.
+W1-11 (Alok): one-page and detailed Week 1 notes generated from repo data; portal upload, mentor email; Week 2
+  LangGraph design kick-off and Week 2 tickets.
+
+5. Sprint A schedule
+====================
+    Tue 10  by 13:00  W1-01 + minimal W1-02, smoke test on the endpoint          Giridharan (Alok)
+            by 15:00  W1-12 context pack (80 gold + 22 refusal tests)            Anirudh (Alok)
+            by 17:00  W1-13 runner + B0 frozen; Ollama 8k-context model ready    Alok (Giridharan)
+            by 20:00  W1-08 automatic scoring, tested on fake replies            Amresh (Alok)
+            night     runs: M1 → M3 → M4 on the endpoint, M2 locally in parallel Alok
+    Wed 11  09–12     W1-14 summary grading (2 graders) + failure labels         Chandra Shekhar + Amresh
+            12–14     tables generated, interpretation written                   Alok
+            15:00     W1-15 report sent to the mentor                            Alok
+Fallbacks: endpoint down on Tuesday → run M2 first and M1 as soon as it works; if M1 is not done by Wed 10:00,
+send what exists with a dated follow-up. Only one grader free → single grading plus the judge, stated in the
+report.
+
+6. Process
+==========
+- Branches: w1/UPGRAD-<key>-<short-desc> (e.g. w1/UPGRAD-43-endpoint); every commit message starts with the
+  Jira key. One review from the ticket's backup before merging to main; CI green.
+- Definition of done for code tickets: tests offline and fast (fake clients/retrievers, no key needed in CI),
+  ruff clean, docs updated (README / LOCAL_SETUP / CLAUDE.md / this file when a contract changes), PR reviewed.
+- Decisions: ADR-016 endpoint usage (W1-03), ADR-017 retrieval default (W1-05), ADR-018 prompting baselines
+  (W1-09), ADR-019 model-comparison setup (W1-15), in docs/decisions.md with the numbers behind them.
+- Gold-v1 stays frozen: no prompt is tuned on it and no gold answer is edited to improve a score.
+
+7. Risks
+========
++--------------------------------------------+--------------------------------------------------------------+
+| Risk                                       | Mitigation                                                   |
++============================================+==============================================================+
+| Endpoint not connected by Tue afternoon    | backup pairs at 13:00; M2 runs locally meanwhile             |
+| Key contention during the runs             | key freeze 21:00–07:00; sequential, cached runs; 429 backoff |
+| Ollama truncating prompts                  | 8k-context model; one long-prompt check                      |
+| Small n (12 summary questions)             | counts + intervals, the 22 refusal tests, concrete examples  |
+| Qwen judging Qwen (self-preference)        | human grades are primary; judge agreement reported           |
+| Oracle filters overstate accuracy          | stated in the report; question-derived filters in W1-05      |
+| Prompt tuned on gold (leakage)             | B0 frozen before runs; S1–S3 tuned on the dev set (W1-06)    |
+| 8,192-token limit                          | passages capped at ~4,000 tokens; over-budget prompts refused|
++--------------------------------------------+--------------------------------------------------------------+

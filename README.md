@@ -14,10 +14,13 @@ Python 3.11–3.14 venv → `pip install -r requirements.txt` → install Ollama
 ## Status (end of Week 0)
 Built and tested: corpus download and Item-level parsing (`ingest/01`, `02`), XBRL facts (`ingest/05`), chunking and hybrid retrieval with recall@k (`ingest/03`, `04`, `retrieval/`, `eval/run_retrieval.py`), the four agent tools (`tools/`), the LLM client (`core/`), the gold set (`eval/gold_set.jsonl`, tag `gold-v1`) and the refusal/injection test sets. Planned: the agents (`agent/`), the API (`api/`), the UI (`ui/`) and a reranker. Decisions: [docs/decisions.md](docs/decisions.md); retrieval results: [eval/results/retrieval_summary.md](eval/results/retrieval_summary.md).
 
+## Week 1 (10–14 Nov, in progress)
+Move to the provided Qwen3-8B endpoint; compare models (Qwen3-8B vs Llama-3.2-3B, with and without retrieval) on short and summary answers, refusals and hallucinations; prompting baselines (zero-shot, few-shot, chain-of-thought with self-consistency, decomposition); retrieval experiments (re-index, reranker, question-derived filters). Tickets, execution order, dependencies and contracts: [docs/week1_plan.txt](docs/week1_plan.txt).
+
 ## Folder structure
 ```
 config/        companies.yaml (corpus scope), concept_map.yaml (metric → XBRL tags)
-docs/          spec, decisions (ADRs), week-0 plan, report/
+docs/          spec, decisions (ADRs), week-0 and week-1 plans, report/
 data/          raw/ (SEC filings), sections/ (parsed sections), xbrl/ (structured financial data); not committed
 ingest/        download → parse sections → XBRL facts → chunk → index
 retrieval/     chunking, BM25, dense (Chroma), hybrid fusion (RRF); reranker planned
