@@ -1,0 +1,24 @@
+{
+  "run_id": "M2_llama3.2-3b_rag_think-off_b0-v1",
+  "model": "llama3.2-3b-8k",
+  "endpoint": "local",
+  "context": "rag",
+  "thinking": false,
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "prompt_version": "b0-v1",
+  "context_pack": "results/context_pack_gold.jsonl + context_pack_refusal.jsonl (cp-v1)",
+  "context_pack_sha256": {
+    "context_pack_gold.jsonl": "028cd87c5721dc5bb4058112746dc9d455d706a8064416f4f07cf1f51c77bca9",
+    "context_pack_refusal.jsonl": "2ed6aa48a069ca4662556c5d118cd59fc5d404f909eaf9f99e4bb8ea39ac6aba"
+  },
+  "prompt_sha256": "ab65e68f902e00d44be3e3844a46834756aa2dada0782b8feb0d959927a80faf",
+  "framing_sha256": "a1b659cdd867f27b4b8e8609e6a24e6431ea092fb75679641e0bc932f2f8b023",
+  "json_retries": 1,
+  "repair": "separators-v1",
+  "truncation_check": true,
+  "context_window": 8192,
+  "git_commit": "73b1b5c16ad375afd81665f033c41a0d5f87ee86",
+  "started": "2026-11-10T17:05:40+00:00",
+  "finished": "2026-11-10T17:05:43+00:00"
+}
