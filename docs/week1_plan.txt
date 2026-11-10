@@ -255,7 +255,8 @@ answer; a `final` of 2 on a label row overturns the automatic verdict (counted i
 key; model answers show no [Pn] markers or reasoning, and the key -> run mapping is in grading_key.csv (graders
 do not open it). Re-running the scorer keeps every grade and label already entered; a graded row whose answer
 changed (a new key) or that is no longer needed stays as task "stale", so no grade is ever applied to a
-different answer. Grades are 0/1/2, labels from §2.7; latency percentiles leave out cached replies.
+different answer. Grades are 0/1/2, labels from §2.7; latency percentiles count every answered call (a cached reply replays
+the original request's time; spacing and retry back-off included).
 LLM-as-judge scores for summaries are imported from grading/judge_<run_id>.jsonl ({"id", "score", "reason"}),
 written with the runner (W1-13).
 

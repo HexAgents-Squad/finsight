@@ -418,8 +418,8 @@ class LLMClient(AbstractLLMClient):
         if not answer:
             # Also a reply that was nothing but reasoning: there is no answer to return
             raise FinSightError(f"Empty reply from {target_model}", error_type="EmptyResponseError")
-        # One figure live and replayed, so a re-run of an evaluation reproduces its records exactly (the wait for
-        # the lock and the prompt-size count depend on what else ran, not on the model)
+        # One figure live and replayed, so a re-run of an evaluation reproduces its records exactly. It leaves out
+        # the wait for the endpoint lock (other callers' requests) but keeps request spacing and retry back-off
         seconds = entry.get("seconds", time.perf_counter() - start)
         return Reply(answer, raw, entry["prompt_tokens"], entry["completion_tokens"], cached, retries, seconds)
 

@@ -32,7 +32,6 @@ import json
 import re
 import subprocess
 import sys
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -128,8 +127,9 @@ def truncated(prompt_tokens: int, expected_tokens: int | None,
 async def answer(llm: LLMClient, run_id: str, record: dict, messages: list[dict[str, str]],
                  expected_tokens: int | None = None, windows: tuple[int, ...] = COMMON_WINDOWS) -> RunRecord:
     """One question: the reply, re-asked once if it is not valid B0 JSON. Tokens and seconds add up over the
-    attempts; `cached` is true only when every attempt came from the cache. With `expected_tokens` (the prompt's
-    Qwen count), a reply whose server saw less than the prompt is recorded as ContextTruncated, not scored. If no
+    replies received (a failed attempt adds none: its time would differ between a live run and a replay);
+    `cached` is true only when every attempt came from the cache. With `expected_tokens` (the prompt's Qwen
+    count), a reply whose server saw less than the prompt is recorded as ContextTruncated, not scored. If no
     reply is valid, repair_separators is tried on each reply, latest first (parsed, json_valid false); a usable
     first reply is kept even if the retry fails. An error in FATAL_ERRORS raises FatalRunError."""
     tokens_in = tokens_out = retries = 0
@@ -137,13 +137,11 @@ async def answer(llm: LLMClient, run_id: str, record: dict, messages: list[dict[
     texts: list[str] = []
     working = list(messages)
     for attempt in range(JSON_RETRIES + 1):
-        start = time.perf_counter()
         try:
             reply = await llm.complete(working, temperature=TEMPERATURE)
         except FinSightError as err:
             if err.error_type in FATAL_ERRORS:
                 raise FatalRunError(f"{err.error_type}: {err.message}") from err
-            seconds += time.perf_counter() - start
             error, cached = f"{err.error_type}: {err.message}", False
             break
         seconds += reply.seconds
@@ -293,8 +291,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--api-key", help="key for that server (Ollama accepts any, e.g. 'ollama')")
     ap.add_argument("--timeout", type=float, help="seconds per request (a CPU model needs ~300; .env default 30)")
     ap.add_argument("--context-window", type=int,
-                    help="the server's context window in its own tokens (e.g. 8192 for llama3.2-3b-8k); "
-                         "the truncation check then looks for a cut at that size instead of 2,048 / 4,096")
+                    help="the server's context window in its own tokens: must equal the model's num_ctx "
+                         "(8192 only for the llama3.2-3b-8k Modelfile). The truncation check then looks for a "
+                         "cut at that size instead of 2,048 / 4,096, so a value above the real window hides cuts")
     ap.add_argument("--ids", nargs="+", help="only these question ids (a check run; use --out-dir)")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
     ap.add_argument("--out-dir", type=Path, default=RUNS_DIR)

@@ -235,6 +235,19 @@ def test_truncation_detection(seen, expected, cut):
     assert rm.truncated(seen, expected) is cut
 
 
+def test_answer_checks_the_cut_at_the_stated_window():
+    msgs = [{"role": "user", "content": "q"}]
+    flagged = run(rm.answer(FakeLLM(VALID, prompt_tokens=4105), RUN, RECORDS["A01"], msgs, 4599))
+    kept = run(rm.answer(FakeLLM(VALID, prompt_tokens=4105), RUN, RECORDS["A01"], msgs, 4599, (8192,)))
+    assert flagged.error.startswith("ContextTruncated") and kept.error is None and kept.json_valid
+
+
+def test_a_failed_attempt_adds_no_seconds():
+    err = FinSightError("cut", error_type="TruncatedResponseError")
+    r = run(rm.answer(FakeLLM("prose", err), RUN, RECORDS["A01"], [{"role": "user", "content": "q"}]))
+    assert r.error and r.latency_s == 0.5                    # the one reply received; the error adds nothing
+
+
 def test_a_stated_window_replaces_the_common_ones():
     # M2 C09 (measured): a complete prompt that landed near 4,096 by chance on the 8k model
     assert rm.truncated(4105, 4599) is True

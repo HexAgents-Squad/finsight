@@ -128,6 +128,8 @@ YEAR_RANGE = range(1990, 2040)
 NOT_REPORTED_ADVERB = r"(?:(?:separately|directly|explicitly|specifically)\s+)?"
 NOT_REPORTED_RE = re.compile(rf"\bnot\s+{NOT_REPORTED_ADVERB}(?:reported|disclosed)\b"
                              rf"|\bdoes(?:\s+not|n['’]t)\s+{NOT_REPORTED_ADVERB}(?:report|disclose)\b", re.IGNORECASE)
+# "Not directly reported; it can be derived as ... = $45.2B" works the unreported figure out after all
+DERIVED_RE = re.compile(r"\b(?:deriv|calculat|comput|estimat|approximat)\w*", re.IGNORECASE)
 DECREASE_RE = re.compile(r"\b(?:decreas\w*|declin\w*|fell|fall\w*|dropp?\w*|lower\w*|down|reduc\w*|shr[aiu]nk\w*)\b",
                          re.IGNORECASE)
 CITATION_MARK = re.compile(r"\s*\[P\d+\]")
@@ -338,6 +340,9 @@ def refusal_outcome(q: Question, a: B0Answer, out: dict) -> dict:
                        suggested_label="ignored_not_reported")
         elif not NOT_REPORTED_RE.search(a.answer):
             out.update(reason=f"did not say the figure is {NOT_REPORTED}", suggested_label="ignored_not_reported")
+        elif DERIVED_RE.search(a.answer) and figures(a.answer):
+            out.update(reason="said it is not reported, then worked the figure out",
+                       suggested_label="ignored_not_reported")
         else:
             out.update(correct=True, reason=NOT_REPORTED)
         return out

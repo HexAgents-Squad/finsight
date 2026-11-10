@@ -466,6 +466,12 @@ def test_trap_answers_in_other_words(text):
     assert score_one("G08", answer(answer=text))["correct"] is True
 
 
+def test_a_trap_answer_that_works_the_figure_out_gets_no_credit():
+    s = score_one("G08", answer(answer="Gross profit is not directly reported; it can be derived as net revenue "
+                                       "minus expenses = $45.2 billion."))
+    assert s["correct"] is False and s["suggested_label"] == "ignored_not_reported"
+
+
 def test_numbers_from_the_conversation_history_are_supported():
     previous = PACKS["F01"]["history"][0]["answer"]
     figure = sa.figures(previous)[0].text
