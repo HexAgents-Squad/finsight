@@ -218,8 +218,9 @@ class Reply:
     completion_tokens: int
     cached: bool                # answered from the disk cache, no request sent
     retries: int                # 429/5xx/network retries this call needed
-    seconds: float              # wall time, waiting for the endpoint lock and back-off included; for a cached
-                                # reply, the time the original request took (when the entry recorded it)
+    seconds: float              # the request's own time (spacing and back-off included, not the wait for the
+                                # endpoint lock), the same live and replayed from the cache; an old entry without
+                                # it reports the time this call took
 
 
 class _Endpoint:
@@ -417,7 +418,9 @@ class LLMClient(AbstractLLMClient):
         if not answer:
             # Also a reply that was nothing but reasoning: there is no answer to return
             raise FinSightError(f"Empty reply from {target_model}", error_type="EmptyResponseError")
-        seconds = entry["seconds"] if cached and "seconds" in entry else time.perf_counter() - start
+        # One figure live and replayed, so a re-run of an evaluation reproduces its records exactly (the wait for
+        # the lock and the prompt-size count depend on what else ran, not on the model)
+        seconds = entry.get("seconds", time.perf_counter() - start)
         return Reply(answer, raw, entry["prompt_tokens"], entry["completion_tokens"], cached, retries, seconds)
 
     async def _fetch(self, request: dict[str, Any], target_model: str,
