@@ -30,6 +30,7 @@ k24845146ff,M3_qwen3-8b_closed_think-off_b0-v1,RF10
 k250b23dd0c,M3_qwen3-8b_closed_think-off_b0-v1,A14
 k25204de95b,M2_llama3.2-3b_rag_think-off_b0-v1,B04
 k26d49b5a47,M2_llama3.2-3b_rag_think-off_b0-v1,F04
+k279987e877,M2_llama3.2-3b_rag_think-off_b0-v1,A12
 k2985e0051b,M3_qwen3-8b_closed_think-off_b0-v1,RF13
 k29e6fd0a3d,M1_qwen3-8b_rag_think-off_b0-v1,G08
 k2a74e9639b,M1_qwen3-8b_rag_think-off_b0-v1,A09
@@ -82,10 +83,12 @@ k5a1e78b397,M1_qwen3-8b_rag_think-off_b0-v1,C05
 k5a3e5e5b83,M3_qwen3-8b_closed_think-off_b0-v1,E02
 k5be52f53d2,M1_qwen3-8b_rag_think-off_b0-v1,RF10
 k5cf35b60fc,M3_qwen3-8b_closed_think-off_b0-v1,G03
+k5ed72e8130,M2_llama3.2-3b_rag_think-off_b0-v1,D10
 k613561bb0d,M1_qwen3-8b_rag_think-off_b0-v1,RF07
 k6287b6eaa8,M2_llama3.2-3b_rag_think-off_b0-v1,D09
 k65fdf27b20,M2_llama3.2-3b_rag_think-off_b0-v1,B05
 k66603946fb,M2_llama3.2-3b_rag_think-off_b0-v1,B01
+k6748600ea0,M1_qwen3-8b_rag_think-off_b0-v1,A12
 k687e1bc054,M2_llama3.2-3b_rag_think-off_b0-v1,B12
 k68e2ea02bb,M3_qwen3-8b_closed_think-off_b0-v1,RF05
 k6a31045224,M1_qwen3-8b_rag_think-off_b0-v1,A05
@@ -161,7 +164,6 @@ kc2eef42434,M3_qwen3-8b_closed_think-off_b0-v1,B09
 kc4720834da,M3_qwen3-8b_closed_think-off_b0-v1,C12
 kc48aa32a80,M3_qwen3-8b_closed_think-off_b0-v1,E12
 kc56b4ac243,M2_llama3.2-3b_rag_think-off_b0-v1,F05
-kc598ccef6f,M3_qwen3-8b_closed_think-off_b0-v1,G10
 kc80855e879,M3_qwen3-8b_closed_think-off_b0-v1,B12
 kc8aeaf03bc,M2_llama3.2-3b_rag_think-off_b0-v1,B14
 kc8c1dc2946,M2_llama3.2-3b_rag_think-off_b0-v1,G02
@@ -186,6 +188,7 @@ kd8fbea2937,M1_qwen3-8b_rag_think-off_b0-v1,F05
 kd9539da236,M3_qwen3-8b_closed_think-off_b0-v1,C07
 kda1fbdda05,M1_qwen3-8b_rag_think-off_b0-v1,RF15
 kdc1e5de1ed,M2_llama3.2-3b_rag_think-off_b0-v1,RF02
+kdc8bbfd5d6,M3_qwen3-8b_closed_think-off_b0-v1,F01
 kdcc3b8f5f4,M2_llama3.2-3b_rag_think-off_b0-v1,A08
 kde6a2eb4cb,M3_qwen3-8b_closed_think-off_b0-v1,B13
 kdf31981a82,M2_llama3.2-3b_rag_think-off_b0-v1,RF19

@@ -5,22 +5,22 @@
 
 | Answer type | M1_qwen3-8b_rag_think-off_b0-v1 | M2_llama3.2-3b_rag_think-off_b0-v1 | M3_qwen3-8b_closed_think-off_b0-v1 |
 |---|---|---|---|
-| Short: numeric | 17/48 = 35% [23%–50%] | 7/48 = 15% [7%–27%] | 1/48 = 2% [0%–11%] |
-| Short: entity | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] |
+| Short: numeric | 16/48 = 33% [22%–47%] | 6/48 = 12% [6%–25%] | 0/48 = 0% [0%–7%] |
+| Short: entity | 5/10 = 50% [24%–76%] | 4/9 = 44% [19%–73%], 1 pending | 5/10 = 50% [24%–76%] |
 | Summary | pending (12) | 0/1 = 0% [0%–79%], 11 pending | 0/4 = 0% [0%–49%], 8 pending |
-| Refusal & not reported | 21/32 = 66% [48%–80%] | 7/32 = 22% [11%–39%] | 20/32 = 62% [45%–77%] |
+| Refusal & not reported | 21/32 = 66% [48%–80%] | 7/32 = 22% [11%–39%] | 21/32 = 66% [48%–80%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
 | Category | M1_qwen3-8b_rag_think-off_b0-v1 | M2_llama3.2-3b_rag_think-off_b0-v1 | M3_qwen3-8b_closed_think-off_b0-v1 |
 |---|---|---|---|
-| fact | 9/15 = 60% [36%–80%] | 6/15 = 40% [20%–64%] | 0/15 = 0% [0%–20%] |
+| fact | 8/15 = 53% [30%–75%] | 5/15 = 33% [15%–58%] | 0/15 = 0% [0%–20%] |
 | ratio | 7/15 = 47% [25%–70%] | 1/15 = 7% [1%–30%] | 0/15 = 0% [0%–20%] |
 | period_comparison | 0/12 = 0% [0%–24%] | 0/12 = 0% [0%–24%] | 0/12 = 0% [0%–24%] |
-| multi_turn | 1/6 = 17% [3%–56%] | 0/6 = 0% [0%–39%] | 1/6 = 17% [3%–56%] |
-| multi_company | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] |
+| multi_turn | 1/6 = 17% [3%–56%] | 0/6 = 0% [0%–39%] | 0/6 = 0% [0%–39%] |
+| multi_company | 5/10 = 50% [24%–76%] | 4/9 = 44% [19%–73%], 1 pending | 5/10 = 50% [24%–76%] |
 | qualitative | pending (12) | 0/1 = 0% [0%–79%], 11 pending | 0/4 = 0% [0%–49%], 8 pending |
-| refuse | 5/10 = 50% [24%–76%] | 1/10 = 10% [2%–40%] | 7/10 = 70% [40%–89%] |
+| refuse | 5/10 = 50% [24%–76%] | 1/10 = 10% [2%–40%] | 8/10 = 80% [49%–94%] |
 | refusal tests: refusal | 9/13 = 69% [42%–87%] | 1/13 = 8% [1%–33%] | 7/13 = 54% [29%–77%] |
 | refusal tests: partial | 0/2 = 0% [0%–66%] | 0/2 = 0% [0%–66%] | 0/2 = 0% [0%–66%] |
 | refusal tests: control | 7/7 = 100% [65%–100%] | 5/7 = 71% [36%–92%] | 6/7 = 86% [49%–97%] |
@@ -64,9 +64,9 @@
 |---|---|---|---|
 | unit_confusion | 1 | 1 | 0 |
 | arithmetic_slip | 8 | 3 | 2 |
-| invented_number | 9 | 9 | 26 |
-| wrong_line_item | 7 | 10 | 9 |
-| ignored_not_reported | 1 | 0 | 2 |
+| invented_number | 9 | 9 | 27 |
+| wrong_line_item | 8 | 11 | 9 |
+| ignored_not_reported | 1 | 0 | 1 |
 | wrong_company | 5 | 2 | 5 |
 | over_refusal | 10 | 3 | 16 |
 | under_refusal | 2 | 2 | 5 |
