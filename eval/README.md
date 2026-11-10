@@ -8,6 +8,8 @@
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
+| `runs_schema.py` | W1-08: the runs-file format (B0 answer, run record, run meta) shared by the runner (W1-13) and the scorer |
+| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (docs/week1_plan.txt §2.6) |
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
 | `injection_tests.jsonl` | 12 prompt-injection tests: text planted in a filing passage + the question + what must not appear in the answer |
@@ -63,6 +65,16 @@ when the committed pack no longer matches the current inputs and code). The B0 r
 recorded `n_tokens` is what the model sees. Filters are oracle filters (the right company and year), so the
 model comparison measures the models, not retrieval; questions that list no company are annotated in
 `QUESTION_FILTERS`, and a new refusal test needs an entry there (the script stops otherwise).
+
+## Scoring the model comparison (W1-08)
+```bash
+python eval/score_answers.py       # after the runner (W1-13) has written eval/results/model_runs/
+```
+Re-run it after graders fill in `results/grading/grading_sheet.csv` (W1-14): summaries count once `final` is set
+(2 = correct), a `final` of 2 on a "label" row overturns the automatic verdict, and a `failure_label` entered
+there replaces the suggested one. Re-running never erases what was entered, and a grade never moves to a changed
+answer (it becomes a "stale" row). Graders work from the sheet only; `grading_key.csv` says which model wrote
+each answer. Save from Excel as "CSV UTF-8" so names with accents survive.
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
