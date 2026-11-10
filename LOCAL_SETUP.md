@@ -1,7 +1,8 @@
 # FinSight - Local Development Setup (about 15 minutes)
 
 > **Note:** These instructions are for local development and smoke testing using Ollama as a stand-in for the
-> official endpoint. On 8 Nov only `.env` changes; the code stays the same.
+> provided endpoint. Connecting to the hosted Qwen3-8B endpoint (group CA certificate, key in `.env` only) is
+> Week 1 ticket W1-01 (UPGRAD-43), which adds a "Hosted endpoint" section here; see `docs/week1_plan.txt` §2.1.
 
 ## Prerequisites & Installation
 
@@ -60,7 +61,7 @@ The tests run offline in seconds (the LLM client is tested against fake clients)
 ## Building the data (needed for retrieval and the tools)
 Each step writes git-ignored files under `data/` and can be re-run; the outputs are deterministic.
 ```bash
-python ingest/01_download.py          # 120 filings + XBRL company facts from SEC EDGAR (~10 min; needs SEC_USER_AGENT)
+python ingest/01_download.py          # 120 filings + XBRL company facts from SEC EDGAR (several minutes; needs SEC_USER_AGENT)
 python ingest/02_parse_sections.py    # 1,260 Item sections -> data/sections/sections.jsonl (~9 min)
 python ingest/05_xbrl_facts.py        # 1,303 facts + coverage and spot checks -> data/xbrl/*.csv (seconds)
 python ingest/03_chunk.py             # chunk variants C1/C2/C3 -> data/chunks/ (seconds)
