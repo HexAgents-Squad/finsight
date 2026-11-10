@@ -94,12 +94,15 @@ async def main() -> int:
         return 1
     for handler in logging.getLogger().handlers:
         handler.addFilter(RedactHost(settings.LLM_BASE_URL))
+    # A smoke test must reach the endpoint: a cached reply would pass with the endpoint down
+    settings = settings.model_copy(update={"LLM_CACHE_DIR": None})
     print(f"   LLM endpoint: {shown_url(settings.LLM_BASE_URL)} ({settings.LLM_MODEL})")
     print(f"   TLS:          {tls_line(settings)}")
     thinking = {None: "switch not sent", True: "on", False: "off"}[settings.LLM_ENABLE_THINKING]
     print(f"   Thinking:     {thinking}")
     embed_model = settings.EMBED_MODEL if settings.EMBED_BACKEND == "openai" else settings.EMBED_LOCAL_MODEL_NAME
     print(f"   Embeddings:   {settings.EMBED_BACKEND} ({embed_model})")
+    print("   Cache:        off for the smoke test (every call reaches the endpoint)")
 
     try:
         llm = LLMClient(settings)
@@ -136,7 +139,7 @@ async def run_checks(llm: LLMClient) -> int:
         return 1
 
     u = llm.usage
-    print(f"\nOK: {u.calls} chat calls, {u.total_tokens} tokens "
+    print(f"\nOK: {u.calls} chat calls ({u.http_retries} retries), {u.total_tokens} tokens "
           f"({u.prompt_tokens} prompt + {u.completion_tokens} completion), {u.seconds:.1f} s in chat calls; "
           f"{u.embed_calls} embedding request(s), {u.embed_seconds:.1f} s")
     return 0

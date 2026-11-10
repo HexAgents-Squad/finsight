@@ -5,9 +5,17 @@ endpoint over HTTPS verified against the group's CA certificate, LLM_CA_CERT), s
 editing `.env` only. Qwen3's reasoning mode is off unless LLM_ENABLE_THINKING says otherwise, and any
 <think>...</think> block is removed from replies before they are returned or parsed as JSON.
 
-    chat(messages) -> str
+    complete(messages) -> Reply (answer, raw reply, tokens, cached, retries, seconds): what a runner records
+    chat(messages) -> str (complete(...).text)
     chat_json(messages, Schema) -> Schema instance (extract JSON, validate, re-prompt with the error)
     embed(texts) -> one vector per text (OpenAI-compatible endpoint or local sentence-transformers)
+
+Shared-key rules (docs/week1_plan.txt §2.2; the team key allows one active request, 60 per minute, 8,192 tokens
+per call): one request at a time per endpoint URL in this process, starts at least LLM_MIN_INTERVAL_S apart;
+429, 5xx, timeouts and network errors retried after 2, 4, 8 s (LLM_RETRY_BASE_S doubling, or the server's
+Retry-After if longer), never TLS, authentication or request errors; a request whose prompt + max_tokens cannot
+fit LLM_CONTEXT_TOKENS is refused before sending; replies are cached on disk (LLM_CACHE_DIR), so an identical
+request is answered without a call. Two processes on one key are not coordinated: run evaluations one at a time.
 
 All three are async. Use the client as `async with LLMClient(settings) as llm:` (or call `await llm.aclose()`)
 so its HTTP connections close before the event loop ends. Every call adds to `client.usage` (chat calls,
@@ -17,12 +25,15 @@ and the evaluation can report cost and latency.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import ssl
+import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, TypeVar
@@ -54,6 +65,14 @@ FINISH_LENGTH = "length"          # finish_reason when a reply stopped at max_to
 MAX_CAUSE_DEPTH = 10             # exception-chain links searched for the TLS error behind a connection error
 DEFAULT_PORTS = {"http": 80, "https": 443}
 MAX_ERROR_CHARS = 2_000          # validation errors sent back to the model are cut to this length
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})   # busy key, rate limit, server or gateway trouble
+MAX_RETRY_AFTER_S = 30.0         # a server's Retry-After is honoured up to this
+LOCK_POLL_S = 0.05               # how often a waiting request checks the endpoint lock
+# Qwen3's chat template around the content, measured against the endpoint's prompt_tokens (10 Nov 2026: 1, 2
+# and 4 messages gave 12, 17 and 27 tokens over the content, with or without the thinking switch)
+TEMPLATE_BASE_TOKENS, TEMPLATE_TOKENS_PER_MESSAGE = 7, 5
+CACHE_VERSION = 1                # part of every cache key: bump it to invalidate all cached replies
+TokenCounter = Callable[[str], int]
 
 
 @dataclass
@@ -61,8 +80,10 @@ class Usage:
     """Running totals for one client (create one client per query, or call reset()). Failed requests count
     too: they cost time, and the agent's budget has to see them."""
 
-    calls: int = 0
-    prompt_tokens: int = 0
+    calls: int = 0                  # HTTP requests sent, retries included (cache hits send none)
+    cache_hits: int = 0
+    http_retries: int = 0
+    prompt_tokens: int = 0          # of every reply returned, cached or not: what the model's answers consumed
     completion_tokens: int = 0
     json_retries: int = 0
     seconds: float = 0.0
@@ -186,11 +207,65 @@ def _api_error(err: openai.APIError, model: str, ca_file: Path | None = None) ->
     return FinSightError(f"LLM request to {model} failed: {err}", error_type=kind)
 
 
+@dataclass(frozen=True)
+class Reply:
+    """One chat completion, as a runner records it."""
+    text: str                   # the answer: the reply without reasoning (strip_thinking)
+    raw: str                    # the reply as the model wrote it
+    prompt_tokens: int
+    completion_tokens: int
+    cached: bool                # answered from the disk cache, no request sent
+    retries: int                # 429/5xx/network retries this call needed
+    seconds: float              # wall time, waiting for the endpoint lock and back-off included
+
+
+class _Endpoint:
+    """Per endpoint URL: the lock that keeps one request active and the time the last one started. A threading
+    lock (polled, never blocking the event loop), so it holds across threads and event loops in one process."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.last_start = float("-inf")
+
+
+_ENDPOINTS: dict[str, _Endpoint] = {}
+_ENDPOINTS_GUARD = threading.Lock()
+
+
+def _endpoint(url: str) -> _Endpoint:
+    with _ENDPOINTS_GUARD:
+        return _ENDPOINTS.setdefault(url.rstrip("/"), _Endpoint())
+
+
+def count_prompt_tokens(messages: list[Message], count: TokenCounter) -> int:
+    """Prompt tokens of a chat request: the content plus Qwen3's chat template (measured, exact on the endpoint)."""
+    return TEMPLATE_BASE_TOKENS + sum(TEMPLATE_TOKENS_PER_MESSAGE + count(m["content"]) for m in messages)
+
+
+def _retryable(err: openai.APIError) -> bool:
+    """Busy key, rate limit, server trouble or a dropped connection: worth another try. A TLS failure, a bad key
+    or a bad request fails the same way again."""
+    if isinstance(err, openai.APIConnectionError):                     # timeouts included
+        return _tls_failure(err) is None
+    return isinstance(err, openai.APIStatusError) and err.status_code in RETRYABLE_STATUS
+
+
+def _retry_after(err: openai.APIError) -> float | None:
+    """The server's Retry-After in seconds, when it sends a number."""
+    response = getattr(err, "response", None)
+    value = response.headers.get("retry-after") if response is not None else None
+    try:
+        return max(0.0, float(value)) if value is not None else None
+    except ValueError:
+        return None                                                    # an HTTP date: use our own back-off
+
+
 class AbstractLLMClient(ABC):
     """What the agents depend on; tests can substitute a fake implementation."""
 
     @abstractmethod
-    async def chat(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None) -> str:
+    async def chat(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,
+                   sample: int = 0) -> str:
         ...
 
     @abstractmethod
@@ -205,16 +280,20 @@ class AbstractLLMClient(ABC):
 class LLMClient(AbstractLLMClient):
     """Async LLM client for an OpenAI-compatible endpoint, with local or remote embeddings."""
 
-    def __init__(self, settings: Settings, *, chat_client: Any = None, embed_client: Any = None) -> None:
+    def __init__(self, settings: Settings, *, chat_client: Any = None, embed_client: Any = None,
+                 token_counter: TokenCounter | None = None) -> None:
         self.settings = settings
         self.usage = Usage()
+        self._endpoint = _endpoint(settings.LLM_BASE_URL)
+        self._count: TokenCounter | None = token_counter
+        self._budget_checked = token_counter is not None      # False: load the Qwen tokenizer on first use
         needs_client = chat_client is None or embed_client is None
         ssl_context = build_ssl_context(settings.LLM_CA_CERT) if settings.LLM_CA_CERT and needs_client else None
         self.client = chat_client or AsyncOpenAI(
             base_url=settings.LLM_BASE_URL,
             api_key=settings.LLM_API_KEY.get_secret_value(),
             timeout=settings.LLM_TIMEOUT,
-            max_retries=settings.LLM_HTTP_RETRIES,
+            max_retries=0,                      # retries are ours (_send), so they never multiply with the SDK's
             http_client=_http_client(ssl_context),
         )
         # The group CA vouches for the LLM endpoint's server only; an embeddings URL on another server keeps
@@ -245,9 +324,16 @@ class LLMClient(AbstractLLMClient):
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
 
-    async def chat(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None) -> str:
+    async def chat(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,
+                   sample: int = 0) -> str:
         """One completion for a message list (system, previous turns, tool results, user), without any
         reasoning block (strip_thinking)."""
+        return (await self.complete(messages, temperature=temperature, model=model, sample=sample)).text
+
+    async def complete(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,
+                       sample: int = 0) -> Reply:
+        """One completion with what a runner records. `sample` numbers repeated samples of the same request
+        (self-consistency at temperature > 0): each has its own cache entry, so a re-run replays every sample."""
         target_model = model or self.settings.LLM_MODEL
         request: dict[str, Any] = {"model": target_model, "messages": messages, "temperature": temperature,
                                    "max_tokens": self.settings.LLM_MAX_COMPLETION_TOKENS}
@@ -255,27 +341,122 @@ class LLMClient(AbstractLLMClient):
             # Not a standard OpenAI parameter: vLLM passes it to the chat template (Qwen3), Ollama ignores it
             request["extra_body"] = {"chat_template_kwargs": {"enable_thinking": self.settings.LLM_ENABLE_THINKING}}
         start = time.perf_counter()
-        try:
-            response = await self.client.chat.completions.create(**request)
-        except openai.APIError as err:
-            raise _api_error(err, target_model, self.settings.LLM_CA_CERT) from err
-        finally:
-            self.usage.calls += 1
-            self.usage.seconds += time.perf_counter() - start
-        if response.usage:
-            self.usage.prompt_tokens += response.usage.prompt_tokens or 0
-            self.usage.completion_tokens += response.usage.completion_tokens or 0
-
-        if response.choices and getattr(response.choices[0], "finish_reason", None) == FINISH_LENGTH:
+        path = self._cache_path(request, sample)
+        entry = self._read_cache(path) if path else None
+        cached = entry is not None
+        retries = 0
+        if entry is None:
+            self._check_budget(messages)
+            response, retries = await self._send(request, target_model)
+            choice = response.choices[0] if response.choices else None
+            entry = {"content": choice.message.content if choice else None,
+                     "finish_reason": getattr(choice, "finish_reason", None),
+                     "prompt_tokens": (response.usage.prompt_tokens or 0) if response.usage else 0,
+                     "completion_tokens": (response.usage.completion_tokens or 0) if response.usage else 0}
+            if path:
+                self._write_cache(path, entry)          # before the checks below: a re-run replays them exactly
+        else:
+            self.usage.cache_hits += 1
+        self.usage.prompt_tokens += entry["prompt_tokens"]
+        self.usage.completion_tokens += entry["completion_tokens"]
+        if entry["finish_reason"] == FINISH_LENGTH:
             # Cut off at LLM_MAX_COMPLETION_TOKENS: half an answer (or half a JSON object) must not pass as whole
             raise FinSightError(f"Reply from {target_model} hit the {self.settings.LLM_MAX_COMPLETION_TOKENS}-"
                                 f"token cap (LLM_MAX_COMPLETION_TOKENS)", error_type="TruncatedResponseError")
-        content = response.choices[0].message.content if response.choices else None
-        answer = strip_thinking(content or "")
+        raw = entry["content"] or ""
+        answer = strip_thinking(raw)
         if not answer:
             # Also a reply that was nothing but reasoning: there is no answer to return
             raise FinSightError(f"Empty reply from {target_model}", error_type="EmptyResponseError")
-        return answer
+        return Reply(answer, raw, entry["prompt_tokens"], entry["completion_tokens"], cached, retries,
+                     time.perf_counter() - start)
+
+    async def _send(self, request: dict[str, Any], target_model: str) -> tuple[Any, int]:
+        """The request through the endpoint lock, spaced and retried; returns (response, retries)."""
+        endpoint, retries, start = self._endpoint, 0, time.perf_counter()
+        while not endpoint.lock.acquire(blocking=False):    # polling: cancellable, never blocks the event loop
+            await asyncio.sleep(LOCK_POLL_S)
+        try:
+            while True:
+                wait = endpoint.last_start + self.settings.LLM_MIN_INTERVAL_S - time.monotonic()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                endpoint.last_start = time.monotonic()
+                self.usage.calls += 1
+                try:
+                    return await self.client.chat.completions.create(**request), retries
+                except openai.APIError as err:
+                    if retries >= self.settings.LLM_HTTP_RETRIES or not _retryable(err):
+                        raise _api_error(err, target_model, self.settings.LLM_CA_CERT) from err
+                    delay = self.settings.LLM_RETRY_BASE_S * 2 ** retries
+                    after = _retry_after(err)
+                    if after is not None:
+                        delay = max(delay, min(after, MAX_RETRY_AFTER_S))
+                    retries += 1
+                    self.usage.http_retries += 1
+                    logger.warning("LLM request to %s failed (%s); retry %d/%d in %.0f s", target_model,
+                                   type(err).__name__, retries, self.settings.LLM_HTTP_RETRIES, delay)
+                    await asyncio.sleep(delay)
+        finally:
+            endpoint.lock.release()
+            self.usage.seconds += time.perf_counter() - start
+
+    def _check_budget(self, messages: list[Message]) -> None:
+        """Refuse a request whose prompt + max_tokens cannot fit the context (the endpoint would answer 400)."""
+        limit = self.settings.LLM_CONTEXT_TOKENS
+        if limit is None:
+            return
+        if not self._budget_checked:
+            self._budget_checked = True
+            try:
+                from core.tokens import count_tokens
+                count_tokens("warm-up")
+                self._count = count_tokens
+            except (ImportError, FinSightError) as err:     # first run offline: no tokenizer yet
+                logger.warning("prompt-size check off (Qwen tokenizer unavailable): %s", err)
+        if self._count is None:
+            return
+        cap = self.settings.LLM_MAX_COMPLETION_TOKENS
+        tokens = count_prompt_tokens(messages, self._count)
+        if tokens + cap > limit:
+            raise FinSightError(f"prompt is {tokens} tokens; with max_tokens {cap} it exceeds the {limit}-token "
+                                f"context (LLM_CONTEXT_TOKENS)", error_type="PromptTooLongError")
+
+    def _cache_path(self, request: dict[str, Any], sample: int) -> Path | None:
+        if self.settings.LLM_CACHE_DIR is None:
+            return None
+        key = {"v": CACHE_VERSION, "model": request["model"], "messages": request["messages"],
+               "temperature": request["temperature"], "max_tokens": request["max_tokens"],
+               "thinking": self.settings.LLM_ENABLE_THINKING, "sample": sample}
+        digest = hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return self.settings.LLM_CACHE_DIR / digest[:2] / f"{digest}.json"
+
+    @staticmethod
+    def _read_cache(path: Path) -> dict[str, Any] | None:
+        """A cached reply, or None (absent, or unreadable: then it is fetched again and rewritten)."""
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as err:
+            logger.warning("ignoring unreadable cache entry %s: %s", path.name, err)
+            return None
+        fields_ok = isinstance(entry, dict) and {"content", "finish_reason", "prompt_tokens",
+                                                 "completion_tokens"} <= set(entry)
+        return entry if fields_ok else None
+
+    @staticmethod
+    def _write_cache(path: Path, entry: dict[str, Any]) -> None:
+        """Atomic: a crash never leaves half an entry; a write failure only costs the cache, never the reply."""
+        tmp = path.with_name(f"{path.name}.{threading.get_ident()}.part")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except OSError as err:
+            logger.warning("could not write cache entry %s: %s", path.name, err)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     async def chat_json(self, messages: list[Message], schema: type[T], *, model: str | None = None) -> T:
         """A reply validated against `schema`. Invalid output is sent back with the validation error,

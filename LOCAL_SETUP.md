@@ -81,7 +81,12 @@ file; verification is never switched off.
    the team chat as your smoke-test check.
 
 Rules for the team key: **one active request at a time for the whole team**, 60 requests per minute and 8,192
-tokens per call (prompt + reply). Never commit, screenshot or share the key, the address or the certificate
+tokens per call (prompt + reply). The client enforces them within one process: one request at a time per
+endpoint, at most one start per second, retries after 2, 4 and 8 s when the key is busy (429) or the server
+fails (5xx, timeouts), and a prompt that cannot fit is refused before it is sent. It cannot see a teammate's
+process, so announce long runs in the team chat. Replies are cached in `data/cache/llm/` (git-ignored): an
+identical request is answered from disk, so re-running an evaluation is free; delete that folder (or set
+`LLM_CACHE_DIR=`) to force fresh calls. The smoke test always calls the endpoint. Never commit, screenshot or share the key, the address or the certificate
 outside the team. Qwen3's reasoning mode stays off (`LLM_ENABLE_THINKING=false`); any `<think>` block is
 removed from replies either way. The provided endpoint currently ignores the switch and never reasons (checked on
 10 Nov), so setting it to `true` changes nothing there.
@@ -93,7 +98,8 @@ removed from replies either way. The provided endpoint currently ignores the swi
 | `TLSConfigError` | `LLM_CA_CERT` is not a PEM certificate (e.g. the wrong download) |
 | settings error `no certificate file at ...` | The path in `LLM_CA_CERT` is wrong (relative paths start at the repo root) |
 | `AuthenticationError` | TLS works; the key in `LLM_API_KEY` is wrong or missing |
-| `RateLimitError` | Someone else is using the team key right now (one active request per key); try again shortly |
+| `RateLimitError` | Still refused after 3 retries: someone else is using the team key (one active request per key); try again shortly |
+| `PromptTooLongError` | The prompt plus the 1,024-token reply would exceed 8,192 tokens; shorten the context |
 | `NotFoundError` | `LLM_MODEL` is not `Qwen/Qwen3-8B`, or the URL does not end in `/v1` |
 | `NetworkError` | The address or port is wrong, or the endpoint is unreachable from your network |
 
