@@ -39,7 +39,9 @@ jobs:
       - name: Unit tests (pytest)
         run: pytest -q
 
-      - name: Validate gold set (freeze rules: gold-v1 is frozen, so counts and verification must hold)
+      # Freeze rules, because gold-v1 is frozen: counts and verification must hold. (A step name must not contain
+      # ": " unquoted, or GitHub rejects the whole workflow file and runs no job; tests/test_ci_workflow.py checks.)
+      - name: Validate gold set (freeze rules)
         run: python eval/validate_gold.py --final
 
       - name: Validate refusal and prompt-injection test sets
