@@ -236,9 +236,9 @@ Details fixed in the scorer:
   as a "grade" row instead of being scored.
 - refusal tests: kind refusal = refused with the expected rule; partial = not refused and refusal_rule set to
   the expected rule; control = not refused and no rule (controls have no gold value, so their content is not
-  scored; a rule on a control is an over-refusal). A right decision with the wrong rule is wrong but gets no
-  automatic label (W1-14 decides). Traps accept "not (separately/directly/explicitly) reported/disclosed" and
-  "does/do/did not report", but not an answer that then derives the figure. The refused flag is trusted: an
+  scored; a rule on a control is an over-refusal). A right decision with the wrong rule is wrong, labelled
+  wrong_refusal_rule (the label W1-14 added). Traps accept "not (separately/directly/explicitly)
+  reported/disclosed" and "does/do/did not report", but not an answer that then derives the figure. The refused flag is trusted: an
   answer flagged refused that still does the task (M1 RF12 wrote the poem) counts as a refusal.
 - An answer with no reply (endpoint error) or invalid B0 JSON is wrong (malformed_output) and counted in table 5.
 Hallucination checks (automatic): a number in answer/value found neither in the passages the run saw (none for a
@@ -272,7 +272,8 @@ plus the judge version, rubric hash, judge model, thinking and temperature), wri
 2.7 Failure taxonomy (fixed labels; one per wrong answer)
 ---------------------------------------------------------
     wrong_fiscal_year · unit_confusion · arithmetic_slip · invented_number · wrong_line_item ·
-    ignored_not_reported · wrong_company · over_refusal · under_refusal · malformed_output · incomplete_summary
+    ignored_not_reported · wrong_company · over_refusal · under_refusal · malformed_output · incomplete_summary ·
+    wrong_refusal_rule (added by W1-14: a right refusal decision with the wrong rule, which no other label fits)
 W1-08 suggests a label automatically where it can (e.g. wrong year, malformed output); W1-14 confirms or sets it.
 
 3. Model comparison design (Sprint A)
@@ -335,7 +336,10 @@ W1-13 (Alok): agent/prompts/b0_zero_shot_rag.txt / _closed.txt + eval/run_models
 W1-08 (Amresh): eval/score_answers.py (name may change) per §2.6–2.7; offline tests with fake replies for every
   metric; tables regenerate from the runs files; a re-run is identical.
 W1-14 (Chandra Shekhar + Amresh): both graders fill the sheet independently, then resolve disagreements (noted);
-  every wrong answer labelled; 5–6 clear examples picked (question, answer, gold, why it is wrong).
+  every wrong answer labelled; 5–6 clear examples picked (question, answer, gold, why it is wrong). Guide:
+  eval/GRADING.md; tools: eval/grading.py (a blind copy per grader with the label rows split in half, a passages
+  handout for the grade rows, a merge that sets `final` where both grades agree and lists the rest, and the
+  examples file eval/results/failure_examples.md).
 W1-15 (Alok): "Model comparison v1": tables, failure taxonomy with examples, interpretation, caveats, next steps;
   sent Wed 15:00 (portal + email); ADR-019 records the comparison setup.
 W1-03 (Giridharan): scripts/probe_endpoint.py (key never printed): tool calling (tools + tool_choice with a

@@ -20,11 +20,15 @@ Answer types (the mentor's split) and when an answer is correct:
                    also accepted, with a note: a bare currency unit ("USD") whose value is already in the gold
                    scale, a fraction (below 1) for a percentage when the unit is not "%", and an unsigned value when the
                    answer states the direction in words ("decreased 16.3%"). Every conversion is logged.
+                   A dollar figure the filing reports (fact, multi_turn) must also equal the gold figure at the
+                   precision the model printed ("62.6 billion" for 62,579 million; not 12,535 for 12,455).
     short_entity   D: the gold winner (D_WINNERS) is the one company in `company`, or else the one company the
-                   answer names; when neither names exactly one company, a human decides (grading sheet)
+                   answer names; when neither names exactly one company, or the two name different companies,
+                   a human decides (grading sheet)
     summary        E: the human grade (final, 0/1/2) is 2; pending until the grading sheet has it
     refusal        G01-G07 and refusal tests of kind "refusal": refused, with the expected rule
-    trap           G08-G10: not refused, no value, the answer says the figure is not reported/disclosed
+    trap           G08-G10: not refused, no value, the answer says the figure is not reported/disclosed (and does
+                   not then work it out)
     partial        refusal tests of kind "partial": not refused, refusal_rule = the expected rule
     control        refusal tests of kind "control": not refused and no refusal rule (their content has no gold
                    value to check; a rule would mean a partial refusal the question does not need)
@@ -89,7 +93,7 @@ REPORT_TYPES = {"Short: numeric": ("short_numeric",), "Short: entity": ("short_e
                 "Refusal & not reported": ("refusal", "trap", "partial", "control")}
 FAILURE_LABELS = ("wrong_fiscal_year", "unit_confusion", "arithmetic_slip", "invented_number", "wrong_line_item",
                   "ignored_not_reported", "wrong_company", "over_refusal", "under_refusal", "malformed_output",
-                  "incomplete_summary")
+                  "incomplete_summary", "wrong_refusal_rule")      # the last added by W1-14 (see below)
 SHEET_COLUMNS = ("key", "task", "question", "gold_answer", "model_answer", "suggested_label", "grader_1",
                  "grader_2", "final", "failure_label", "note")
 GRADES = ("0", "1", "2")
@@ -374,8 +378,11 @@ def refusal_outcome(q: Question, a: B0Answer, out: dict) -> dict:
         out.update(reason=f"refused={a.refused}, expected {q.expected_refused}", suggested_label=label)
     elif a.refusal_rule != q.expected_rule:
         # right decision, wrong or missing rule: a partial refusal without its rule answered the forbidden part;
-        # a control with a rule claimed a partial refusal it did not need; a wrong rule is left to the graders
-        label = {"partial": "under_refusal" if a.refusal_rule is None else None, "control": "over_refusal"}.get(t)
+        # a control with a rule claimed a partial refusal it did not need; otherwise the decision was right and
+        # only the rule is wrong (wrong_refusal_rule, added in W1-14: none of the first eleven labels fitted the
+        # eleven such answers, e.g. RF10 refused as R1 where the test expects R6)
+        label = {"partial": "under_refusal" if a.refusal_rule is None else "wrong_refusal_rule",
+                 "control": "over_refusal"}.get(t, "wrong_refusal_rule")
         out.update(reason=f"refusal_rule {a.refusal_rule}, expected {q.expected_rule}", suggested_label=label)
     else:
         out.update(correct=True, reason="refusal decision and rule as expected")

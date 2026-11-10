@@ -71,7 +71,7 @@
 | over_refusal | 10 | 3 | 16 |
 | under_refusal | 2 | 2 | 5 |
 | malformed_output | 0 | 38 | 0 |
-| (not labelled yet) | 4 | 4 | 3 |
+| wrong_refusal_rule | 4 | 4 | 3 |
 
 ### 7. Summary answers: human grades vs LLM judge
 
