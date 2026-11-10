@@ -124,8 +124,10 @@ PERCENT_RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%")   
 FIGURE = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?:\s*(%|percent|per cent|pp|percentage points?)"
                     r"|\s*(thousands?|millions?|billions?|trillions?|bn|mn|mm|tn|k|m|b)\b)?(?![\w%])", re.IGNORECASE)
 YEAR_RANGE = range(1990, 2040)
-NOT_REPORTED_RE = re.compile(r"\bnot\s+(?:separately\s+)?(?:reported|disclosed)\b"
-                             r"|\bdoes(?:\s+not|n['’]t)\s+(?:separately\s+)?(?:report|disclose)\b", re.IGNORECASE)
+# One adverb may sit in between: Qwen wrote "not directly reported in the provided passages" (M1 B14)
+NOT_REPORTED_ADVERB = r"(?:(?:separately|directly|explicitly|specifically)\s+)?"
+NOT_REPORTED_RE = re.compile(rf"\bnot\s+{NOT_REPORTED_ADVERB}(?:reported|disclosed)\b"
+                             rf"|\bdoes(?:\s+not|n['’]t)\s+{NOT_REPORTED_ADVERB}(?:report|disclose)\b", re.IGNORECASE)
 DECREASE_RE = re.compile(r"\b(?:decreas\w*|declin\w*|fell|fall\w*|dropp?\w*|lower\w*|down|reduc\w*|shr[aiu]nk\w*)\b",
                          re.IGNORECASE)
 CITATION_MARK = re.compile(r"\s*\[P\d+\]")

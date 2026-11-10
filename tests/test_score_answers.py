@@ -136,6 +136,7 @@ def test_tolerance_is_the_items_own():
     ("C12", answer(value=16.3, unit="%"), "arithmetic_slip"),                      # gold -16.3: sign flipped
     ("A01", answer(value=123456, unit="USD millions"), "invented_number"),
     ("A01", answer(answer="not reported", value=None), "wrong_line_item"),
+    ("A01", answer(answer="Not directly reported in the passages.", value=None), "wrong_line_item"),  # M1 B14
     ("A01", answer(value=None), "malformed_output"),
     ("A01", answer(refused=True, refusal_rule="R3"), "over_refusal"),
 ])
@@ -458,7 +459,9 @@ def test_a_decrease_stated_in_words_accepts_an_unsigned_value():
 @pytest.mark.parametrize("text", ["JPMorgan does not report a gross profit line.",
                                   "Gross profit is not separately reported by JPMorgan.",
                                   "Not disclosed: banks show net revenue instead.",
-                                  "JPMorgan doesn't report gross profit."])
+                                  "JPMorgan doesn't report gross profit.",
+                                  "Gross profit is not directly reported in the provided passages.",
+                                  "JPMorgan does not explicitly disclose gross profit."])
 def test_trap_answers_in_other_words(text):
     assert score_one("G08", answer(answer=text))["correct"] is True
 
