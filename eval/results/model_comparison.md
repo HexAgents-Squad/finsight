@@ -73,12 +73,14 @@
 | malformed_output | 0 | 38 | 0 |
 | wrong_refusal_rule | 4 | 4 | 3 |
 
-### 7. Summary answers: human grades vs LLM judge
+### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | M1_qwen3-8b_rag_think-off_b0-v1 | M2_llama3.2-3b_rag_think-off_b0-v1 | M3_qwen3-8b_closed_think-off_b0-v1 |
 |---|---|---|---|
-| exact agreement | – | – | – |
-| Cohen's kappa | – | – | – |
+| graders' exact agreement (independent grades) | – | – | – |
+| graders' Cohen's kappa | – | – | – |
+| final grade vs judge: exact agreement | – | – | – |
+| final grade vs judge: Cohen's kappa | – | – | – |
 <!-- GENERATED:END -->
 
 ## Interpretation

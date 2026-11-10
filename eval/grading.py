@@ -3,6 +3,7 @@
 Usage:
     python eval/grading.py copies --names Chandra Amresh --out DIR   # one blind copy of the sheet per grader
     python eval/grading.py handout --out FILE                        # passages for the "grade" rows (markdown)
+    python eval/grading.py check --grader 1 FILE                     # one returned copy, as soon as it arrives
     python eval/grading.py merge --g1 FILE --g2 FILE [--write]       # both copies -> the repo's sheet
     python eval/grading.py examples                                  # rows noted "example" -> failure_examples.md
 
@@ -11,7 +12,8 @@ Roles: grader 1 fills `grader_1` on every "grade" row and `failure_label` on the
 sets it where both grades agree and lists the disagreements, which the graders settle together (a `final` of 2 on
 a label row overturns the automatic verdict). Then `python eval/score_answers.py` reads the sheet.
 
-Every file is validated with the scorer's reader (eval.score_answers.read_sheet). Grades are bound to the row key,
+Every file is read with the scorer's reader (eval.score_answers.read_sheet_rows: what a spreadsheet adds
+harmlessly is undone, anything else is an error naming line and column). Grades are bound to the row key,
 so the merge needs the keys and tasks unchanged and in order; a spreadsheet re-formatting an answer cell ("7,367"
 -> "7367") only gives a warning, since the merged sheet takes the text columns from the repo's sheet.
 Exit codes: 0 = done, 1 = invalid input (nothing written).
@@ -27,6 +29,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.settings import REPO_ROOT  # noqa: E402
 from eval.context_pack import GOLD_PACK  # noqa: E402
 from eval.score_answers import (  # noqa: E402
     GRADE,
@@ -37,7 +40,7 @@ from eval.score_answers import (  # noqa: E402
     SHEET_COLUMNS,
     SHEET_NAME,
     kappa,
-    read_sheet,
+    read_sheet_rows,
     replace_file,
 )
 from eval.validate_gold import DEFAULT_PATH as GOLD_FILE  # noqa: E402
@@ -47,8 +50,10 @@ SHEET, KEY = GRADING_DIR / SHEET_NAME, GRADING_DIR / KEY_NAME
 EXAMPLES_FILE = RESULTS_DIR / "failure_examples.md"
 TEXT_COLUMNS = ("question", "gold_answer", "model_answer", "suggested_label")
 GRADER_COLUMNS = ("grader_1", "grader_2", "final", "failure_label")
-EXAMPLE_MARK = re.compile(r"\bexample\b", re.IGNORECASE)
-OVERTURN_MARK = re.compile(r"\boverturn", re.IGNORECASE)
+# The guide asks for "example:" and "overturn?", so "for example" or "no overturn" in a note is not a mark
+EXAMPLE_MARK = re.compile(r"\bexample\s*:", re.IGNORECASE)
+OVERTURN_MARK = re.compile(r"\boverturn\s*\?", re.IGNORECASE)
+MAX_LISTED = 20                                      # problems shown at once; the rest are counted
 SAFE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,30}")
 
 
@@ -57,12 +62,49 @@ class GradingError(ValueError):
 
 
 def load(path: Path) -> list[dict]:
-    """The sheet's rows in file order, validated by the scorer (columns, grades 0/1/2, labels, keys)."""
-    read_sheet(path)                                     # raises ValueError naming the line
+    """The sheet's rows in file order, validated and cleaned by the scorer's reader."""
     if not path.exists():
         raise GradingError(f"{path} does not exist")
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+    return read_sheet_rows(path)
+
+
+def listed(problems: list[str]) -> str:
+    extra = len(problems) - MAX_LISTED
+    return "\n  ".join(problems[:MAX_LISTED] + ([f"... and {extra} more"] if extra > 0 else []))
+
+
+def copy_problems(base: list[dict], rows: list[dict], grader: int) -> tuple[list[str], list[str]]:
+    """What is wrong (problems) or odd (warnings) in one grader's copy, compared with the repo's sheet."""
+    name, other = f"grader {grader}", f"grader_{3 - grader}"
+    if [(r["key"], r["task"]) for r in rows] != [(r["key"], r["task"]) for r in base]:
+        return [f"{name}'s file has rows added, removed or re-ordered (sorted?) or a changed key or task: "
+                f"ask for the copy again, filled without sorting"], []
+    problems, warnings, split = [], [], split_row(base)
+    for n, (r, b) in enumerate(zip(rows, base, strict=True), start=2):
+        if r[other] or r["final"]:
+            problems.append(f"{name}'s row {n}: {other} or final filled (only grader_{grader} and labels)")
+        if b["task"] == LABEL and owner(n, split) != grader and r["failure_label"]:
+            warnings.append(f"row {n}: {name} labelled the other grader's row (ignored)")
+    edited = [n for n, (a, b) in enumerate(zip(rows, base, strict=True), start=2)
+              if any(a[c] != b[c] for c in TEXT_COLUMNS)]
+    if edited:
+        warnings.append(f"{name}: text re-formatted or edited on rows {edited[:12]}"
+                        f"{' ...' if len(edited) > 12 else ''} (the repo's text is kept)")
+    return problems, warnings
+
+
+def check(base_path: Path, path: Path, grader: int) -> list[str]:
+    """One returned copy checked on its own, so a mistake is fixed while the grader is still around: its
+    problems raise GradingError; the result lists what is missing and any warnings."""
+    base, rows = load(base_path), load(path)
+    problems, warnings = copy_problems(base, rows, grader)
+    if problems:
+        raise GradingError(listed(problems))
+    split, col = split_row(base), f"grader_{grader}"
+    missing = [f"row {n}: no grade in {col}" for n, r in enumerate(rows, start=2) if r["task"] == GRADE and not r[col]]
+    missing += [f"row {n}: no failure_label" for n, r in enumerate(rows, start=2)
+                if r["task"] == LABEL and owner(n, split) == grader and not r["failure_label"]]
+    return [f"grader {grader}: {len(missing)} missing", *missing, *warnings]
 
 
 def split_row(rows: list[dict]) -> int:
@@ -158,30 +200,15 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
     """The repo sheet with grader 1's and grader 2's entries, `final` set where both grades agree. Returns the
     merged rows and a report (pairs, disagreements, missing entries, overturn proposals, warnings)."""
     base, g1, g2 = load(base_path), load(g1_path), load(g2_path)
-    problems, warnings = [], []
     if has_grades(base):
-        problems.append(f"{base_path} already holds grades: merge into a fresh sheet, not over earlier work")
-    for name, rows in (("grader 1", g1), ("grader 2", g2)):
-        if [(r["key"], r["task"]) for r in rows] != [(r["key"], r["task"]) for r in base]:
-            problems.append(f"{name}'s file has rows added, removed or re-ordered (sorted?) or a changed task")
-            continue
-        edited = [n for n, (a, b) in enumerate(zip(rows, base, strict=True), start=2) if any(a[c] != b[c] for c in TEXT_COLUMNS)]
-        if edited:
-            warnings.append(f"{name}: text re-formatted or edited on rows {edited[:12]}"
-                            f"{' ...' if len(edited) > 12 else ''} (the repo's text is kept)")
-    if not problems:
-        split = split_row(base)
-        for n, (a, b) in enumerate(zip(g1, g2, strict=True), start=2):
-            if a["grader_2"].strip() or a["final"].strip():
-                problems.append(f"grader 1's row {n}: grader_2 or final filled")
-            if b["grader_1"].strip() or b["final"].strip():
-                problems.append(f"grader 2's row {n}: grader_1 or final filled")
-            if base[n - 2]["task"] == LABEL:
-                other = b if owner(n, split) == 1 else a
-                if other["failure_label"].strip():
-                    warnings.append(f"row {n}: a label from the grader who does not own the row was ignored")
+        raise GradingError(f"{base_path} already holds grades. To merge corrected copies again, first restore the "
+                           f"ungraded sheet: git checkout -- {SHEET.relative_to(REPO_ROOT).as_posix()}")
+    problems, warnings = [], []
+    for grader, rows in ((1, g1), (2, g2)):
+        p, w = copy_problems(base, rows, grader)
+        problems, warnings = problems + p, warnings + w
     if problems:
-        raise GradingError("\n  ".join(problems[:20]))
+        raise GradingError(listed(problems))
 
     split = split_row(base)
     merged, pairs, disagree, missing, overturn = [], [], [], [], []
@@ -189,7 +216,12 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
         row = dict(b)
         row["note"] = " | ".join(f"G{i}: {r['note'].strip()}" for i, r in ((1, a1), (2, a2)) if r["note"].strip())
         if b["task"] == GRADE:
-            row["grader_1"], row["grader_2"] = a1["grader_1"].strip(), a2["grader_2"].strip()
+            row["grader_1"], row["grader_2"] = a1["grader_1"], a2["grader_2"]
+            labels = {r["failure_label"] for r in (a1, a2) if r["failure_label"]}   # optional on grade rows
+            row["failure_label"] = labels.pop() if len(labels) == 1 else ""
+            if labels:
+                disagree.append(f"row {n}: the graders gave different labels ({a1['failure_label']} / "
+                                f"{a2['failure_label']}): set one in failure_label")
             if not row["grader_1"] or not row["grader_2"]:
                 missing.append(f"row {n}: grade missing (grader 1: {row['grader_1'] or '-'}, "
                                f"grader 2: {row['grader_2'] or '-'})")
@@ -201,7 +233,7 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
                     disagree.append(f"row {n}: grader 1 = {row['grader_1']}, grader 2 = {row['grader_2']}: "
                                     f"{b['question'][:80]}")
         elif b["task"] == LABEL:
-            row["failure_label"] = (a1 if owner(n, split) == 1 else a2)["failure_label"].strip()
+            row["failure_label"] = (a1 if owner(n, split) == 1 else a2)["failure_label"]
             if not row["failure_label"]:
                 missing.append(f"row {n}: no failure_label (suggested: {b['suggested_label'] or 'none'})")
         if OVERTURN_MARK.search(row["note"]):
@@ -226,7 +258,7 @@ def examples(sheet: Path, key: Path) -> str:
         label = r["failure_label"] or r["suggested_label"] or ("graded " + r["final"] if r["final"] else "-")
         out += [f"## {qid}: {label}", "", f"- **Run:** {run_id}", f"- **Question:** {r['question']}",
                 f"- **Model answer:** {r['model_answer']}", f"- **Gold answer:** {r['gold_answer']}",
-                f"- **Why:** {r['note']}", ""]
+                f"- **Why:** {' '.join(r['note'].split())}", ""]
     if not picked:
         out += ["(no row is marked `example` yet)", ""]
     return "\n".join(out)
@@ -241,13 +273,16 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--out", type=Path, required=True, help="a folder outside the repo (copies are not committed)")
     h = sub.add_parser("handout", help="passages for the grade rows, as markdown")
     h.add_argument("--out", type=Path, required=True)
+    k = sub.add_parser("check", help="one grader's returned copy, on its own")
+    k.add_argument("--grader", type=int, choices=(1, 2), required=True)
+    k.add_argument("file", type=Path)
     m = sub.add_parser("merge", help="both graders' copies -> the repo's sheet")
     m.add_argument("--g1", type=Path, required=True)
     m.add_argument("--g2", type=Path, required=True)
     m.add_argument("--write", action="store_true", help="write the merged sheet (default: check and report only)")
     e = sub.add_parser("examples", help="rows noted 'example' -> eval/results/failure_examples.md")
     e.add_argument("--out", type=Path, default=EXAMPLES_FILE)
-    for p in (c, h, m, e):
+    for p in (c, h, k, m, e):
         p.add_argument("--sheet", type=Path, default=SHEET)
     for p in (h, e):
         p.add_argument("--key", type=Path, default=KEY)
@@ -259,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             replace_file(args.out, handout(args.sheet, args.key, RESULTS_DIR / GOLD_PACK, GOLD_FILE))
             print(f"written: {args.out}")
+        elif args.cmd == "check":
+            print("\n".join(check(args.sheet, args.file, args.grader)))
         elif args.cmd == "merge":
             merged, rep = merge(args.sheet, args.g1, args.g2)
             k = f", Cohen's kappa {rep['kappa']:.2f}" if rep["kappa"] is not None else ""
@@ -279,7 +316,8 @@ def main(argv: list[str] | None = None) -> int:
             replace_file(args.out, examples(args.sheet, args.key))
             print(f"written: {args.out}")
     except (GradingError, ValueError, OSError) as err:
-        print(f"ERROR: {err}", file=sys.stderr)
+        hint = " (is the file open in Excel? close it and run again)" if isinstance(err, PermissionError) else ""
+        print(f"ERROR: {err}{hint}", file=sys.stderr)
         return 1
     return 0
 

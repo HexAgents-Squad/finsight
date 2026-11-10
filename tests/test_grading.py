@@ -11,9 +11,18 @@ import eval.score_answers as sa
 
 @pytest.fixture
 def sheet(tmp_path):
-    for name in (sa.SHEET_NAME, sa.KEY_NAME):
-        shutil.copy(sa.GRADING_DIR / name, tmp_path / name)
+    """The committed sheet and key, with every grader cell emptied: the tests keep passing after W1-14's graded
+    sheet is committed."""
+    shutil.copy(sa.GRADING_DIR / sa.KEY_NAME, tmp_path / sa.KEY_NAME)
+    rows = rows_of(sa.GRADING_DIR / sa.SHEET_NAME)
+    for r in rows:
+        r.update({c: "" for c in gr.GRADER_COLUMNS + ("note",)})
+    save(tmp_path / sa.SHEET_NAME, rows)
     return tmp_path / sa.SHEET_NAME
+
+
+def label_rows(sheet):
+    return [n for n, r in enumerate(rows_of(sheet), start=2) if r["task"] == sa.LABEL]
 
 
 def rows_of(path):
@@ -57,11 +66,10 @@ def test_the_label_rows_are_split_in_half_in_sheet_order():
     assert gr.split_row([{"task": "grade"}, {"task": "label"}]) == 4      # a single label row: grader 1's
 
 
-def test_the_committed_sheet_splits_95_and_94(sheet):
-    rows = rows_of(sheet)
-    split = gr.split_row(rows)
-    labels = [n for n, r in enumerate(rows, start=2) if r["task"] == sa.LABEL]
-    assert (sum(n < split for n in labels), sum(n >= split for n in labels)) == (95, 94)
+def test_the_committed_sheet_splits_in_half(sheet):
+    split, labels = gr.split_row(rows_of(sheet)), label_rows(sheet)
+    first, second = sum(n < split for n in labels), sum(n >= split for n in labels)
+    assert first + second == len(labels) and first - second in (0, 1)
 
 
 # --- copies ----------------------------------------------------------------------------------------------------
@@ -73,7 +81,10 @@ def test_copies_are_the_untouched_sheet_with_assignments(sheet, tmp_path):
         assert (out / f"grading_sheet_{name}.csv").read_bytes() == sheet.read_bytes()
     text = (out / "assignments.txt").read_text(encoding="utf-8")
     assert text == "\n".join(lines) and "Grader 1 = Chandra" in text and "column grader_2 on all 32" in text
-    assert "spreadsheet rows 2-114" in text and "spreadsheet rows 115-220" in text
+    split, labels = gr.split_row(rows_of(sheet)), label_rows(sheet)
+    mine = [n for n in labels if n < split], [n for n in labels if n >= split]
+    assert f"spreadsheet rows {mine[0][0]}-{mine[0][-1]}" in text
+    assert f"spreadsheet rows {mine[1][0]}-{mine[1][-1]}" in text
 
 
 @pytest.mark.parametrize("names, message", [(["Chandra"], "exactly two"), (["A", "a"], "exactly two"),
@@ -107,7 +118,7 @@ def test_the_handout_has_every_grade_question_with_passages_and_names_no_model(s
 
 def test_merge_sets_final_where_grades_agree_and_lists_the_rest(sheet):
     numbers = grade_numbers(sheet)
-    g1 = fill(sheet, 1, lambda n: "2", notes={numbers[0]: "overturn? the figure is right"}, excel=True)
+    g1 = fill(sheet, 1, lambda n: " 2", notes={numbers[0]: "overturn? the figure is right"}, excel=True)
     g2 = fill(sheet, 2, lambda n: "1" if n == numbers[1] else "2", notes={numbers[0]: "fine"})
     merged, rep = gr.merge(sheet, g1, g2)
     by_row = dict(enumerate(merged, start=2))
@@ -144,7 +155,7 @@ def test_a_label_comes_from_the_rows_owner_only(sheet):
     g2 = fill(sheet, 2, lambda n: "2", label_for=lambda r: "wrong_company")
     merged, rep = gr.merge(sheet, g1, g2)
     assert merged[theirs - 2]["failure_label"] == "wrong_company"
-    assert rep["warnings"] == [f"row {theirs}: a label from the grader who does not own the row was ignored"]
+    assert rep["warnings"] == [f"row {theirs}: grader 1 labelled the other grader's row (ignored)"]
 
 
 def test_missing_grades_and_labels_are_listed(sheet):
@@ -153,7 +164,9 @@ def test_missing_grades_and_labels_are_listed(sheet):
     g2 = fill(sheet, 2, lambda n: "1")
     merged, rep = gr.merge(sheet, g1, g2)
     assert f"row {numbers[2]}: grade missing (grader 1: -, grader 2: 1)" in rep["missing"]
-    assert sum("no failure_label" in m for m in rep["missing"]) == 95 and merged[numbers[2] - 2]["final"] == ""
+    split = gr.split_row(rows_of(sheet))
+    assert sum("no failure_label" in m for m in rep["missing"]) == sum(n < split for n in label_rows(sheet))
+    assert merged[numbers[2] - 2]["final"] == ""
 
 
 def test_a_re_formatted_answer_cell_is_a_warning_and_the_repo_text_is_kept(sheet):
@@ -185,13 +198,14 @@ def test_merge_never_overwrites_a_graded_sheet(sheet):
     g1, g2 = fill(sheet, 1, lambda n: "2"), fill(sheet, 2, lambda n: "2")
     merged, _ = gr.merge(sheet, g1, g2)
     sheet.write_text(gr.csv_text(merged), encoding="utf-8", newline="")
-    with pytest.raises(gr.GradingError, match="already holds grades"):
+    with pytest.raises(gr.GradingError, match="already holds grades.*git checkout -- "
+                                              "eval/results/grading/grading_sheet.csv"):
         gr.merge(sheet, g1, g2)
 
 
 def test_an_invalid_grade_is_refused_with_its_line(sheet):
     g1, g2 = fill(sheet, 1, lambda n: "3"), fill(sheet, 2, lambda n: "2")
-    with pytest.raises(ValueError, match="grades must be 0/1/2"):
+    with pytest.raises(ValueError, match=r"line \d+, column grader_1: '3' is not 0, 1 or 2"):
         gr.merge(sheet, g1, g2)
 
 
@@ -199,7 +213,8 @@ def test_an_invalid_grade_is_refused_with_its_line(sheet):
 
 def test_examples_list_the_noted_rows_with_their_model(sheet):
     numbers = grade_numbers(sheet)
-    g1 = fill(sheet, 1, lambda n: "0", notes={numbers[0]: "Example: invents a driver"})
+    g1 = fill(sheet, 1, lambda n: "0", notes={numbers[0]: "Example: invents\na driver",
+                                              numbers[1]: "for example, vague"})
     g2 = fill(sheet, 2, lambda n: "0")
     merged, _ = gr.merge(sheet, g1, g2)
     sheet.write_text(gr.csv_text(merged), encoding="utf-8", newline="")
@@ -207,7 +222,7 @@ def test_examples_list_the_noted_rows_with_their_model(sheet):
     key = {r["key"]: r for r in csv.DictReader(sheet.with_name(sa.KEY_NAME).open(encoding="utf-8"))}
     row = merged[numbers[0] - 2]
     assert text.count("\n## ") == 1 and f"- **Run:** {key[row['key']]['run_id']}" in text
-    assert "- **Why:** G1: Example: invents a driver" in text and "graded 0" in text
+    assert "- **Why:** G1: Example: invents a driver" in text and "graded 0" in text      # one line, one row
 
 
 def test_no_examples_yet_is_said_plainly(sheet):
@@ -225,3 +240,49 @@ def test_cli_merge_checks_first_and_writes_only_when_asked(sheet, capsys):
     assert not list(sheet.parent.glob("*.part"))
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2)]) == 1
     assert "already holds grades" in capsys.readouterr().err
+
+
+# --- added after the review of the W1-14 branch -------------------------------------------------------------------
+
+def test_check_finds_a_copys_mistakes_before_the_other_copy_is_back(sheet, capsys):
+    numbers, split = grade_numbers(sheet), gr.split_row(rows_of(sheet))
+    g1 = fill(sheet, 1, lambda n: "" if n == numbers[0] else "2")
+    out = gr.check(sheet, g1, 1)
+    assert out[0] == "grader 1: 1 missing" and out[1] == f"row {numbers[0]}: no grade in grader_1"
+    assert gr.main(["check", "--grader", "2", "--sheet", str(sheet), str(g1)]) == 1      # the wrong grader's copy
+    assert "grader 2's row" in capsys.readouterr().err
+    g2 = fill(sheet, 2, lambda n: "1", label_for=lambda r: "")
+    assert gr.check(sheet, g2, 2)[0] == f"grader 2: {sum(n >= split for n in label_rows(sheet))} missing"
+
+
+def test_a_label_on_a_grade_row_is_kept_or_flagged(sheet):
+    numbers = grade_numbers(sheet)
+    g1 = fill(sheet, 1, lambda n: "0")
+    g2 = fill(sheet, 2, lambda n: "0")
+    for path, labels in ((g1, {numbers[0]: "over_refusal", numbers[1]: "wrong_company"}),
+                         (g2, {numbers[1]: "invented_number"})):
+        rows = rows_of(path)
+        for n, label in labels.items():
+            rows[n - 2]["failure_label"] = label
+        save(path, rows)
+    merged, rep = gr.merge(sheet, g1, g2)
+    assert merged[numbers[0] - 2]["failure_label"] == "over_refusal" and merged[numbers[1] - 2]["failure_label"] == ""
+    assert any(d.startswith(f"row {numbers[1]}: the graders gave different labels") for d in rep["disagree"])
+
+
+def test_marks_need_the_guides_spelling(sheet):
+    numbers = grade_numbers(sheet)
+    g1 = fill(sheet, 1, lambda n: "2", notes={numbers[0]: "no overturn needed", numbers[1]: "overturn ? right"})
+    _, rep = gr.merge(sheet, g1, fill(sheet, 2, lambda n: "2"))
+    assert [o.split(":")[0] for o in rep["overturn"]] == [f"row {numbers[1]}"]
+
+
+def test_a_long_list_of_problems_is_counted(sheet):
+    g1 = fill(sheet, 1, lambda n: "2")
+    g2 = fill(sheet, 2, lambda n: "2")
+    rows = rows_of(g2)
+    for r in rows:
+        r["final"] = "2"
+    save(g2, rows)
+    with pytest.raises(gr.GradingError, match=r"\.\.\. and \d+ more"):
+        gr.merge(sheet, g1, g2)

@@ -100,6 +100,8 @@ GRADES = ("0", "1", "2")
 HUMAN_COLUMNS = ("grader_1", "grader_2", "final", "failure_label", "note")
 GRADE, LABEL, STALE = "grade", "label", "stale"     # stale: graded earlier, no longer needed (kept, no work lost)
 CORRECT_GRADE = 2
+# The label of a human-decided answer graded below 2 unless the graders enter another (e.g. over_refusal)
+UNDECIDED_LABELS = {"summary": "incomplete_summary", "short_entity": "wrong_company"}
 SHEET_SEED = "w1-08"
 KEY_PREFIX = "k"                                     # a key like 65448545e0 would become a number in Excel
 KEY_HEX = 10
@@ -505,23 +507,47 @@ def sheet_rows(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]], question
     return sorted(rows, key=lambda r: r["key"])
 
 
-def read_sheet(path: Path) -> dict[str, dict]:
-    """The sheet as graders left it (Excel's byte-order mark and CRLF are fine), validated."""
+def read_sheet_rows(path: Path) -> list[dict]:
+    """The sheet's rows in file order as graders left it, validated, with what a spreadsheet adds harmlessly
+    undone: Excel's byte-order mark and CRLF, fully empty rows or columns at the end, spaces around a grade or a
+    label, and a label's letter case. Anything that could misplace a grade is an error naming line and column."""
     if not path.exists():
-        return {}
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
-    if rows and set(rows[0]) != set(SHEET_COLUMNS):
-        raise ValueError(f"{path} columns changed; expected {', '.join(SHEET_COLUMNS)}")
-    for n, r in enumerate(rows, start=2):
-        if any(v is None for v in r.values()) or None in r:
+        return []
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, [])
+            raw = [cells for cells in reader if any(c.strip() for c in cells)]
+    except UnicodeDecodeError as err:
+        raise ValueError(f"{path} is not UTF-8 ({err.reason}): in Excel use File > Save As > "
+                         f"'CSV UTF-8 (Comma delimited)'") from err
+    while header and not header[-1].strip() and all(len(c) < len(header) or not c[len(header) - 1].strip()
+                                                    for c in raw):
+        header = header[:-1]                          # an empty column a spreadsheet added after the last one
+    if raw and header != list(SHEET_COLUMNS):
+        raise ValueError(f"{path} columns changed; expected exactly {', '.join(SHEET_COLUMNS)}")
+    rows = []
+    for n, cells in enumerate(raw, start=2):
+        if len(cells) < len(header) or any(c.strip() for c in cells[len(header):]):
             raise ValueError(f"{path} line {n}: wrong number of cells (a comma or line break lost its quotes?)")
-        bad = [c for c in ("grader_1", "grader_2", "final") if r[c].strip() not in ("", *GRADES)]
-        if bad or r["failure_label"].strip() not in ("", *FAILURE_LABELS):
-            raise ValueError(f"{path} line {n}: grades must be 0/1/2 and labels one of {FAILURE_LABELS}")
+        r = dict(zip(header, cells[:len(header)], strict=True))
+        for c in ("grader_1", "grader_2", "final"):
+            r[c] = r[c].strip()
+            if r[c] not in ("", *GRADES):
+                raise ValueError(f"{path} line {n}, column {c}: {r[c]!r} is not 0, 1 or 2")
+        r["failure_label"] = r["failure_label"].strip().lower()
+        if r["failure_label"] not in ("", *FAILURE_LABELS):
+            raise ValueError(f"{path} line {n}, column failure_label: {r['failure_label']!r} is not one of "
+                             f"{', '.join(FAILURE_LABELS)}")
         if not r["key"].startswith(KEY_PREFIX):
             raise ValueError(f"{path} line {n}: key {r['key']!r} was changed (keys start with {KEY_PREFIX!r})")
-    return {r["key"]: r for r in rows}
+        rows.append(r)
+    return rows
+
+
+def read_sheet(path: Path) -> dict[str, dict]:
+    """The validated sheet by key (empty when there is no sheet yet)."""
+    return {r["key"]: r for r in read_sheet_rows(path)}
 
 
 def replace_file(path: Path, text: str) -> None:
@@ -567,14 +593,16 @@ def apply_grades(scored: list[dict], entered: dict[str, dict], judge: dict[str, 
         row = entered.get(s["sheet_key"], {})
         final = row.get("final", "").strip()
         s["human_grade"] = int(final) if final else None
+        g1, g2 = row.get("grader_1", "").strip(), row.get("grader_2", "").strip()
+        s["grader_grades"] = [int(g1), int(g2)] if g1 and g2 else None     # independent grades, for agreement
         s["judge_score"] = judge.get(s["id"])
         s["overturned"] = False
         if final and s["correct"] is not False:
             if s["correct"] is None:
                 s["correct"] = int(final) == CORRECT_GRADE
                 s["reason"] = f"human grade {final}"
-                if not s["correct"] and not s["suggested_label"] and s["answer_type"] == "summary":
-                    s["suggested_label"] = "incomplete_summary"
+                if not s["correct"] and not s["suggested_label"]:
+                    s["suggested_label"] = UNDECIDED_LABELS.get(s["answer_type"])
         elif final and int(final) == CORRECT_GRADE:
             s.update(correct=True, overturned=True, reason=f"automatic verdict overturned by the graders "
                                                             f"({s['reason']})")
@@ -702,15 +730,21 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
         counts = [sum(s.get("failure_label") == label and s["correct"] is False for s in sc) for _, sc in runs]
         if any(counts):
             out.append(f"| {label or '(not labelled yet)'} | " + " | ".join(map(str, counts)) + " |")
-    out += table("### 7. Summary answers: human grades vs LLM judge", "Measure", names)
-    agree, kap = [], []
+    out += table("### 7. Human grades: the two graders, and the LLM judge on summaries", "Measure", names)
+    cells: dict[str, list[str]] = {k: [] for k in ("g_agree", "g_kappa", "agree", "kappa")}
     for _, sc in runs:
-        pairs = [(s["human_grade"], s["judge_score"]) for s in sc
-                 if s["answer_type"] == "summary" and s.get("human_grade") is not None and s.get("judge_score") is not None]
-        agree.append(f"{sum(a == b for a, b in pairs)}/{len(pairs)}" if pairs else "–")
-        k = kappa(pairs)
-        kap.append(f"{k:.2f}" if k is not None else "–")
-    out += ["| exact agreement | " + " | ".join(agree) + " |", "| Cohen's kappa | " + " | ".join(kap) + " |", ""]
+        graders = [tuple(s["grader_grades"]) for s in sc if s.get("grader_grades")]       # before they talked
+        judged = [(s["human_grade"], s["judge_score"]) for s in sc
+                  if s["answer_type"] == "summary" and s.get("human_grade") is not None
+                  and s.get("judge_score") is not None]
+        for (a_key, k_key), pairs in ((("g_agree", "g_kappa"), graders), (("agree", "kappa"), judged)):
+            cells[a_key].append(f"{sum(a == b for a, b in pairs)}/{len(pairs)}" if pairs else "–")
+            k = kappa(pairs)
+            cells[k_key].append(f"{k:.2f}" if k is not None else "–")
+    out += ["| graders' exact agreement (independent grades) | " + " | ".join(cells["g_agree"]) + " |",
+            "| graders' Cohen's kappa | " + " | ".join(cells["g_kappa"]) + " |",
+            "| final grade vs judge: exact agreement | " + " | ".join(cells["agree"]) + " |",
+            "| final grade vs judge: Cohen's kappa | " + " | ".join(cells["kappa"]) + " |", ""]
     return "\n".join(out)
 
 

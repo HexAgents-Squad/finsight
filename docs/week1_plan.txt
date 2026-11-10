@@ -253,7 +253,8 @@ measures grounding of figures, not every invention.
 Output: eval/results/model_comparison.md (generated tables between markers + a hand-written interpretation
 that re-runs keep): accuracy per model × answer type and per category, counts and Wilson 95% intervals (n is
 10–48 per cell), hallucination checks (RAG vs closed-book), refusal precision/recall/rule, JSON validity, tokens,
-latency p50/p95, failure labels, human-vs-judge agreement (exact and Cohen's kappa). Per run:
+latency p50/p95, failure labels, agreement between the two graders and between their final grades and the judge
+(exact and Cohen's kappa). Per run:
 eval/results/scores/<run_id>.jsonl (every check per question).
 Grading sheet for W1-14: one blind sheet for all runs, eval/results/grading/grading_sheet.csv
 (key, task, question, gold_answer, model_answer, suggested_label, grader_1, grader_2, final, failure_label, note):
