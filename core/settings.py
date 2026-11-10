@@ -39,15 +39,27 @@ class Settings(SecSettings):
     # SecretStr: the team key must never appear in a repr, a log line or a validation error message
     LLM_API_KEY: SecretStr = Field(..., min_length=1, description="API key for the endpoint ('ollama' locally)")
     LLM_MODEL: str = Field(..., min_length=1, description="Chat model name")
-    # Worst case for one call is LLM_TIMEOUT x (LLM_HTTP_RETRIES + 1) plus back-off; the agent enforces its
-    # overall per-query time limit on top of this.
-    LLM_TIMEOUT: float = Field(30.0, gt=0, description="HTTP request timeout in seconds")
-    # Two separate retry budgets: the openai client retries network errors, 429 and 5xx with back-off;
-    # chat_json re-prompts the model after invalid JSON (spec: at most 2).
-    LLM_HTTP_RETRIES: int = Field(2, ge=0, description="openai-client retries for network/429/5xx errors")
+    # Worst case for one call is LLM_TIMEOUT x (LLM_HTTP_RETRIES + 1) plus the waits (2 + 4 + 8 s by default, a
+    # server's Retry-After up to 30 s each); the agent enforces its per-query time limit on top of this.
+    LLM_TIMEOUT: float = Field(30.0, gt=0, allow_inf_nan=False, description="HTTP request timeout in seconds")
+    # Two separate retry budgets. core.llm retries 429 (one active request per team key, 60/min), 5xx, timeouts
+    # and network errors after LLM_RETRY_BASE_S x 2^n seconds (2, 4, 8: the learner guide's advice), the openai
+    # SDK's own retries being off so the two never multiply; chat_json re-prompts after invalid JSON (spec: 2).
+    LLM_HTTP_RETRIES: int = Field(3, ge=0, le=10, description="retries for 429/5xx/timeout/network errors")
+    LLM_RETRY_BASE_S: float = Field(2.0, ge=0, le=30, allow_inf_nan=False,
+                                    description="first retry delay; doubles each retry (each wait at most 30 s)")
+    # One request at a time per endpoint in a process, and at most one start per interval (60 requests/min)
+    LLM_MIN_INTERVAL_S: float = Field(1.0, ge=0, le=60, allow_inf_nan=False,
+                                      description="minimum seconds between request starts")
+    # Disk cache of replies (spec §9): an identical request (server, model, messages, temperature, max_tokens,
+    # thinking, sample) is answered from here, so an evaluation re-run is identical and costs no calls. Empty = no cache.
+    LLM_CACHE_DIR: Path | None = Field(Path("data/cache/llm"), description="reply cache; relative to the repo")
     LLM_JSON_RETRIES: int = Field(2, ge=0, description="chat_json re-prompts after invalid output")
     # Caps one reply, so a runaway generation from a small model cannot use the whole per-query token budget
     LLM_MAX_COMPLETION_TOKENS: int = Field(1024, gt=0, description="max_tokens sent with every chat request")
+    # The endpoint's limit for prompt + reply (8,192). A request that cannot fit is refused before it is sent,
+    # counted with the Qwen3 tokenizer (core/tokens.py) and its chat template; empty = no check.
+    LLM_CONTEXT_TOKENS: int | None = Field(8192, gt=0, description="prompt + max_tokens limit per call")
     # The hosted endpoint's certificate is issued by the group's own CA (a Caddy local root), which no default
     # trust store has. HTTPS is verified against this file instead; it is never switched off. Trust the CA
     # file, never the server's own certificate: the server certificate is renewed every few hours.
@@ -73,7 +85,8 @@ class Settings(SecSettings):
     # spec §9: the agent wraps a whole query in this limit (one LLM call alone can take LLM_TIMEOUT x retries)
     QUERY_TIMEOUT_S: float = Field(60.0, gt=0, description="seconds allowed for one question, end to end")
 
-    @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", mode="before")
+    @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", "LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS",
+                     mode="before")
     @classmethod
     def _empty_is_unset(cls, value: object) -> object:
         """`LLM_CA_CERT=` in .env means "no certificate", not a path to the current folder."""
@@ -97,6 +110,24 @@ class Settings(SecSettings):
         if not path.is_file():
             raise ValueError(f"no certificate file at {path}")
         return path
+
+    @field_validator("LLM_CACHE_DIR")
+    @classmethod
+    def _cache_dir_from_repo_root(cls, value: Path | None) -> Path | None:
+        """The same cache whichever folder a script is started from."""
+        if value is None:
+            return None
+        path = value.expanduser()
+        return path if path.is_absolute() else REPO_ROOT / path
+
+    @field_validator("LLM_CONTEXT_TOKENS")
+    @classmethod
+    def _context_leaves_room_for_the_prompt(cls, value: int | None, info: ValidationInfo) -> int | None:
+        """A context no larger than the reply cap would refuse every request."""
+        cap = info.data.get("LLM_MAX_COMPLETION_TOKENS")
+        if value is not None and cap is not None and value <= cap:
+            raise ValueError(f"LLM_CONTEXT_TOKENS ({value}) must exceed LLM_MAX_COMPLETION_TOKENS ({cap})")
+        return value
 
     @field_validator("EMBED_BACKEND", mode="before")
     @classmethod

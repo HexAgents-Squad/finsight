@@ -14,6 +14,7 @@ data/sections/*
 data/xbrl/*
 data/chunks/*
 data/index/*
+data/cache/*
 !data/**/.gitkeep
 
 # Python / editors

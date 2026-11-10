@@ -96,17 +96,35 @@ As in Week 0, contracts let everyone work in parallel against fakes and sample f
 - The key, the URL and the certificate stay out of git, logs, screenshots and chat outside the team.
 - Embeddings stay local (the endpoint has none): EMBED_BACKEND=sentence-transformers, as the index was built.
 
-2.2 Shared-key rules (W1-02, planned)
--------------------------------------
+2.2 Shared-key rules (W1-02, implemented in core/llm.py)
+--------------------------------------------------------
 Limits of the provided endpoint: one active request per team key (for the whole team), 60 requests/min,
-8,192 tokens per call (input + output), output default 512 / max 1,024.
-- core/llm.py serialises calls (process-wide lock), retries 429/503 after 2, 4 and 8 s, then raises
-  FinSightError (service unavailable); the openai SDK's own retries are off (max_retries=0) so they do not stack.
-- Disk cache data/cache/llm/ (git-ignored), key = sha256(model, messages, temperature, max_tokens, thinking,
-  sample index): a re-run of an evaluation is identical and costs no calls; client.usage counts cache hits.
-- Thu (full version): core.tokens.count_tokens (exists since W1-12: the pinned Qwen3 tokenizer, exact against
-  the endpoint) checks prompt + max_tokens <= 8,192 before sending. No characters-per-token fallback: filing
-  text measured 2.2 (tables) to 4.6 (prose) characters per token, so a fixed ratio overruns on tables.
+8,192 tokens per call (input + output), output default 512 / max 1,024. Measured 10 Nov: a second concurrent
+request on the key is refused with 429.
+- One request at a time per endpoint (server = scheme, host, port) in a process, first come first served (a
+  ticket queue, polled so the event loop never blocks; holds across threads and event loops; a caller cancelled
+  while waiting gives up its ticket), starts at least LLM_MIN_INTERVAL_S (1 s) apart. Different servers run in
+  parallel, so the local Ollama run (M2) does not wait for the hosted endpoint. Two processes on one key are NOT
+  coordinated: run one evaluation at a time (key freeze below). Embedding calls do not use the queue (the hosted
+  endpoint has no embeddings).
+- Retries: 429, 500/502/503/504, timeouts and network errors after 2, 4, 8 s (LLM_HTTP_RETRIES=3,
+  LLM_RETRY_BASE_S=2 doubling; a longer numeric Retry-After is honoured; no wait exceeds 30 s), then FinSightError with the
+  error type; TLS, authentication and request errors are not retried. The openai SDK's own retries are off
+  (max_retries=0) so they never stack.
+- Disk cache data/cache/llm/ (git-ignored; LLM_CACHE_DIR, empty = off), key = sha256(server, model, messages,
+  temperature, max_tokens, thinking, sample index): an identical request is answered without a call, so a re-run
+  of an evaluation is identical and free; the cache is checked again when a request's turn comes, so two
+  identical concurrent requests cost one call; a replayed truncated reply fails exactly as the first time;
+  errors and empty replies are never cached; an unreadable or malformed entry is fetched again. client.usage counts calls, cache_hits,
+  http_retries and tokens; LLMClient.complete() returns the answer, raw reply, tokens, cached, retries and seconds
+  per call (what the runner records). scripts/smoke_llm.py bypasses the cache.
+- Prompt size: prompt tokens = 7 + 5 per message + the content's Qwen3 tokens (core/tokens.py; exact against the
+  endpoint: 2,245 = 2,245 on a context-pack prompt); a request with prompt + max_tokens > LLM_CONTEXT_TOKENS
+  (8,192) is refused before sending (PromptTooLongError). Without the tokenizer (first run offline) the check is
+  skipped with one warning per process (the tokenizer loads once, in a worker thread). The formula is measured
+  for system/user/assistant messages; tool messages (Week 2) need re-measuring. No characters-per-token fallback: filing text runs 2.2 (tables) to 4.6 (prose)
+  characters per token, so a fixed ratio overruns on tables. (fit_context is not needed: the context pack, W1-12,
+  already trims passages to 4,000 tokens.)
 - Team etiquette: announce long runs in the team chat; key freeze for the evaluation runs Tue 21:00 – Wed 07:00.
 
 2.3 Context pack (W1-12, implemented: python eval/context_pack.py): eval/results/context_pack_gold.jsonl,

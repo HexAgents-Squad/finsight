@@ -1,7 +1,9 @@
 """core/llm.py and core/settings.py against fake OpenAI clients (offline, no Ollama needed)."""
 import asyncio
+import json
 import ssl
 import sys
+import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -18,6 +20,8 @@ from core.settings import REPO_ROOT, SecSettings, Settings, get_settings
 
 REQUIRED = {"LLM_BASE_URL": "http://llm.test/v1", "LLM_API_KEY": "key", "LLM_MODEL": "chat-model",
             "SEC_USER_AGENT": "HexAgents_Squad test@example.com"}
+# Offline and instant: no reply cache (tests that need one pass a tmp_path), no tokenizer download, no waiting
+SAFE = {"LLM_CACHE_DIR": "", "LLM_CONTEXT_TOKENS": "", "LLM_RETRY_BASE_S": 0.0, "LLM_MIN_INTERVAL_S": 0.0}
 
 
 class Filing(BaseModel):
@@ -26,7 +30,7 @@ class Filing(BaseModel):
 
 
 def settings(**overrides) -> Settings:
-    return Settings(_env_file=None, **{**REQUIRED, **overrides})
+    return Settings(_env_file=None, **{**REQUIRED, **SAFE, **overrides})
 
 
 def reply(text, prompt_tokens=7, completion_tokens=3):
@@ -119,22 +123,25 @@ def test_empty_reply_keeps_its_error_type(content):
     assert err.value.error_type == "EmptyResponseError"
 
 
-@pytest.mark.parametrize("error, kind", [
-    (status_error(openai.AuthenticationError, 401), "AuthenticationError"),
-    (status_error(openai.RateLimitError, 429), "RateLimitError"),
-    (openai.APIConnectionError(request=httpx.Request("POST", "http://llm.test")), "NetworkError"),
+@pytest.mark.parametrize("error, kind, requests", [
+    (status_error(openai.AuthenticationError, 401), "AuthenticationError", 1),    # a bad key fails again: no retry
+    (status_error(openai.BadRequestError, 400), "BadRequestError", 1),
+    (status_error(openai.RateLimitError, 429), "RateLimitError", 4),             # 1 + LLM_HTTP_RETRIES (3)
+    (status_error(openai.InternalServerError, 503), "InternalServerError", 4),
+    (openai.APIConnectionError(request=httpx.Request("POST", "http://llm.test")), "NetworkError", 4),
 ])
-def test_api_errors_are_wrapped_and_not_retried_again(error, kind):
-    llm = client(error, reply("never used"))
+def test_api_errors_are_wrapped_after_the_retries_that_make_sense(error, kind, requests):
+    llm = client(*[error] * 4)
     with pytest.raises(FinSightError) as err:
         run(llm.chat_json(USER, Filing))
-    assert err.value.error_type == kind
-    assert len(llm.client.requests) == 1          # the openai client already did the network retries
+    assert err.value.error_type == kind and len(llm.client.requests) == requests
+    assert llm.usage.http_retries == requests - 1
 
 
-def test_http_retries_go_to_the_openai_client_only():
+def test_retries_are_ours_not_the_sdks():
     llm = LLMClient(settings(LLM_HTTP_RETRIES=4, LLM_JSON_RETRIES=1))
-    assert llm.client.max_retries == 4 and llm.embed_client.max_retries == 4
+    assert llm.client.max_retries == 0                                          # never multiplied with ours
+    assert llm.embed_client.max_retries == 4                                    # embeddings keep the SDK's
 
 
 # --- chat_json ------------------------------------------------------------------------------------------
@@ -449,7 +456,7 @@ def test_clients_verify_against_the_ca_file(monkeypatch):
     assert made[0].check_hostname
     assert built[0] is not None and llm.client._client is built[0]     # the verifying client is the one used
     # a custom http_client must not drop the SDK settings (openai applies them per request)
-    assert (llm.client.timeout, llm.client.max_retries) == (30.0, 2)
+    assert (llm.client.timeout, llm.client.max_retries) == (30.0, 0)
     run(llm.aclose())
     assert built[0].is_closed                                           # closing the SDK client closes ours
 
@@ -638,3 +645,500 @@ def test_importing_the_smoke_script_configures_no_logging():
 ])
 def test_same_server_comparison_for_the_ca(a, b, same):
     assert (core.llm._origin(a) == core.llm._origin(b)) is same
+
+
+
+# --- W1-02: shared-key rules (lock, spacing, retries), reply cache, prompt-size check ------------------------------
+
+def finished(text, finish_reason="stop", prompt_tokens=7, completion_tokens=3):
+    r = reply(text, prompt_tokens, completion_tokens)
+    r.choices[0].finish_reason = finish_reason
+    return r
+
+
+def with_retry_after(err, seconds):
+    err.response.headers["retry-after"] = str(seconds)
+    return err
+
+
+@pytest.fixture
+def slept(monkeypatch):
+    """Records back-off sleeps instead of waiting (lock polling sleeps are short and left alone)."""
+    waits = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(seconds):
+        if seconds > core.llm.LOCK_POLL_S:
+            waits.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(core.llm.asyncio, "sleep", fake_sleep)
+    return waits
+
+
+def test_back_off_is_2_4_8_seconds_then_the_error(slept):
+    llm = client(*[status_error(openai.RateLimitError, 429)] * 4, LLM_RETRY_BASE_S=2.0)
+    with pytest.raises(FinSightError) as err:
+        run(llm.chat(USER))
+    assert err.value.error_type == "RateLimitError" and slept == [2.0, 4.0, 8.0]
+
+
+def test_a_retried_call_reports_its_retries(slept):
+    llm = client(status_error(openai.InternalServerError, 503), reply("OK"), LLM_RETRY_BASE_S=2.0)
+    r = run(llm.complete(USER))
+    assert (r.text, r.retries, r.cached, llm.usage.calls, llm.usage.http_retries) == ("OK", 1, False, 2, 1)
+    assert slept == [2.0]
+
+
+@pytest.mark.parametrize("after, wait", [(5, 5.0), (0, 2.0), (600, 30.0), ("Wed, 21 Oct 2026 07:28:00 GMT", 2.0)])
+def test_retry_after_is_honoured_when_longer_up_to_a_cap(slept, after, wait):
+    llm = client(with_retry_after(status_error(openai.RateLimitError, 429), after), reply("OK"),
+                 LLM_RETRY_BASE_S=2.0)
+    run(llm.chat(USER))
+    assert slept == [wait]
+
+
+def test_a_tls_failure_is_not_retried():
+    request = httpx.Request("POST", "https://endpoint.test/v1/chat/completions")
+    error = openai.APIConnectionError(request=request)
+    error.__cause__ = ssl.SSLCertVerificationError("certificate verify failed")
+    llm = client(error, reply("never used"))
+    with pytest.raises(FinSightError) as err:
+        run(llm.chat(USER))
+    assert err.value.error_type == "TLSError" and len(llm.client.requests) == 1
+
+
+class SlowChat(FakeChat):
+    """Answers after a pause and records how many requests were in flight at once."""
+
+    def __init__(self, n, pause=0.02):
+        super().__init__(*[reply(f"r{i}") for i in range(n)])
+        self.active = self.peak = 0
+        self.pause = pause
+
+    async def _create(self, **request):
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        try:
+            await asyncio.sleep(self.pause)
+            return await super()._create(**request)
+        finally:
+            self.active -= 1
+
+
+def test_one_request_at_a_time_per_endpoint_even_across_clients():
+    shared = SlowChat(6)
+    a = LLMClient(settings(LLM_BASE_URL="http://one.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+    b = LLMClient(settings(LLM_BASE_URL="http://one.test/v1/"), chat_client=shared, embed_client=FakeEmbeddings())
+
+    async def burst():
+        return await asyncio.gather(*[c.chat([{"role": "user", "content": str(i)}]) for i, c in
+                                      enumerate([a, b] * 3)])
+
+    assert len(run(burst())) == 6 and shared.peak == 1
+
+
+def test_different_endpoints_run_in_parallel():
+    shared = SlowChat(2, pause=0.05)
+    a = LLMClient(settings(LLM_BASE_URL="http://hosted.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+    b = LLMClient(settings(LLM_BASE_URL="http://local.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+
+    async def both():
+        return await asyncio.gather(a.chat(USER), b.chat([{"role": "user", "content": "other"}]))
+
+    run(both())
+    assert shared.peak == 2                                     # Ollama (M2) next to the hosted endpoint (M1)
+
+
+def test_request_starts_are_spaced_by_the_minimum_interval():
+    starts = []
+
+    class Timed(FakeChat):
+        async def _create(self, **request):
+            starts.append(time.monotonic())
+            return await super()._create(**request)
+
+    llm = LLMClient(settings(LLM_BASE_URL="http://spaced.test/v1", LLM_MIN_INTERVAL_S=0.05),
+                    chat_client=Timed(*[reply("x")] * 3), embed_client=FakeEmbeddings())
+
+    async def three():
+        for i in range(3):
+            await llm.chat([{"role": "user", "content": str(i)}])
+
+    run(three())
+    assert all(b - a >= 0.045 for a, b in zip(starts, starts[1:], strict=False))
+
+
+def test_a_cancelled_call_releases_the_endpoint():
+    slow = SlowChat(2, pause=5)
+    llm = LLMClient(settings(LLM_BASE_URL="http://cancel.test/v1"), chat_client=slow, embed_client=FakeEmbeddings())
+
+    async def cancel_then_call():
+        task = asyncio.create_task(llm.chat(USER))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        slow.pause = 0
+        return await asyncio.wait_for(llm.chat([{"role": "user", "content": "next"}]), timeout=2)
+
+    assert run(cancel_then_call()) == "r0"
+
+
+def test_an_identical_request_is_answered_from_the_cache(tmp_path):
+    llm = client(finished("<think>hmm</think>OK", prompt_tokens=11, completion_tokens=4), LLM_CACHE_DIR=str(tmp_path))
+    first = run(llm.complete(USER))
+    second = run(llm.complete(USER))
+    assert (first.cached, second.cached) == (False, True) and len(llm.client.requests) == 1
+    assert (second.text, second.raw, second.prompt_tokens, second.completion_tokens) == ("OK", "<think>hmm</think>OK",
+                                                                                        11, 4)
+    assert (llm.usage.calls, llm.usage.cache_hits, llm.usage.prompt_tokens) == (1, 1, 22)
+    assert len(list(tmp_path.rglob("*.json"))) == 1 and not list(tmp_path.rglob("*.part"))
+
+
+@pytest.mark.parametrize("change", [{"sample": 1}, {"temperature": 0.7}, {"model": "other-model"}])
+def test_a_different_request_is_not_a_cache_hit(tmp_path, change):
+    llm = client(reply("a"), reply("b"), LLM_CACHE_DIR=str(tmp_path))
+    run(llm.complete(USER))
+    assert run(llm.complete(USER, **change)).text == "b" and len(llm.client.requests) == 2
+
+
+def test_the_thinking_setting_is_part_of_the_cache_key(tmp_path):
+    run(client(reply("off"), LLM_CACHE_DIR=str(tmp_path)).chat(USER))
+    on = client(reply("on"), LLM_CACHE_DIR=str(tmp_path), LLM_ENABLE_THINKING=True)
+    assert run(on.chat(USER)) == "on"
+
+
+def test_a_cached_truncated_reply_fails_the_same_way_without_a_call(tmp_path):
+    llm = client(finished('{"ticker": "MS', finish_reason="length"), LLM_CACHE_DIR=str(tmp_path))
+    for _ in range(2):
+        with pytest.raises(FinSightError) as err:
+            run(llm.chat(USER))
+        assert err.value.error_type == "TruncatedResponseError"
+    assert len(llm.client.requests) == 1
+
+
+def test_a_corrupt_cache_entry_is_fetched_again(tmp_path):
+    llm = client(reply("first"), reply("again"), LLM_CACHE_DIR=str(tmp_path))
+    run(llm.chat(USER))
+    entry = next(tmp_path.rglob("*.json"))
+    entry.write_text("{not json", encoding="utf-8")
+    assert run(llm.chat(USER)) == "again" and json.loads(entry.read_text(encoding="utf-8"))["content"] == "again"
+
+
+def test_a_cache_that_cannot_be_written_costs_only_the_cache(tmp_path):
+    blocker = tmp_path / "cache"
+    blocker.write_text("a file where the cache folder should be", encoding="utf-8")
+    llm = client(reply("OK"), reply("OK again"), LLM_CACHE_DIR=str(blocker))
+    assert run(llm.chat(USER)) == "OK" and run(llm.chat(USER)) == "OK again"
+
+
+def test_errors_are_never_cached(tmp_path):
+    llm = client(status_error(openai.AuthenticationError, 401), reply("OK"), LLM_CACHE_DIR=str(tmp_path))
+    with pytest.raises(FinSightError):
+        run(llm.chat(USER))
+    assert run(llm.chat(USER)) == "OK" and len(llm.client.requests) == 2
+
+
+def words(text):
+    return len(text.split())
+
+
+def test_prompt_tokens_follow_the_measured_chat_template():
+    messages = [{"role": "system", "content": "a b c"}, {"role": "user", "content": "d e"}]
+    assert core.llm.count_prompt_tokens(messages, words) == 7 + 2 * 5 + 5
+
+
+def test_a_prompt_that_cannot_fit_is_refused_before_sending():
+    big = [{"role": "user", "content": "w " * 2000}]                  # 7 + 5 + 2000 = 2012 prompt tokens
+    llm = LLMClient(settings(LLM_CONTEXT_TOKENS=3000, LLM_MAX_COMPLETION_TOKENS=1000), chat_client=FakeChat(),
+                    embed_client=FakeEmbeddings(), token_counter=words)
+    with pytest.raises(FinSightError) as err:
+        run(llm.chat(big))
+    assert err.value.error_type == "PromptTooLongError" and "2012 tokens" in err.value.message
+    assert llm.client.requests == []
+    fits = LLMClient(settings(LLM_CONTEXT_TOKENS=3012, LLM_MAX_COMPLETION_TOKENS=1000),
+                     chat_client=FakeChat(reply("OK")), embed_client=FakeEmbeddings(), token_counter=words)
+    assert run(fits.chat(big)) == "OK"                                 # exactly at the limit: sent
+
+
+def test_without_a_tokenizer_the_size_check_is_skipped_with_a_warning(monkeypatch, caplog):
+    import core.tokens
+
+    def offline(text):
+        raise FinSightError("Qwen tokenizer unavailable", error_type="TokenizerUnavailable")
+
+    monkeypatch.setattr(core.tokens, "count_tokens", offline)
+    monkeypatch.setattr(core.llm, "_TOKEN_COUNTER", None)                # not tried yet in this process
+    first = client(reply("OK"), reply("OK"), LLM_CONTEXT_TOKENS=8192)
+    second = client(reply("OK"), LLM_CONTEXT_TOKENS=8192)                 # e.g. the next question's client
+    with caplog.at_level("WARNING", logger="finsight.llm"):
+        assert run(first.chat(USER)) == "OK" and run(first.chat(USER)) == "OK" and run(second.chat(USER)) == "OK"
+    assert sum("prompt-size check off" in r.message for r in caplog.records) == 1     # once per process
+
+
+def test_cache_and_context_settings(monkeypatch):
+    for name in ("LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS", "LLM_RETRY_BASE_S", "LLM_MIN_INTERVAL_S"):
+        monkeypatch.delenv(name, raising=False)                         # the real defaults, not conftest's
+    s = settings(LLM_CACHE_DIR="data/cache/llm")
+    assert s.LLM_CACHE_DIR == REPO_ROOT / "data" / "cache" / "llm"
+    assert Settings(_env_file=None, **REQUIRED, LLM_CACHE_DIR="  ").LLM_CACHE_DIR is None
+    with pytest.raises(ValueError, match="must exceed LLM_MAX_COMPLETION_TOKENS"):
+        settings(LLM_CONTEXT_TOKENS=1024)
+    d = Settings(_env_file=None, **REQUIRED)
+    assert (d.LLM_HTTP_RETRIES, d.LLM_RETRY_BASE_S, d.LLM_MIN_INTERVAL_S, d.LLM_CONTEXT_TOKENS) == (3, 2.0, 1.0, 8192)
+    assert d.LLM_CACHE_DIR == REPO_ROOT / "data" / "cache" / "llm"               # the default, from any folder
+    for bad in ({"LLM_RETRY_BASE_S": "inf"}, {"LLM_TIMEOUT": "inf"}, {"LLM_HTTP_RETRIES": 11},
+                {"LLM_MIN_INTERVAL_S": "nan"}):
+        with pytest.raises(ValueError):
+            settings(**bad)
+
+
+def test_a_cache_entry_with_missing_fields_is_fetched_again(tmp_path):
+    llm = client(reply("first"), reply("again"), LLM_CACHE_DIR=str(tmp_path))
+    run(llm.chat(USER))
+    entry = next(tmp_path.rglob("*.json"))
+    entry.write_text('{"content": "stale, from an older format"}', encoding="utf-8")
+    assert run(llm.chat(USER)) == "again" and llm.usage.cache_hits == 0
+
+
+def test_a_failed_cache_rename_leaves_no_temporary_file(tmp_path, monkeypatch):
+    def disk_full(self, other):
+        raise OSError("disk full")
+
+    llm = client(reply("OK"), LLM_CACHE_DIR=str(tmp_path))
+    monkeypatch.setattr(Path, "replace", disk_full)
+    assert run(llm.chat(USER)) == "OK"                                # the reply survives the failed cache write
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+
+def test_the_smoke_test_never_answers_from_the_cache(monkeypatch, tmp_path):
+    smoke = smoke_script()
+    seen = []
+
+    class Recorder:
+        def __init__(self, s):
+            seen.append(s.LLM_CACHE_DIR)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+    async def no_checks(llm):
+        return 0
+
+    monkeypatch.setattr(smoke, "get_settings", lambda: settings(LLM_CACHE_DIR=str(tmp_path)))
+    monkeypatch.setattr(smoke, "LLMClient", Recorder)
+    monkeypatch.setattr(smoke, "run_checks", no_checks)
+    assert run(smoke.main()) == 0 and seen == [None]
+
+
+
+# --- added after the independent review of W1-02 -------------------------------------------------------------------
+
+def test_the_endpoint_serves_callers_in_arrival_order():
+    """A caller making back-to-back calls must not starve one that arrived meanwhile (a plain lock would)."""
+    order = []
+
+    class Quick(FakeChat):
+        async def _create(self, **request):
+            await asyncio.sleep(0.005)
+            order.append(request["messages"][0]["content"][0])
+            return reply("ok")
+
+    shared = Quick()
+    busy = LLMClient(settings(LLM_BASE_URL="http://fair.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+    other = LLMClient(settings(LLM_BASE_URL="http://fair.test/v1"), chat_client=shared, embed_client=FakeEmbeddings())
+
+    async def scenario():
+        async def many():
+            for i in range(15):
+                await busy.chat([{"role": "user", "content": f"A{i}"}])
+
+        async def one():
+            await asyncio.sleep(0.02)
+            await other.chat([{"role": "user", "content": "B"}])
+
+        await asyncio.gather(many(), one())
+
+    run(scenario())
+    assert order.index("B") < 10, "".join(order)                        # served soon after it arrived, not last
+
+
+def test_an_identical_request_that_waited_is_answered_from_the_cache(tmp_path):
+    slow = SlowChat(2)
+    a = LLMClient(settings(LLM_BASE_URL="http://dup.test/v1", LLM_CACHE_DIR=str(tmp_path)), chat_client=slow,
+                  embed_client=FakeEmbeddings())
+
+    async def twice():
+        return await asyncio.gather(a.complete(USER), a.complete(USER))
+
+    first, second = run(twice())
+    assert len(slow.requests) == 1 and sorted([first.cached, second.cached]) == [False, True]
+    assert first.text == second.text == "r0"
+
+
+def test_the_server_is_part_of_the_cache_key(tmp_path):
+    run(client(reply("hosted"), LLM_BASE_URL="http://hosted.test/v1", LLM_CACHE_DIR=str(tmp_path)).chat(USER))
+    other = client(reply("other provider"), LLM_BASE_URL="http://other.test/v1", LLM_CACHE_DIR=str(tmp_path))
+    assert run(other.chat(USER)) == "other provider"
+    same = client(reply("never used"), LLM_BASE_URL="HTTP://Hosted.test:80/v1/", LLM_CACHE_DIR=str(tmp_path))
+    assert run(same.chat(USER)) == "hosted"                             # same server, other spelling
+
+
+def test_max_tokens_is_part_of_the_cache_key(tmp_path):
+    run(client(reply("short"), LLM_CACHE_DIR=str(tmp_path)).chat(USER))
+    longer = client(reply("long"), LLM_CACHE_DIR=str(tmp_path), LLM_MAX_COMPLETION_TOKENS=2048)
+    assert run(longer.chat(USER)) == "long"
+
+
+def test_the_endpoint_holds_across_threads_and_event_loops():
+    import threading
+    state = {"active": 0, "peak": 0}
+    guard = threading.Lock()
+
+    class Counting(FakeChat):
+        async def _create(self, **request):
+            with guard:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+            await asyncio.sleep(0.01)
+            with guard:
+                state["active"] -= 1
+            return reply("ok")
+
+    def worker(i):
+        llm = LLMClient(settings(LLM_BASE_URL="http://threads.test/v1"), chat_client=Counting(),
+                        embed_client=FakeEmbeddings())
+        for j in range(3):
+            asyncio.run(llm.chat([{"role": "user", "content": f"{i}-{j}"}]))      # a new event loop each time
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert state["peak"] == 1
+
+
+def test_cancelling_during_back_off_or_in_the_queue_frees_the_endpoint(slept):
+    class Blocks(FakeChat):
+        hold: asyncio.Event
+
+        async def _create(self, **request):
+            if request["messages"][0]["content"] == "holder":
+                await self.hold.wait()
+            return reply("ok")
+
+    blocks = Blocks()
+    llm = LLMClient(settings(LLM_BASE_URL="http://queue.test/v1"), chat_client=blocks, embed_client=FakeEmbeddings())
+    backoff = client(status_error(openai.RateLimitError, 429), reply("never"), LLM_BASE_URL="http://queue.test/v1",
+                     LLM_RETRY_BASE_S=2.0)
+
+    async def scenario():
+        blocks.hold = asyncio.Event()
+        holder = asyncio.create_task(llm.chat([{"role": "user", "content": "holder"}]))
+        await asyncio.sleep(0.01)
+        waiting = asyncio.create_task(llm.chat([{"role": "user", "content": "queued"}]))   # waits for its turn
+        await asyncio.sleep(0.01)
+        waiting.cancel()
+        blocks.hold.set()
+        await holder
+        in_backoff = asyncio.create_task(backoff.chat(USER))
+        while not slept:                                                   # inside the 2 s back-off
+            await asyncio.sleep(0)
+        in_backoff.cancel()
+        for task in (waiting, in_backoff):
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        return await asyncio.wait_for(llm.chat([{"role": "user", "content": "after"}]), timeout=2)
+
+    assert run(scenario()) == "ok"
+
+
+def test_each_wait_is_capped(slept):
+    llm = client(*[status_error(openai.RateLimitError, 429)] * 3, reply("OK"), LLM_RETRY_BASE_S=20.0)
+    assert run(llm.chat(USER)) == "OK" and slept == [20.0, 30.0, 30.0]
+
+
+def test_an_empty_reply_is_not_cached(tmp_path):
+    llm = client(reply("  "), reply("OK"), LLM_CACHE_DIR=str(tmp_path))
+    with pytest.raises(FinSightError):
+        run(llm.chat(USER))
+    assert run(llm.chat(USER)) == "OK" and len(llm.client.requests) == 2
+
+
+def test_a_cache_entry_with_wrong_types_is_fetched_again(tmp_path):
+    llm = client(reply("first"), reply("again"), LLM_CACHE_DIR=str(tmp_path))
+    run(llm.chat(USER))
+    entry = next(tmp_path.rglob("*.json"))
+    entry.write_text('{"content": "x", "finish_reason": null, "prompt_tokens": null, "completion_tokens": 3}',
+                     encoding="utf-8")
+    assert run(llm.chat(USER)) == "again"
+
+
+def test_any_text_gives_a_cache_key(tmp_path):
+    llm = client(reply("OK"), LLM_CACHE_DIR=str(tmp_path))
+    assert run(llm.chat([{"role": "user", "content": "broken \ud800 surrogate"}])) == "OK"
+
+
+def test_cancelled_waiters_never_let_a_later_caller_overlap_the_active_request():
+    """Holder active; waiter 1 cancels, caller C queues, waiter 2 cancels: C must still wait for the holder."""
+    state = {"active": 0, "peak": 0}
+
+    class Tracks(FakeChat):
+        hold: asyncio.Event
+
+        async def _create(self, **request):
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+            try:
+                if request["messages"][0]["content"] == "holder":
+                    await self.hold.wait()
+                return reply("ok")
+            finally:
+                state["active"] -= 1
+
+    chat = Tracks()
+    llm = LLMClient(settings(LLM_BASE_URL="http://abandon.test/v1"), chat_client=chat, embed_client=FakeEmbeddings())
+
+    def ask(text):
+        return asyncio.create_task(llm.chat([{"role": "user", "content": text}]))
+
+    async def scenario():
+        chat.hold = asyncio.Event()
+        holder = ask("holder")
+        await asyncio.sleep(0.01)
+        w1 = ask("w1")
+        await asyncio.sleep(0.01)
+        w1.cancel()
+        c = ask("c")
+        await asyncio.sleep(0.01)
+        w2 = ask("w2")
+        await asyncio.sleep(0.01)
+        w2.cancel()
+        await asyncio.sleep(0.2)                       # C must not have started while the holder runs
+        started_early = state["peak"] > 1
+        chat.hold.set()
+        await asyncio.gather(holder, c)
+        for t in (w1, w2):
+            with pytest.raises(asyncio.CancelledError):
+                await t
+        return started_early
+
+    assert run(scenario()) is False and state["peak"] == 1
+
+
+def test_a_cache_cleanup_error_never_fails_the_reply(tmp_path, monkeypatch):
+    """CI (Linux) raised NotADirectoryError from the cleanup, which missing_ok does not cover; Windows raises
+    FileNotFoundError there, so this simulates Linux to keep the regression visible on every platform."""
+    def linux_unlink(self, missing_ok=False):
+        raise NotADirectoryError(20, "Not a directory", str(self))
+
+    blocker = tmp_path / "cache"
+    blocker.write_text("a file where the cache folder should be", encoding="utf-8")
+    monkeypatch.setattr(Path, "unlink", linux_unlink)
+    llm = client(reply("OK"), LLM_CACHE_DIR=str(blocker))
+    assert run(llm.chat(USER)) == "OK"
