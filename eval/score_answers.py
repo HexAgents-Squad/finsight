@@ -333,7 +333,7 @@ def gold_figures_in_pack(q: Question, pack: dict) -> bool | None:
     if q.answer_type != "short_numeric" or not wanted:
         return None
     text = " ".join([p["text"] for p in pack.get("passages", [])] + [h["answer"] for h in pack.get("history", [])])
-    return all(f in text or f.replace(",", "") in text for f in wanted)
+    return all(re.search(rf"(?<![\d,.])(?:{re.escape(f)}|{f.replace(',', '')})(?!\d|[,.]\d)", text) for f in wanted)
 
 
 def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str, re.Pattern]) -> dict:

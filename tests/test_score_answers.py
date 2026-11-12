@@ -751,6 +751,9 @@ def test_gold_figures_must_be_in_the_passages_digit_for_digit():
     assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "Net operating revenues 12,455 12,535"}]}) is True
     assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "revenues of $12.5 billion"}]}) is False
     assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "12455"}]}) is True        # no thousands separator
+    for inside in ("112,455", "12,455,000", "124550", "12455.5"):                  # part of another number
+        assert sa.gold_figures_in_pack(a12, {"passages": [{"text": f"total {inside} million"}]}) is False, inside
+    assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "revenues were $12,455."}]}) is True
     assert sa.gold_figures_in_pack(QUESTIONS["E01"], PACKS["E01"]) is None             # not a short numeric item
 
 

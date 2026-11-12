@@ -56,4 +56,4 @@ Rows the graders marked `example` in eval/results/grading/grading_sheet.csv, in 
 - **Question:** By what percentage did NVIDIA's revenue change from fiscal 2024 to fiscal 2025?
 - **Model answer:** NVIDIA's revenue increased by 12% from fiscal 2024 to fiscal 2025.
 - **Gold answer:** NVIDIA's revenue increased 114.2%, from $60,922 million in fiscal 2024 to $130,497 million in fiscal 2025 (years ended January 28, 2024 and January 26, 2025).
-- **Why:** example: Says NVIDIA revenue grew 12%; the gold is 114.2% ($60,922 million to $130,497 million). Neither revenue figure was in the retrieved passages, yet the model gave a precise growth rate instead of saying it could not compute it.
+- **Why:** example: Says NVIDIA revenue grew 12%; the gold is 114.2% ($60,922 million to $130,497 million). The fiscal 2025 revenue was not in the retrieved passages (fiscal 2024 only as $60.9 billion), yet the model gave a precise growth rate instead of saying it could not compute it.

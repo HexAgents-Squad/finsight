@@ -108,11 +108,15 @@ were graded 0/1/2 by two team members independently and settled together (W1-14)
 for comparison.
 
 ### Findings
-1. **Retrieval decides most numeric answers, and it often misses the figure.** Even with the correct company and
-   year as filters, every gold dollar figure was in the passages for only 18 of the 46 numeric questions that have
-   one (table 8). Qwen answered 12/18 of those correctly and 3/28 of the rest; Llama 4/18 and 1/28. The context
-   pack's own measure (a passage from the gold-source section for 69 of 73 questions, `context_pack_gold.meta.json`)
-   counts the right section, not the right line, so it overstated retrieval. Several failures follow directly:
+1. **Retrieval often misses the figure, and most wrong numeric answers coincide with a miss.** Even with the
+   correct company and year as filters, every gold dollar figure was in the passages (digit for digit) for only 18
+   of the 46 numeric questions that have one (table 8). Qwen answered 12/18 of those correctly and 3/28 of the rest;
+   Llama 4/18 and 1/28; 25 of Qwen's 32 wrong numeric answers are in the second group (M1 score file). The split is
+   not a controlled experiment: the second group also holds most of the computed questions (21 of its 28 are ratio,
+   period or follow-up questions), and a rounded figure counts as absent, which is how 3 of those 28 were still
+   answered (e.g. A08 from "$62.6 billion"). The context pack's own measure (a passage from the gold-source section
+   for 69 of 73 questions, `context_pack_gold.meta.json`) counts the right section, not the right line, so it
+   overstated retrieval. Some failures follow directly:
    Qwen's "not in the passages" refusals of A09, A15, B01, B05 and C04 were correct about the passages (none holds
    the gold figures, though the scorer counts them as over-refusals), and A12 gave Coca-Cola's Q2 revenue
    ($12,535 million) for a Q3 question because only the Q2 table was retrieved.
@@ -124,19 +128,21 @@ for comparison.
    "$394.3 billion" (gold $391,035 million).
 3. **Summaries are easier than exact numbers.** Qwen with passages is right on 8/12 summaries but 16/48 short
    numeric answers; Llama on 5/12 and 6/48. Computed figures are hardest: ratio 7/15 and **period comparison 0/12
-   for all three runs**. Some period answers had no inputs to work from (C01: "12%" NVIDIA revenue growth for a gold
-   114.2%, with neither revenue figure retrieved), and three are whole-number roundings of the right value that the
-   tolerance rejects (C06 9 for 8.6 and C08 8 for 8.1 at 1%; C10 0 for 0.3 at 5%). These three are among M1's 10
-   arithmetic_slip labels, its joint most common label with over_refusal, so real calculation errors are fewer.
+   for all three runs**, including the three period questions whose inputs were all retrieved (C02, C08, C10), so
+   calculation fails on its own too. Some period answers lacked an input (C01: "12%" NVIDIA revenue growth for a
+   gold 114.2%; the fiscal 2025 revenue was not retrieved, fiscal 2024 only as "$60.9 billion"), and three are
+   whole-number roundings of the right value that the tolerance rejects (C06 9 for 8.6 and C08 8 for 8.1 at 1%; C10
+   0 for 0.3 at 5%). These three are among M1's 10 arithmetic_slip labels, its joint most common label with
+   over_refusal, so real calculation errors are fewer than the label count.
 4. **Qwen's refusals follow the passages.** Of M1's 10 over_refusal labels, the 5 answerable questions above lacked
    the gold figures in the pack, F03 too, two are "not reported" traps (G08, G10) where it said the figure is not
    provided but set refused=true, and two are partial-refusal tests (RF14, RF15). Its refusals of out-of-scope
    questions are good: precision 18/28, recall 18/20, the right rule in 14/18 (table 4). Closed-book it
-   over-refuses 20 times, 10 of them as R3 (outside the corpus); 16 of the 20 ask about fiscal 2025, which it calls
-   "not reported (yet)", pointing to its training cutoff rather than the prompt (M3 score file).
+   over-refuses 20 times, 10 of them as R3 (outside the corpus); most of them are fiscal-2025 figures it calls "not
+   reported (yet)", pointing to its training cutoff rather than the prompt (M3 score file).
 5. **The smaller model fails on format first.** Llama-3.2-3B returned valid B0 JSON for 72/102 questions after a
-   retry: of the 30 invalid replies, 23 left fields null, 4 wrote numbers as strings, 2 used thousands separators
-   (repaired, still counted invalid) and 1 had another error (M2 runs file). It refused only 5/20 of the questions
+   retry: of the 30 invalid replies, 23 left the answer or the citations null, 4 wrote numbers as strings, 2 used
+   thousands separators (repaired, still counted invalid) and 1 gave the answer as a number (M2 runs file). It refused only 5/20 of the questions
    that must be refused, naming the right rule for 1/5. It is closer to Qwen on entity comparisons (4/10 against
    5/10) and summaries (5/12 against 8/12) than on numbers (6/48 against 16/48). Its latency (42.5 s median on a
    laptop CPU) is not comparable with the endpoint's 2.4 s.
@@ -181,7 +187,8 @@ for comparison.
 ### Next steps
 - **Retrieval first (W1-05 and the Week 2 agent):** statement figures through `get_financial_fact` (XBRL, no
   retrieval needed), and retrieval aimed at statement tables for the period asked (quarter, not only year), then
-  question-derived filters; re-measure table 8.
+  question-derived filters; re-measure table 8. Table 8 shows where the failures sit, not a measured effect: the
+  re-measurement will show how much better retrieval actually helps.
 - **Calculation through tools:** every growth rate and ratio through `calculate` (exact, half-up), so period
   comparisons are computed from retrieved or XBRL inputs, and the agent says it cannot compute when inputs are
   missing instead of guessing (C01).
