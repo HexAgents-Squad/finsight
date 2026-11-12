@@ -80,11 +80,16 @@ def copy_problems(base: list[dict], rows: list[dict], grader: int) -> tuple[list
         return [f"{name}'s file has rows added, removed or re-ordered (sorted?) or a changed key or task: "
                 f"ask for the copy again, filled without sorting"], []
     problems, warnings, split = [], [], split_row(base)
-    for n, (r, b) in enumerate(zip(rows, base, strict=True), start=2):
+    for n, r in enumerate(rows, start=2):
         if r[other] or r["final"]:
             problems.append(f"{name}'s row {n}: {other} or final filled (only grader_{grader} and labels)")
-        if b["task"] == LABEL and owner(n, split) != grader and r["failure_label"]:
-            warnings.append(f"row {n}: {name} labelled the other grader's row (ignored)")
+    extra = sum(b["task"] == LABEL and owner(n, split) != grader and r["failure_label"] != ""
+                for n, (r, b) in enumerate(zip(rows, base, strict=True), start=2))
+    if extra:
+        # Both W1-14 graders labelled every row (measured): a second label is kept as a second opinion, used
+        # only where the row's owner left it empty, and counted for the graders' label agreement
+        warnings.append(f"{name} also labelled {extra} of the other grader's rows: the owner's label decides; "
+                        f"these fill a label the owner left empty and give the label agreement")
     edited = [n for n, (a, b) in enumerate(zip(rows, base, strict=True), start=2)
               if any(a[c] != b[c] for c in TEXT_COLUMNS)]
     if edited:
@@ -212,6 +217,8 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
 
     split = split_row(base)
     merged, pairs, disagree, missing, overturn = [], [], [], [], []
+    label_pairs: list[tuple[str, str]] = []
+    label_differs: list[str] = []
     for n, (b, a1, a2) in enumerate(zip(base, g1, g2, strict=True), start=2):
         row = dict(b)
         row["note"] = " | ".join(f"G{i}: {r['note'].strip()}" for i, r in ((1, a1), (2, a2)) if r["note"].strip())
@@ -233,7 +240,16 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
                     disagree.append(f"row {n}: grader 1 = {row['grader_1']}, grader 2 = {row['grader_2']}: "
                                     f"{b['question'][:80]}")
         elif b["task"] == LABEL:
-            row["failure_label"] = (a1 if owner(n, split) == 1 else a2)["failure_label"]
+            mine, theirs = (a1, a2) if owner(n, split) == 1 else (a2, a1)
+            row["failure_label"] = mine["failure_label"] or theirs["failure_label"]
+            if a1["failure_label"] and a2["failure_label"]:
+                label_pairs.append((a1["failure_label"], a2["failure_label"]))
+                if a1["failure_label"] != a2["failure_label"]:
+                    label_differs.append(f"row {n}: grader 1 = {a1['failure_label']}, grader 2 = "
+                                         f"{a2['failure_label']} (kept: {row['failure_label']})")
+            if not mine["failure_label"] and theirs["failure_label"]:
+                warnings.append(f"row {n}: the owner left the label empty; the other grader's "
+                                f"{theirs['failure_label']} is used")
             if not row["failure_label"]:
                 missing.append(f"row {n}: no failure_label (suggested: {b['suggested_label'] or 'none'})")
         if OVERTURN_MARK.search(row["note"]):
@@ -241,7 +257,9 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
         merged.append(row)
     k = kappa(pairs)
     return merged, {"pairs": len(pairs), "agree": sum(x == y for x, y in pairs), "kappa": k,
-                    "disagree": disagree, "missing": missing, "overturn": overturn, "warnings": warnings}
+                    "disagree": disagree, "missing": missing, "overturn": overturn, "warnings": warnings,
+                    "label_pairs": len(label_pairs), "label_agree": sum(x == y for x, y in label_pairs),
+                    "label_differs": label_differs}
 
 
 # --------------------------------------------------------------------------------------------- examples
@@ -300,9 +318,13 @@ def main(argv: list[str] | None = None) -> int:
             merged, rep = merge(args.sheet, args.g1, args.g2)
             k = f", Cohen's kappa {rep['kappa']:.2f}" if rep["kappa"] is not None else ""
             print(f"grade rows: {rep['pairs']} graded by both, {rep['agree']} agree{k}")
+            if rep["label_pairs"]:
+                print(f"label rows labelled by both: {rep['label_pairs']}, {rep['label_agree']} agree")
             for title, items in (("disagreements to settle together (set `final`)", rep["disagree"]),
                                  ("missing", rep["missing"]),
                                  ("overturn proposals (decide together; final = 2 overturns)", rep["overturn"]),
+                                 ("labels that differ (the owner's label is kept; change it together if "
+                                  "you agree it is wrong)", rep["label_differs"]),
                                  ("warnings", rep["warnings"])):
                 print(f"{title}: {len(items)}")
                 for line in items:

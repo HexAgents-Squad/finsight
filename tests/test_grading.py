@@ -155,7 +155,11 @@ def test_a_label_comes_from_the_rows_owner_only(sheet):
     g2 = fill(sheet, 2, lambda n: "2", label_for=lambda r: "wrong_company")
     merged, rep = gr.merge(sheet, g1, g2)
     assert merged[theirs - 2]["failure_label"] == "wrong_company"
-    assert rep["warnings"] == [f"row {theirs}: grader 1 labelled the other grader's row (ignored)"]
+    assert rep["warnings"] == ["grader 1 also labelled 1 of the other grader's rows: the owner's label decides; "
+                               "these fill a label the owner left empty and give the label agreement"]
+    assert rep["label_pairs"] == 1 and rep["label_agree"] == 0
+    assert rep["label_differs"] == [f"row {theirs}: grader 1 = invented_number, grader 2 = wrong_company "
+                                    f"(kept: wrong_company)"]
 
 
 def test_missing_grades_and_labels_are_listed(sheet):
@@ -286,3 +290,26 @@ def test_a_long_list_of_problems_is_counted(sheet):
     save(g2, rows)
     with pytest.raises(gr.GradingError, match=r"\.\.\. and \d+ more"):
         gr.merge(sheet, g1, g2)
+
+
+def test_when_both_graders_label_every_row_the_second_label_fills_gaps(sheet):
+    # What the W1-14 graders did (measured): each labelled all label rows, the owner missed a few
+    split, labels = gr.split_row(rows_of(sheet)), label_rows(sheet)
+    mine1, mine2 = [n for n in labels if n < split], [n for n in labels if n >= split]
+    g1 = fill(sheet, 1, lambda n: "2", label_for=lambda r: "invented_number")
+    g2 = fill(sheet, 2, lambda n: "2", label_for=lambda r: "wrong_line_item")
+    for path, label in ((g1, "invented_number"), (g2, "wrong_line_item")):
+        rows = rows_of(path)
+        for n in labels:
+            rows[n - 2]["failure_label"] = label
+        save(path, rows)
+    rows = rows_of(g1)
+    rows[mine1[0] - 2]["failure_label"] = ""                                 # grader 1 missed one of theirs
+    save(g1, rows)
+    merged, rep = gr.merge(sheet, g1, g2)
+    assert merged[mine1[0] - 2]["failure_label"] == "wrong_line_item"         # filled from grader 2
+    assert merged[mine1[1] - 2]["failure_label"] == "invented_number"        # the owner decides
+    assert merged[mine2[0] - 2]["failure_label"] == "wrong_line_item"
+    assert rep["missing"] == [] and rep["label_pairs"] == len(labels) - 1 and rep["label_agree"] == 0
+    assert f"row {mine1[0]}: the owner left the label empty; the other grader's wrong_line_item is used" \
+        in rep["warnings"]
