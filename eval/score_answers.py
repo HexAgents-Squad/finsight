@@ -145,6 +145,7 @@ DERIVED_RE = re.compile(r"\b(?:deriv|calculat|comput|estimat|approximat)\w*", re
 DECREASE_RE = re.compile(r"\b(?:decreas\w*|declin\w*|fell|fall\w*|dropp?\w*|lower\w*|down|reduc\w*|shr[aiu]nk\w*)\b",
                          re.IGNORECASE)
 CITATION_MARK = re.compile(r"\s*\[P\d+\]")
+GROUPED_FIGURE = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+)(?![\d,])")   # a dollar figure as the gold set writes it
 
 
 # --------------------------------------------------------------------------------------------- numbers
@@ -323,6 +324,18 @@ def evidence(q: Question, pack: dict, rag: bool) -> list[Figure]:
     return [f for t in texts for f in figures(t)]
 
 
+def gold_figures_in_pack(q: Question, pack: dict) -> bool | None:
+    """Whether every dollar figure of a short numeric gold answer appears, digit for digit, in the passages or the
+    conversation history (None: the gold answer has no such figure). Stricter than the hallucination check's
+    rounding match on purpose: "$12.5 billion" in a passage is not the 12,455 a Q3 question needs (A12), and the
+    context pack's evidence_in_pack only says a passage came from the right section, not that it holds the line."""
+    wanted = GROUPED_FIGURE.findall(q.gold_answer)
+    if q.answer_type != "short_numeric" or not wanted:
+        return None
+    text = " ".join([p["text"] for p in pack.get("passages", [])] + [h["answer"] for h in pack.get("history", [])])
+    return all(f in text or f.replace(",", "") in text for f in wanted)
+
+
 def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str, re.Pattern]) -> dict:
     """Score one answer: correct (True/False, None = waiting for a human), why, the checks and a label."""
     a: B0Answer | None = rec.parsed
@@ -483,6 +496,8 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
     for rec in sorted(records, key=lambda r: order[r.id]):
         s = check(questions[rec.id], rec, packs.get(rec.id, {}), meta.context == "rag", matchers)
         answer = display_answer(rec)
+        s["gold_figures_in_pack"] = gold_figures_in_pack(questions[rec.id], packs.get(rec.id, {})) \
+            if meta.context == "rag" else None
         s.update(run_id=meta.run_id, refused=bool(rec.parsed and rec.parsed.refused), json_valid=rec.json_valid,
                  retries=rec.retries, prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
                  latency_s=rec.latency_s, cached=rec.cached, error=rec.error is not None,
@@ -745,6 +760,13 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
             "| graders' Cohen's kappa | " + " | ".join(cells["g_kappa"]) + " |",
             "| final grade vs judge: exact agreement | " + " | ".join(cells["agree"]) + " |",
             "| final grade vs judge: Cohen's kappa | " + " | ".join(cells["kappa"]) + " |", ""]
+    out += table("### 8. Short numeric answers by whether the gold figures were in the passages (digit for digit)",
+                 "Gold dollar figures", names)
+    for label, flag in (("all in the passages", True), ("not all in the passages", False)):
+        row = [rate([s for s in sc if s["answer_type"] == "short_numeric" and s.get("gold_figures_in_pack") is flag])
+               if meta.context == "rag" else "– (closed-book)" for meta, sc in runs]
+        out.append(f"| {label} | " + " | ".join(row) + " |")
+    out.append("")
     return "\n".join(out)
 
 

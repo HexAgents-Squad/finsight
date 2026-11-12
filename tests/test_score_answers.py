@@ -741,3 +741,25 @@ def test_the_report_shows_the_graders_agreement_and_the_judges():
     text = sa.report([(meta(), scored)])
     assert "| graders' exact agreement (independent grades) | 1/2 |" in text
     assert "| final grade vs judge: exact agreement | 1/2 |" in text
+
+
+# --- added for W1-15: was the gold figure in the passages? -------------------------------------------------------
+
+def test_gold_figures_must_be_in_the_passages_digit_for_digit():
+    a12 = QUESTIONS["A12"]                                                   # gold 12,455; only Q2's 12,535 retrieved
+    assert sa.gold_figures_in_pack(a12, PACKS["A12"]) is False
+    assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "Net operating revenues 12,455 12,535"}]}) is True
+    assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "revenues of $12.5 billion"}]}) is False
+    assert sa.gold_figures_in_pack(a12, {"passages": [{"text": "12455"}]}) is True        # no thousands separator
+    assert sa.gold_figures_in_pack(QUESTIONS["E01"], PACKS["E01"]) is None             # not a short numeric item
+
+
+def test_the_report_splits_numeric_accuracy_by_figures_in_the_passages():
+    runs = runs_with_one_wrong()
+    text = sa.report([(m, sc) for m, _, sc in runs])
+    row = next(line for line in text.splitlines() if line.startswith("| all in the passages |"))
+    present = [s for s in runs[0][2] if s["gold_figures_in_pack"] is True]
+    assert row == f"| all in the passages | {sa.rate(present)} |"
+    closed = sa.score_run(meta(CLOSED, "closed"), perfect_run(CLOSED), QUESTIONS, PACKS, MATCHERS)
+    assert {s["gold_figures_in_pack"] for s in closed} == {None}
+    assert "– (closed-book)" in sa.report([(meta(CLOSED, "closed"), closed)])

@@ -24,7 +24,7 @@ Rows the graders marked `example` in eval/results/grading/grading_sheet.csv, in 
 - **Question:** What were Coca-Cola's net operating revenues in the third quarter of fiscal 2025?
 - **Model answer:** Coca-Cola's net operating revenues in the third quarter of fiscal 2025 were $12,535 million.
 - **Gold answer:** Coca-Cola's net operating revenues were $12,455 million for the three months ended September 26, 2025 (fiscal 2025 Q3).
-- **Why:** example: Gives $12,535 million, the Q2 figure from the 10-Q (three months ended June 27, 2025), for a Q3 question; gold $12,455 million. A real filing figure from the wrong period, 0.6% away.
+- **Why:** example: Gives $12,535 million, the Q2 figure (three months ended June 27, 2025), for a Q3 question; gold $12,455 million. Only the Q2 table was retrieved, so the model took the nearest figure on offer: a wrong period, 0.6% away.
 
 ## C02: malformed_output
 
@@ -40,7 +40,7 @@ Rows the graders marked `example` in eval/results/grading/grading_sheet.csv, in 
 - **Question:** By what percentage did JPMorgan Chase's net income change from fiscal 2023 to fiscal 2024?
 - **Model answer:** The percentage change in JPMorgan Chase's net income from fiscal 2023 to fiscal 2024 is not reported in the provided passages.
 - **Gold answer:** JPMorgan Chase's net income increased 18.0%, from $49,552 million in fiscal 2023 to $58,471 million in fiscal 2024.
-- **Why:** example: Refuses as not in the passages, yet both figures were there (gold: $49,552 million to $58,471 million, +18.0%); the model would not compute a percentage change.
+- **Why:** example: Says the change is not in the passages, and it is right: the retrieved passages lack JPMorgan's net income lines ($49,552 million and $58,471 million; gold +18.0%). A retrieval miss that is scored as an over-refusal.
 
 ## E01: over_refusal
 
@@ -56,4 +56,4 @@ Rows the graders marked `example` in eval/results/grading/grading_sheet.csv, in 
 - **Question:** By what percentage did NVIDIA's revenue change from fiscal 2024 to fiscal 2025?
 - **Model answer:** NVIDIA's revenue increased by 12% from fiscal 2024 to fiscal 2025.
 - **Gold answer:** NVIDIA's revenue increased 114.2%, from $60,922 million in fiscal 2024 to $130,497 million in fiscal 2025 (years ended January 28, 2024 and January 26, 2025).
-- **Why:** example: Says NVIDIA revenue grew 12%; the gold is 114.2% ($60,922 million to $130,497 million). A confident arithmetic error on a headline figure.
+- **Why:** example: Says NVIDIA revenue grew 12%; the gold is 114.2% ($60,922 million to $130,497 million). Neither revenue figure was in the retrieved passages, yet the model gave a precise growth rate instead of saying it could not compute it.

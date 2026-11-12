@@ -82,97 +82,119 @@
 | graders' Cohen's kappa | 0.17 | 0.39 | 0.54 |
 | final grade vs judge: exact agreement | 12/12 | 9/11 | 4/8 |
 | final grade vs judge: Cohen's kappa | 1.00 | 0.70 | 0.20 |
+
+
+### 8. Short numeric answers by whether the gold figures were in the passages (digit for digit)
+
+| Gold dollar figures | M1_qwen3-8b_rag_think-off_b0-v1 | M2_llama3.2-3b_rag_think-off_b0-v1 | M3_qwen3-8b_closed_think-off_b0-v1 |
+|---|---|---|---|
+| all in the passages | 12/18 = 67% [44%–84%] | 4/18 = 22% [9%–45%] | – (closed-book) |
+| not all in the passages | 3/28 = 11% [4%–27%] | 1/28 = 4% [1%–18%] | – (closed-book) |
 <!-- GENERATED:END -->
 
 ## Interpretation
 
-Model comparison v1 (W1-15, 13 Nov 2026). Every figure below is a cell of the generated tables above, unless its
-source is named; `tests/test_comparison_report.py` fails if a cited fraction disappears from them.
+Model comparison v1 (W1-15, 13 Nov 2026). Every figure below is a cell of the generated tables above unless its
+source is named; `tests/test_comparison_report.py` fails if a cited figure or example drifts from the data.
 
 ### Setup
 Three runs answered the same 102 questions (80 gold-v1 items + 22 refusal tests): **M1** Qwen3-8B on the team
 endpoint with retrieved passages, **M2** Llama-3.2-3B (local Ollama, 8k context) with the same passages, **M3**
 Qwen3-8B closed-book. All three used the same frozen zero-shot prompt B0 (b0-v1), temperature 0, one retry on
-invalid JSON and no tools: this is the baseline the Week 2 agent must beat. The passages are the W1-12 context
-pack (C3 hybrid retrieval, oracle company/year filters, 4,000 tokens per question; a passage from the gold source
-was in the pack for 69 of the 73 questions that have gold sources, `context_pack_gold.meta.json`). Short answers
-are scored automatically (W1-08); the 32 summary-style answers were graded 0/1/2 by two team members
-independently and settled together (W1-14), with Qwen3-8B as an LLM judge for comparison.
+invalid JSON and no tools: the baseline the Week 2 agent must beat. The passages are the W1-12 context pack (C3
+hybrid retrieval with the gold item's company and year as filters, 4,000 tokens per question). Short answers are
+scored automatically (W1-08); 32 answers (31 summaries and one "which company" answer the scorer could not decide)
+were graded 0/1/2 by two team members independently and settled together (W1-14), with Qwen3-8B as an LLM judge
+for comparison.
 
 ### Findings
-1. **Retrieval is the largest lever.** With passages Qwen gets 16/48 short numeric answers and 8/12 summaries
-   right; closed-book it gets 0/48 and 0/12. Closed-book answers also invent: 45/70 answers contain a number found
-   in no evidence, against 20/74 with passages (table 3), and invented_number is its most common failure (28).
-2. **Exact numbers are much harder than summaries.** Qwen with passages is right on 8/12 summaries but 16/48 short
-   numeric answers; Llama on 5/12 and 6/48. Within short answers, figures copied from a statement do best (fact
-   8/15) and computed ones worst: ratio 7/15 and **period comparison 0/12 for all three models**. Some misses are
-   large (M1 C01: NVIDIA revenue growth 12% for a gold 114.2%), some are whole-number roundings of the right
-   value (C06 9 for 8.6, C08 8 for 8.1, C10 0 for 0.3) that the 1% tolerance rejects. arithmetic_slip is M1's
-   most common label (10).
-3. **Qwen refuses answerable questions.** M1 has 10 over-refusals (table 4); 7 of them cite R4 ("not in the
-   passages"), and for the 5 answerable ones among them (A09, A15, B01, B05, C04) a passage from the gold-source
-   section was in the pack (M1 runs file and context pack). Example C04: it would not compute JPMorgan's net
-   income change although both figures were given. Closed-book it over-refuses 20 times, 10 of them as R3 (out
-   of scope). Its refusals are otherwise good: precision 18/28 and recall 18/20, with the right rule in 14/18.
-4. **The smaller model fails on format first.** Llama-3.2-3B returned valid B0 JSON for 72/102 questions even
-   after a retry (malformed_output 31: null answers and citations, numbers as quoted strings), refused only 5/20
-   of the questions that must be refused, and named the right rule for 1/5. It is closer to Qwen on entity
-   comparisons (4/10 against 5/10) and summaries (5/12 against 8/12) than on numbers (6/48 against 16/48), so a
-   3B model would need a stricter output step and tools for figures. Its latency (42.5 s median on a laptop CPU) is not
-   comparable with the endpoint's 2.4 s.
-5. **Wrong periods and line items look plausible.** M1 A12 gave Coca-Cola's Q2 revenue ($12,535 million, a real
-   10-Q figure) for a Q3 question; it is 0.6% from the gold $12,455 million, so only an exact-figure rule catches
-   it (wrong_line_item: M1 7, M2 8). No answer in any run named the wrong fiscal year or company in its fields
-   (0/74, 0/66, 0/70): errors are in the figure, not the frame.
-6. **The LLM judge agrees with the humans only where the answer had evidence.** Final human grades vs the judge:
-   12/12 (M1) and 9/11 (M2), but 4/8 (M3). The two graders agreed with each other on 20/32 independent grades
-   (Cohen's kappa 0.43 over all 32, W1-14 merge; per run 0.17-0.54) and on 163/177 failure labels both gave
-   (W1-14 merge), so "partly correct" needs a sharper rubric. The judge can screen grounded answers; humans
-   still decide.
+1. **Retrieval decides most numeric answers, and it often misses the figure.** Even with the correct company and
+   year as filters, every gold dollar figure was in the passages for only 18 of the 46 numeric questions that have
+   one (table 8). Qwen answered 12/18 of those correctly and 3/28 of the rest; Llama 4/18 and 1/28. The context
+   pack's own measure (a passage from the gold-source section for 69 of 73 questions, `context_pack_gold.meta.json`)
+   counts the right section, not the right line, so it overstated retrieval. Several failures follow directly:
+   Qwen's "not in the passages" refusals of A09, A15, B01, B05 and C04 were correct about the passages (none holds
+   the gold figures, though the scorer counts them as over-refusals), and A12 gave Coca-Cola's Q2 revenue
+   ($12,535 million) for a Q3 question because only the Q2 table was retrieved.
+2. **With passages Qwen is far better than closed-book.** Short numeric 16/48 and summaries 8/12, against 0/48 and
+   0/12 closed-book. Closed-book answers also contain more numbers found in no evidence: 45/70 against 20/74
+   (table 3; for runs with passages the evidence includes up to 4,000 tokens of passages, so their numbers are
+   more likely to be "supported" by chance: the direction is clear, the size of the gap less so).
+   invented_number is the closed-book run's most common failure (28), e.g. Apple's fiscal 2024 net sales as
+   "$394.3 billion" (gold $391,035 million).
+3. **Summaries are easier than exact numbers.** Qwen with passages is right on 8/12 summaries but 16/48 short
+   numeric answers; Llama on 5/12 and 6/48. Computed figures are hardest: ratio 7/15 and **period comparison 0/12
+   for all three runs**. Some period answers had no inputs to work from (C01: "12%" NVIDIA revenue growth for a gold
+   114.2%, with neither revenue figure retrieved), and three are whole-number roundings of the right value that the
+   tolerance rejects (C06 9 for 8.6 and C08 8 for 8.1 at 1%; C10 0 for 0.3 at 5%). These three are among M1's 10
+   arithmetic_slip labels, its joint most common label with over_refusal, so real calculation errors are fewer.
+4. **Qwen's refusals follow the passages.** Of M1's 10 over_refusal labels, the 5 answerable questions above lacked
+   the gold figures in the pack, F03 too, two are "not reported" traps (G08, G10) where it said the figure is not
+   provided but set refused=true, and two are partial-refusal tests (RF14, RF15). Its refusals of out-of-scope
+   questions are good: precision 18/28, recall 18/20, the right rule in 14/18 (table 4). Closed-book it
+   over-refuses 20 times, 10 of them as R3 (outside the corpus); 16 of the 20 ask about fiscal 2025, which it calls
+   "not reported (yet)", pointing to its training cutoff rather than the prompt (M3 score file).
+5. **The smaller model fails on format first.** Llama-3.2-3B returned valid B0 JSON for 72/102 questions after a
+   retry: of the 30 invalid replies, 23 left fields null, 4 wrote numbers as strings, 2 used thousands separators
+   (repaired, still counted invalid) and 1 had another error (M2 runs file). It refused only 5/20 of the questions
+   that must be refused, naming the right rule for 1/5. It is closer to Qwen on entity comparisons (4/10 against
+   5/10) and summaries (5/12 against 8/12) than on numbers (6/48 against 16/48). Its latency (42.5 s median on a
+   laptop CPU) is not comparable with the endpoint's 2.4 s.
+6. **Wrong answers stay inside the question's frame.** No answer put a company or fiscal year outside the question in
+   its fields (0/74, 0/66, 0/70), but the wrong quarter (A12) and the wrong choice between the two companies asked
+   about (D05: Pfizer named, although J&J's R&D was $17,232 million against Pfizer's $10,822 million) do occur.
+7. **The LLM judge is lenient, and the humans disagree too.** Final human grades vs the judge: 12/12 (M1), 9/11
+   (M2), 4/8 (M3); in all 6 disagreements the judge gave the higher grade (score files). The closed-book cell is
+   small (8 answers), so this suggests rather than shows that the judge is weakest without evidence. The two graders
+   agreed on 20/32 independent grades (Cohen's kappa 0.43 over all 32; per run 0.17-0.54) and on 163/177 failure
+   labels both gave (W1-14 merge), so "partly correct" needs a sharper rubric. The judge can screen; humans decide.
 
 ### Failure taxonomy (table 6) with examples (`failure_examples.md`)
 | Label | M1 | M2 | M3 | Example |
 |---|---|---|---|---|
-| invented_number | 8 | 14 | 28 | M3 G09: "$135,550 million" total liabilities, a line Amazon does not report |
-| over_refusal | 10 | 5 | 20 | M1 C04: "not reported in the provided passages" with both figures in them; M3 E01 refuses a summary |
-| arithmetic_slip | 10 | 4 | 2 | M1 C01: 12% growth for a gold 114.2% |
+| invented_number | 8 | 14 | 28 | M3 A01: Apple's fiscal 2024 net sales "$394.3 billion" (gold $391,035 million) |
+| over_refusal | 10 | 5 | 20 | M3 E01 refuses to summarise drivers the 10-K explains; M1 C04 (figures not retrieved, see finding 1) |
+| arithmetic_slip | 10 | 4 | 2 | M1 C08: "8%" for Costco's 8.1% growth (whole-number rounding) |
 | malformed_output | 1 | 31 | 0 | M2 C02: `"value": "24.1"` (a string), and 24.1% is not the gold 59.5% |
-| wrong_line_item | 7 | 8 | 3 | M1 A12: the Q2 figure for a Q3 question |
-| wrong_company | 5 | 3 | 5 | M1 D05: Pfizer for J&J ($17,232 million vs $10,822 million R&D) |
+| wrong_line_item | 7 | 8 | 3 | M1 A12: the Q2 figure for a Q3 question (only the Q2 table retrieved) |
+| wrong_company | 5 | 3 | 5 | M1 D05: Pfizer named; J&J $17,232 million vs Pfizer $10,822 million R&D |
 | incomplete_summary | 4 | 6 | 8 | M1 E12: names FX, pricing and volume for P&G but not the +1% pricing / -1% FX behind the flat sales (graded 1) |
-| under_refusal | 3 | 3 | 6 | answers a question that must be refused (e.g. advice, forecasts) |
-| wrong_refusal_rule | 3 | 3 | 3 | refuses correctly with the wrong rule (RF10/RF11 as R1 instead of R6) |
-| unit_confusion | 0 | 3 | 0 | the right figure in the wrong scale |
-| ignored_not_reported | 1 | 0 | 1 | a value for a figure the filing does not report (trap questions) |
+| under_refusal | 3 | 3 | 6 | M3 RF04: Tesla revenue "$92.4 billion", a company outside the corpus (R3) |
+| wrong_refusal_rule | 3 | 3 | 3 | M1 RF10: refused as R1 where the test expects R6 |
+| unit_confusion | 0 | 3 | 0 | M2 A08: Pfizer revenue as 62,600,000,000 "USD billions" (the figure in dollars, labelled billions) |
+| ignored_not_reported | 1 | 0 | 1 | M3 G09: Amazon total liabilities "$135,550 million", a line Amazon does not report |
 
 ### Caveats
-- Oracle filters: the passages were retrieved with the gold item's company and year, so these are upper bounds;
-  question-derived filters (W1-05) will lower them.
-- Small samples: 10-48 questions per cell (Wilson intervals in the tables); differences inside an interval are not
-  established, e.g. entity 5/10 vs 4/10.
-- One frozen prompt, not tuned. Review found two prompt properties that cost points and are kept for honesty: R2's
+- Filters: the passages were retrieved with the gold item's company and year, an upper bound; question-derived
+  filters (W1-05) will lower accuracy, on top of the chunk-level misses in finding 1.
+- Small samples: 8-48 answers per cell (Wilson intervals in the tables); differences inside an interval are not
+  established, e.g. entity 5/10 against 4/10, or the judge's 4/8.
+- One frozen, untuned prompt. Review found two prompt properties that cost points and are kept for honesty: R2's
   wording also covers RF10, and R3 says "20 companies" without naming them (docs/week1_plan.txt §3).
 - Closed-book "not reported" also means "I don't know", so M3 earns trap credit by not knowing.
 - The judge is Qwen grading Qwen and Llama, with a rubric that has no "grounded" criterion.
-- Scoring: a reported dollar figure must match at the precision printed; a computed percentage within 1% (so
-  "8" for 8.1 is wrong); the refused flag is trusted (M1 RF12 set refused=true but wrote the poem).
+- Scoring: a reported dollar figure must match at the precision printed; a computed percentage within the item's
+  tolerance (so "8" for 8.1 is wrong); the refused flag is trusted (M1 RF12 set refused=true but wrote the poem);
+  over_refusal also covers refusals that were right about the passages (finding 1).
 - No verdict was overturned by the graders; the grading sheet records every grade and label.
 
 ### Next steps
-- **Tools (Week 2 agent):** every growth rate and ratio through `calculate` (exact, half-up), statement figures
-  through `get_financial_fact` with the fiscal period checked: aimed at period_comparison 0/12, arithmetic_slip
-  and the A12-type wrong period.
+- **Retrieval first (W1-05 and the Week 2 agent):** statement figures through `get_financial_fact` (XBRL, no
+  retrieval needed), and retrieval aimed at statement tables for the period asked (quarter, not only year), then
+  question-derived filters; re-measure table 8.
+- **Calculation through tools:** every growth rate and ratio through `calculate` (exact, half-up), so period
+  comparisons are computed from retrieved or XBRL inputs, and the agent says it cannot compute when inputs are
+  missing instead of guessing (C01).
 - **Prompting baselines (W1-09) on the dev set:** S1 few-shot structured output (format and refusal rules), S2
   chain-of-thought with self-consistency (arithmetic), S3 decomposition (period and multi-company questions).
-- **Critic checks (W1-07):** recompute numeric inputs, check the period and fiscal year against the passage, and
-  flag an R4 refusal when the passages contain the requested line.
-- **Retrieval (W1-05):** question-derived filters instead of oracle ones; re-measure M1.
+- **Critic checks (W1-07):** recompute numeric inputs, check the period (quarter and year) against the question and
+  the cited passage, and when the passages lack a figure, fetch it with a tool before refusing.
 - **Model:** keep Qwen3-8B as the agent's model (Llama-3.2-3B fails the output contract on 30/102 questions).
-  Judge prompts get a "grounded" criterion before the judge is used beyond screening.
+  The judge rubric gets a "grounded" criterion before the judge is used beyond screening.
 
 ### Traceability
 Runs: `eval/results/model_runs/<run_id>.jsonl` with `.meta.json` (model, prompt and pack sha256, git commit);
-scores: `eval/results/scores/`; grades and labels: `eval/results/grading/grading_sheet.csv` (key ->
-run in `grading_key.csv`); judge: `grading/judge_<run_id>.jsonl`. Regenerate the tables with
-`python eval/score_answers.py` (no network; replies are cached, so a re-run of the models is free and identical).
-Decision record: ADR-019 in `docs/decisions.md`.
+scores: `eval/results/scores/` (per question, including `gold_figures_in_pack`); grades and labels:
+`eval/results/grading/grading_sheet.csv` (key -> run in `grading_key.csv`); judge: `grading/judge_<run_id>.jsonl`.
+Regenerate the tables with `python eval/score_answers.py` (no network; replies are cached, so a re-run of the models
+is free and identical). Decision record: ADR-019 in `docs/decisions.md`.
