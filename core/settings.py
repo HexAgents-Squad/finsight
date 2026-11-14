@@ -74,10 +74,19 @@ class Settings(SecSettings):
     # the key must still match the index, or every search is refused as built with another model.
     EMBED_BACKEND: Literal["openai", "sentence-transformers"] = "sentence-transformers"
     EMBED_BASE_URL: str | None = Field(None, description="Embeddings endpoint; empty = LLM_BASE_URL")
+    # The course's embedding endpoint (W1-16) has its own CA, on another server than the chat endpoint, so
+    # LLM_CA_CERT (used for the chat server only) cannot verify it. Same rules as LLM_CA_CERT.
+    EMBED_CA_CERT: Path | None = Field(None, description="PEM CA certificate for EMBED_BASE_URL; empty = "
+                                                         "LLM_CA_CERT on the same server, else the default store")
     EMBED_API_KEY: SecretStr | None = Field(None, description="Key for EMBED_BASE_URL; empty = LLM_API_KEY")
     EMBED_MODEL: str = Field("nomic-embed-text", description="Model name on the embeddings endpoint")
     EMBED_LOCAL_MODEL_NAME: str = Field("all-MiniLM-L6-v2", description="HuggingFace sentence-transformers model")
-    EMBED_BATCH_SIZE: int = Field(64, gt=0, description="Texts per embeddings request")
+    EMBED_BATCH_SIZE: int = Field(64, gt=0, description="Texts per embeddings request (hosted endpoint: max 16)")
+    # The hosted bge-small-en-v1.5 refuses (422) any text over 512 tokens, counting [CLS] and [SEP] (measured,
+    # W1-16), and one long text fails its whole batch. Set, texts are cut to this many tokens with the model's
+    # pinned tokenizer (core/tokens.py) before sending; empty = sent as they are (the local backend truncates
+    # itself at the model's max_seq_length).
+    EMBED_MAX_INPUT_TOKENS: int | None = Field(None, gt=2, description="cut texts to this many embedding tokens")
 
     # Agent limits (CLAUDE.md "Agent robustness")
     MAX_AGENT_STEPS: int = Field(10, gt=0)
@@ -86,7 +95,7 @@ class Settings(SecSettings):
     QUERY_TIMEOUT_S: float = Field(60.0, gt=0, description="seconds allowed for one question, end to end")
 
     @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", "LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS",
-                     mode="before")
+                     "EMBED_CA_CERT", "EMBED_MAX_INPUT_TOKENS", mode="before")
     @classmethod
     def _empty_is_unset(cls, value: object) -> object:
         """`LLM_CA_CERT=` in .env means "no certificate", not a path to the current folder."""
@@ -100,16 +109,14 @@ class Settings(SecSettings):
         something for an https:// URL; with http:// it would be silently unused while the user believes the
         connection is verified. A field validator, not a model validator: a model-level error message would
         quote every input value, the API key included."""
-        if value is None:
-            return None
-        base_url = info.data.get("LLM_BASE_URL")        # declared above, so already validated (absent if invalid)
-        if base_url is not None and not base_url.lower().startswith(HTTPS):
-            raise ValueError("LLM_CA_CERT is set but LLM_BASE_URL is not an https:// URL")
-        path = value.expanduser()
-        path = path if path.is_absolute() else REPO_ROOT / path
-        if not path.is_file():
-            raise ValueError(f"no certificate file at {path}")
-        return path
+        return _ca_file(value, info.data.get("LLM_BASE_URL"), "LLM_CA_CERT", "LLM_BASE_URL")
+
+    @field_validator("EMBED_CA_CERT")
+    @classmethod
+    def _embed_ca_file_for_https(cls, value: Path | None, info: ValidationInfo) -> Path | None:
+        """As LLM_CA_CERT, for the embeddings server (EMBED_BASE_URL, or LLM_BASE_URL when that is empty)."""
+        url = info.data.get("EMBED_BASE_URL") or info.data.get("LLM_BASE_URL")
+        return _ca_file(value, url, "EMBED_CA_CERT", "the embeddings URL")
 
     @field_validator("LLM_CACHE_DIR")
     @classmethod
@@ -134,6 +141,20 @@ class Settings(SecSettings):
     def _backend_name(cls, value: object) -> object:
         """'Sentence-Transformers' or ' openai' typed in .env still select the backend."""
         return value.strip().lower() if isinstance(value, str) else value
+
+
+def _ca_file(value: Path | None, url: str | None, name: str, url_name: str) -> Path | None:
+    """The CA file as an absolute path (relative paths from the repo root), checked to exist and to belong to an
+    https:// URL (`url` is None when that field failed its own validation)."""
+    if value is None:
+        return None
+    if url is not None and not url.lower().startswith(HTTPS):
+        raise ValueError(f"{name} is set but {url_name} is not an https:// URL")
+    path = value.expanduser()
+    path = path if path.is_absolute() else REPO_ROOT / path
+    if not path.is_file():
+        raise ValueError(f"no certificate file at {path}")
+    return path
 
 
 @cache

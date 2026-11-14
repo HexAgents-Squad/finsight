@@ -68,6 +68,17 @@ class RedactHost(logging.Filter):
         return True
 
 
+def embed_tls_line(settings: Settings, embed_url: str) -> str:
+    """How the embeddings server is verified (core.llm: EMBED_CA_CERT, else LLM_CA_CERT on the same server)."""
+    if settings.EMBED_CA_CERT is not None:
+        return f"verified against {settings.EMBED_CA_CERT.name} (EMBED_CA_CERT)"
+    if not embed_url.lower().startswith(HTTPS):
+        return "none (plain HTTP)"
+    if settings.LLM_CA_CERT is not None and (embed_url == settings.LLM_BASE_URL or not settings.EMBED_BASE_URL):
+        return f"verified against {settings.LLM_CA_CERT.name} (LLM_CA_CERT, same server)"
+    return "verified against the default trust store"
+
+
 def tls_line(settings: Settings) -> str:
     if settings.LLM_CA_CERT is not None:
         return f"verified against {settings.LLM_CA_CERT.name} (LLM_CA_CERT)"
@@ -102,6 +113,9 @@ async def main() -> int:
     print(f"   Thinking:     {thinking}")
     embed_model = settings.EMBED_MODEL if settings.EMBED_BACKEND == "openai" else settings.EMBED_LOCAL_MODEL_NAME
     print(f"   Embeddings:   {settings.EMBED_BACKEND} ({embed_model})")
+    if settings.EMBED_BACKEND == "openai":
+        embed_url = settings.EMBED_BASE_URL or settings.LLM_BASE_URL
+        print(f"   Embed server: {shown_url(embed_url)}, TLS {embed_tls_line(settings, embed_url)}")
     print("   Cache:        off for the smoke test (every call reaches the endpoint)")
 
     try:

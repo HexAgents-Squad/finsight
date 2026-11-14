@@ -77,6 +77,9 @@ CACHE_VERSION = 1                # part of every cache key: bump it to invalidat
 TokenCounter = Callable[[str], int]
 
 
+EmbedCutter = Callable[[str, int], tuple[str, bool]]   # (text, max tokens) -> (text that fits, was cut)
+
+
 @dataclass
 class Usage:
     """Running totals for one client (create one client per query, or call reset()). Failed requests count
@@ -89,8 +92,10 @@ class Usage:
     completion_tokens: int = 0
     json_retries: int = 0
     seconds: float = 0.0
-    embed_calls: int = 0
+    embed_calls: int = 0            # embedding requests sent (retries included), or local encode calls
     embed_seconds: float = 0.0
+    embed_retries: int = 0
+    embed_truncated: int = 0        # texts cut to EMBED_MAX_INPUT_TOKENS before sending
 
     @property
     def total_tokens(self) -> int:
@@ -144,14 +149,14 @@ def extract_json(reply: str) -> str:
     return reply
 
 
-def build_ssl_context(ca_file: Path) -> ssl.SSLContext:
+def build_ssl_context(ca_file: Path, setting: str = "LLM_CA_CERT") -> ssl.SSLContext:
     """A client TLS context that trusts exactly `ca_file` (the group's CA), with certificate and hostname
     checks on. `create_default_context(cafile=...)` loads only that file, not the system store: the endpoint
     is the only host these clients talk to, and its issuer is in no system store anyway."""
     try:
         return ssl.create_default_context(cafile=str(ca_file))
     except (ssl.SSLError, OSError) as err:      # not PEM, no certificate inside, unreadable
-        raise FinSightError(f"LLM_CA_CERT {ca_file} is not a readable PEM CA certificate: {err}",
+        raise FinSightError(f"{setting} {ca_file} is not a readable PEM CA certificate: {err}",
                             error_type="TLSConfigError") from err
 
 
@@ -340,11 +345,12 @@ class LLMClient(AbstractLLMClient):
     """Async LLM client for an OpenAI-compatible endpoint, with local or remote embeddings."""
 
     def __init__(self, settings: Settings, *, chat_client: Any = None, embed_client: Any = None,
-                 token_counter: TokenCounter | None = None) -> None:
+                 token_counter: TokenCounter | None = None, embed_cutter: EmbedCutter | None = None) -> None:
         self.settings = settings
         self.usage = Usage()
         self._endpoint = _endpoint(settings.LLM_BASE_URL)
         self._count: TokenCounter | None = token_counter        # None: the process-wide Qwen tokenizer
+        self._cut: EmbedCutter | None = embed_cutter            # None: the pinned embedding tokenizer
         needs_client = chat_client is None or embed_client is None
         ssl_context = build_ssl_context(settings.LLM_CA_CERT) if settings.LLM_CA_CERT and needs_client else None
         self.client = chat_client or AsyncOpenAI(
@@ -354,16 +360,24 @@ class LLMClient(AbstractLLMClient):
             max_retries=0,                      # retries are ours (_send), so they never multiply with the SDK's
             http_client=_http_client(ssl_context),
         )
-        # The group CA vouches for the LLM endpoint's server only; an embeddings URL on another server keeps
-        # the default trust store
+        # The group CA vouches for the LLM endpoint's server only: the embeddings server uses EMBED_CA_CERT
+        # (the course's embedding endpoint has its own CA, W1-16), else LLM_CA_CERT when it is the same server,
+        # else the default trust store
         embed_url = settings.EMBED_BASE_URL or settings.LLM_BASE_URL
-        self._embed_ca = settings.LLM_CA_CERT if _origin(embed_url) == _origin(settings.LLM_BASE_URL) else None
+        same_server = _origin(embed_url) == _origin(settings.LLM_BASE_URL)
+        self._embed_ca = settings.EMBED_CA_CERT or (settings.LLM_CA_CERT if same_server else None)
+        if self._embed_ca is None or embed_client is not None:
+            embed_ssl = None
+        elif self._embed_ca == settings.LLM_CA_CERT and ssl_context is not None:
+            embed_ssl = ssl_context                             # one context for one CA file
+        else:
+            embed_ssl = build_ssl_context(self._embed_ca, "EMBED_CA_CERT" if settings.EMBED_CA_CERT else "LLM_CA_CERT")
         self.embed_client = embed_client or AsyncOpenAI(
             base_url=embed_url,
             api_key=(settings.EMBED_API_KEY or settings.LLM_API_KEY).get_secret_value(),
             timeout=settings.LLM_TIMEOUT,
-            max_retries=settings.LLM_HTTP_RETRIES,
-            http_client=_http_client(ssl_context if self._embed_ca else None),
+            max_retries=0,                      # ours (_embed_batch): the same 2/4/8 s back-off as chat requests
+            http_client=_http_client(embed_ssl),
         )
         self._st_model: Any = None
         self._st_lock = asyncio.Lock()
@@ -575,22 +589,55 @@ class LLMClient(AbstractLLMClient):
             self.usage.embed_seconds += time.perf_counter() - start
 
     async def _embed_remote(self, texts: list[str]) -> list[list[float]]:
+        texts = await self._cut_long_texts(texts)
         vectors: list[list[float]] = []
         size = self.settings.EMBED_BATCH_SIZE
         for i in range(0, len(texts), size):
-            self.usage.embed_calls += 1
-            try:
-                response = await self.embed_client.embeddings.create(
-                    model=self.settings.EMBED_MODEL, input=texts[i:i + size]
-                )
-            except openai.APIError as err:
-                raise _api_error(err, self.settings.EMBED_MODEL, self._embed_ca) from err
             batch = texts[i:i + size]
+            response = await self._embed_batch(batch)
             if len(response.data) != len(batch):        # a short reply would misalign every later vector
                 raise FinSightError(f"{self.settings.EMBED_MODEL} returned {len(response.data)} embeddings for "
                                     f"{len(batch)} texts", error_type="EmbeddingCountError")
             vectors += [d.embedding for d in sorted(response.data, key=lambda d: d.index)]
         return vectors
+
+    async def _cut_long_texts(self, texts: list[str]) -> list[str]:
+        """Texts over EMBED_MAX_INPUT_TOKENS cut to fit (the hosted endpoint refuses them, failing the whole
+        batch); one warning per call says how many. The tokenizer loads off the event loop."""
+        limit = self.settings.EMBED_MAX_INPUT_TOKENS
+        if limit is None:
+            return texts
+        cut = self._cut
+        if cut is None:
+            from core.tokens import cut_to_embedding_tokens
+            cut = cut_to_embedding_tokens
+        results = await asyncio.to_thread(lambda: [cut(t, limit) for t in texts])
+        shortened = sum(was for _, was in results)
+        if shortened:
+            self.usage.embed_truncated += shortened
+            logger.warning("%d of %d texts cut to %d embedding tokens (EMBED_MAX_INPUT_TOKENS)", shortened,
+                           len(texts), limit)
+        return [text for text, _ in results]
+
+    async def _embed_batch(self, batch: list[str]) -> Any:
+        """One embeddings request, retried like a chat request: 429, 5xx, timeouts and network errors after
+        2, 4, 8 s (LLM_HTTP_RETRIES, LLM_RETRY_BASE_S; a longer Retry-After honoured, at most 30 s); a refused
+        request (422: too many texts, a text too long) fails at once."""
+        retries = 0
+        while True:
+            self.usage.embed_calls += 1
+            try:
+                return await self.embed_client.embeddings.create(model=self.settings.EMBED_MODEL, input=batch)
+            except openai.APIError as err:
+                if retries >= self.settings.LLM_HTTP_RETRIES or not _retryable(err):
+                    raise _api_error(err, self.settings.EMBED_MODEL, self._embed_ca) from err
+                delay = min(max(self.settings.LLM_RETRY_BASE_S * 2 ** retries, _retry_after(err) or 0.0),
+                            MAX_RETRY_DELAY_S)
+                retries += 1
+                self.usage.embed_retries += 1
+                logger.warning("embeddings request to %s failed (%s); retry %d/%d in %.0f s", self.settings.EMBED_MODEL,
+                               type(err).__name__, retries, self.settings.LLM_HTTP_RETRIES, delay)
+                await asyncio.sleep(delay)
 
     async def _embed_local(self, texts: list[str]) -> list[list[float]]:
         # One model, loaded once off the event loop; encodes run one at a time (CPU-bound, and parallel
