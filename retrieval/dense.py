@@ -20,9 +20,17 @@ EMBED_SLICE = 1_024                  # chunks per embed + add round (progress ou
 DISTANCE = "cosine"
 
 
+def model_name(model_id: str) -> str:
+    """The model an embedder id names, without the backend or the publisher: "bge-small-en-v1.5" for the hosted
+    endpoint's "bge-small-en-v1.5" and for "BAAI/bge-small-en-v1.5" run locally (the same vectors, cosine 1.0,
+    W1-16), so an index built through one is searched with the other (ADR-021). Ids recorded before W1-04
+    carried the backend ("sentence-transformers:all-MiniLM-L6-v2") and read the same."""
+    return model_id.rpartition(":")[2].rpartition("/")[2]
+
+
 @dataclass
 class Embedder:
-    """A synchronous embed function plus the id of the model behind it ("sentence-transformers:all-MiniLM-L6-v2")."""
+    """A synchronous embed function plus the model behind it (model_name: "bge-small-en-v1.5")."""
     embed: Embed
     model_id: str
     close: Callable[[], None] = lambda: None
@@ -48,8 +56,7 @@ def embedder_from_settings() -> Embedder:
         finally:
             loop.close()
 
-    return Embedder(lambda texts: loop.run_until_complete(client.embed(texts)),
-                    f"{settings.EMBED_BACKEND}:{model}", close)
+    return Embedder(lambda texts: loop.run_until_complete(client.embed(texts)), model_name(model), close)
 
 
 def collection_name(variant: str) -> str:
@@ -102,7 +109,7 @@ def build_collection(client: Any, chunks: list[Chunk], embedder: Embedder,
 class DenseIndex:
     def __init__(self, collection: Any, chunks: list[Chunk], embedder: Embedder):
         built_with = (collection.metadata or {}).get("embed_model")
-        if built_with != embedder.model_id:
+        if built_with is None or model_name(built_with) != model_name(embedder.model_id):
             raise ValueError(f"collection {collection.name} was embedded with {built_with!r} but the current "
                              f"embedder is {embedder.model_id!r}; set the same EMBED_* settings or rebuild "
                              f"the index")

@@ -8,7 +8,8 @@ Usage:
 Input : data/raw/manifest.jsonl + the downloaded .htm files (ingest/01_download.py)
 Output (in --out-dir, default data/sections; each file is written whole or not at all):
         data/sections/sections.jsonl     1 line = 1 document = 1 Item of 1 filing (week0_plan §2.1)
-        data/sections/parse_report.csv   per filing: Items found, kept, relocated, unassigned characters
+        data/sections/parse_report.csv   per filing: Items found, kept, relocated, unassigned characters,
+                                         page-furniture lines removed (W1-04)
         data/sections/corpus_stats.csv   per company and form: documents and characters
         data/sample/sections_sample.jsonl  (--sample, always this path; full runs only) the sample tickers'
                                            sections from the latest 10-K and the latest 10-Q, small enough to commit
@@ -29,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ingest import DATA_DIR, MANIFEST_FILE, SAMPLE_DIR, SECTIONS_DIR  # noqa: E402
+from ingest.edgar import company_names  # noqa: E402
 from ingest.sections import FS_KEY, MDNA_KEY, corpus_problems, html_to_text, parse_filing, section_records  # noqa: E402
 
 
@@ -85,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         manifest = [m for m in manifest if m["ticker"] in wanted]
 
+    names = company_names()
     docs, report = [], []
     for m in manifest:
         try:
@@ -95,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: downloaded filing missing or unreadable ({err}); run ingest/01_download.py",
                   file=sys.stderr)
             return 2
-        parsed = parse_filing(main_text, m["form"], exhibit_text)
+        parsed = parse_filing(main_text, m["form"], exhibit_text, names.get(m["ticker"], ()))
         records = section_records(m, parsed)
         docs += records
         size = {r["item"]: r["n_chars"] for r in records}
@@ -106,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
             "financial_statements_chars": size.get(FS_KEY[m["form"]], 0),
             "relocated": " ".join(parsed.relocated), "from_exhibit": sum(r["source_location"] != "main document"
                                                                           for r in records),
-            "unassigned_chars": parsed.unassigned_chars, "total_chars": len(main_text) + len(exhibit_text or ""),
+            "unassigned_chars": parsed.unassigned_chars, "furniture_lines": parsed.furniture_lines,
+            "total_chars": len(main_text) + len(exhibit_text or ""),
         })
         print(f"  {m['ticker']:5} {m['form']} FY{m['fiscal_year']} {m['fiscal_period']:2}  "
               f"headings={parsed.headings_found:2d} kept={len(records):2d}"
@@ -142,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     for p in problems:
         print(f"CHECK FAILED: {p}")
     if not problems:
-        print("OK: all corpus checks pass (document count, unique ids, Item 7 and Item 8 in every 10-K)")
+        print("OK: all corpus checks pass (document count, unique ids, Item 7 and Item 8 in every 10-K, no "
+              "contents blocks, 'Table of Contents' lines or page numbers)")
     return 1 if problems else 0
 
 
