@@ -51,13 +51,15 @@ def format_validation_error(err: ValidationError) -> str:
     return "; ".join(parts)
 
 
-def validate_records(records: list[tuple[int, dict]], final: bool = False) -> Report:
-    """Validate parsed records given as (line_number, dict). Used by the CLI, the converter and tests."""
+def validate_records(records: list[tuple[int, dict]], final: bool = False,
+                     model: type[GoldItem] = GoldItem) -> Report:
+    """Validate parsed records given as (line_number, dict). Used by the CLI, the converter and tests; `model` is
+    GoldItem, or DevItem for the development set (eval/validate_dev_set.py)."""
     rep = Report()
     for line_no, rec in records:
         label = f"line {line_no}" + (f" ({rec.get('id')})" if isinstance(rec, dict) and rec.get("id") else "")
         try:
-            item = GoldItem.model_validate(rec)
+            item = model.model_validate(rec)
         except ValidationError as err:
             rep.errors.append(f"{label}: {format_validation_error(err)}")
             continue
@@ -87,9 +89,9 @@ def read_jsonl(path: Path) -> tuple[list[tuple[int, dict]], list[str]]:
     return records, errors
 
 
-def validate_file(path: Path, final: bool = False) -> Report:
+def validate_file(path: Path, final: bool = False, model: type[GoldItem] = GoldItem) -> Report:
     records, parse_errors = read_jsonl(path)
-    rep = validate_records(records, final=final)
+    rep = validate_records(records, final=final, model=model)
     rep.errors = parse_errors + rep.errors
     return rep
 

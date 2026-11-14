@@ -58,7 +58,7 @@ Streamlit UI → FastAPI /ask (rate limit + cache) → LangGraph app
 ## Process rules
 
 - **The gold set is frozen before agent code** (git tag `gold-v1`). Never edit gold answers to improve scores. Corrections go through a reviewed PR that bumps the version.
-- Prompts are never tuned on gold-v1: the B0 comparison prompt is frozen before the gold runs, and S1–S3 are tuned on the development set (`eval/dev_set.jsonl`, planned in W1-06), then frozen and tagged. Every reported answer-quality number must trace back to a committed runs file (week1_plan §2.5).
+- Prompts are never tuned on gold-v1: the B0 comparison prompt is frozen before the gold runs, and S1–S3 are tuned on the development set (`eval/dev_set.jsonl`, 15 items on filing periods gold-v1 does not use; `eval/validate_dev_set.py` checks the separation in CI), then frozen and tagged. Every reported answer-quality number must trace back to a committed runs file (week1_plan §2.5).
 - Retrieval metrics (recall@k, MRR against `gold_sources`) are measured separately from answer quality.
 - Branches: Week 0 used `wpN/<short-desc>` (e.g. `wp2/section-parser`); from Week 1 they are `w1/UPGRAD-<key>-<short-desc>` (e.g. `w1/UPGRAD-43-endpoint`). Every commit message starts with the Jira key. Every PR needs one review from the ticket's backup before merging to `main`.
 - Never commit `.env`. Line endings are LF (`.gitattributes`).

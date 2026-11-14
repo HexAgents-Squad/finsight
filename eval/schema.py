@@ -30,6 +30,11 @@ REFUSAL_RULES: tuple[str, ...] = ("R1", "R2", "R3", "R4", "R5", "R6", "R7")
 FiscalPeriod = Literal["FY", "Q1", "Q2", "Q3"]
 NOT_REPORTED = "not reported"
 GOLD_ID_PATTERN = r"^[A-G]\d{2}$"                # category letter + 2 digits, e.g. "B07"
+# Development set (W1-06): the same format with a "dev-" prefix, so a dev id can never be read as a gold id
+DEV_PREFIX = "dev-"
+DEV_ID_PATTERN = r"^dev-[A-G]\d{2}$"
+DEV_TARGET_COUNTS: dict[str, int] = {"fact": 3, "ratio": 2, "period_comparison": 2, "multi_company": 2,
+                                     "qualitative": 2, "multi_turn": 2, "refuse": 2}
 MIN_QUESTION_CHARS = 10                         # catches placeholders like "tbd" or "?"
 DEFAULT_TOLERANCE_PCT = 1.0                     # week0 §2.4 example; a question can set its own
 
@@ -123,6 +128,11 @@ class GoldItem(BaseModel):
         return self.category == "refuse" and not self.must_refuse
 
 
+class DevItem(GoldItem):
+    """One development-set question (W1-06): the gold format and rules, with a "dev-" id."""
+    id: str = Field(pattern=DEV_ID_PATTERN)
+
+
 # ----------------------------------------------------------------------------------------------- rules
 def _norm(name: str | None) -> str:
     return " ".join((name or "").split()).casefold()
@@ -162,7 +172,7 @@ def item_problems(item: GoldItem, scope: CorpusScope | None = None) -> list[str]
     scope = scope or corpus_scope()
     out: list[str] = []
     letter = CATEGORY_LETTER[item.category]
-    if item.id[0] != letter:
+    if item.id.removeprefix(DEV_PREFIX)[0] != letter:
         out.append(f"id '{item.id}' must start with '{letter}' for category '{item.category}'")
 
     # --- refusals, traps and partial refusals (spec §5, §6; week0 §2.4)
