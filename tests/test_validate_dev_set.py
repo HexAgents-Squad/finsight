@@ -28,8 +28,7 @@ def test_the_committed_development_set_is_valid_and_separate():
 def test_the_committed_set_has_the_planned_split():
     items = validate_file(vd.DEV_FILE, model=DevItem).items
     assert Counter(i.category for i in items) == Counter(DEV_TARGET_COUNTS) and len(items) == 15
-    unverified = [i.id for i in items if not i.verified_by]
-    assert vd.final_problems(items) == ([f"not verified by a second person: {unverified}"] if unverified else [])
+    assert vd.final_problems(items) == []                             # all 15 verified; CI runs --final
 
 
 @pytest.mark.parametrize("bad_id", ["A01", "dev-A1", "DEV-A01", "dev-H01"])
@@ -68,7 +67,9 @@ def test_a_company_year_gold_asks_about_is_an_overlap_even_through_another_filin
 
 def test_a_reworded_gold_question_is_a_near_duplicate():
     g = next(i for i in GOLD if i.id == "G02")
-    item = dev(id="dev-G01", category="refuse", question=g.question.replace("keep rising", "keep on rising"),
+    reworded = "Will Microsoft's operating margin keep on rising over the next few years?"
+    assert g.question == "Will Microsoft's operating margin keep rising over the next few years?" != reworded
+    item = dev(id="dev-G01", category="refuse", question=reworded,
                companies=[], fiscal_years=[], gold_sources=[], gold_value=None, unit=None, must_refuse=True,
                refusal_rule="R2", gold_answer="Refuse (R2).")
     problems, highest = vd.overlap_problems([item], GOLD, [])
@@ -93,12 +94,13 @@ def test_follow_ups_are_not_compared_by_text():
 def test_the_near_duplicate_limit_sits_above_gold_questions_own_similarity():
     gold = [i for i in GOLD if i.category != "multi_turn"]
     closest = max(vd.similarity(a.question, b.question) for n, a in enumerate(gold) for b in gold[n + 1:])
-    assert closest < vd.NEAR_DUPLICATE                       # two different gold questions never count as the same
+    assert 0.78 < closest < vd.NEAR_DUPLICATE <= closest + 0.05    # just above gold's own closest pair (C03/C06)
 
 
 def test_similarity():
     assert vd.similarity("What was X?", "what was x") == 1.0
     assert vd.similarity("a b", "c d") == 0.0 and vd.similarity("", "") == 0.0
+    assert vd.similarity("Costco’s net income", "Costco's net income") == 1.0
 
 
 def test_final_rules_need_the_split_and_verification():
@@ -123,3 +125,34 @@ def test_an_emptied_development_set_fails(tmp_path, capsys):
     path = tmp_path / "dev.jsonl"
     path.write_text("", encoding="utf-8")
     assert vd.main([str(path)]) == 1 and "has no items" in capsys.readouterr().out
+
+
+def write(path, items):
+    path.write_text("".join(json.dumps(i.model_dump() if hasattr(i, "model_dump") else i) + "\n" for i in items),
+                    encoding="utf-8")
+    return path
+
+
+def test_cli_exit_codes_for_bad_inputs(tmp_path, capsys):
+    good = write(tmp_path / "dev.jsonl", [dev()])
+    bad_gold = tmp_path / "gold.jsonl"
+    bad_gold.write_text('{"id": "A01"}\n', encoding="utf-8")
+    assert vd.main([str(good), "--gold", str(bad_gold)]) == 1                   # an invalid gold set
+    assert vd.main([str(good), "--gold", str(tmp_path / "none.jsonl")]) == 2    # a missing gold set
+    broken = tmp_path / "broken.jsonl"
+    broken.write_text("{not json\n", encoding="utf-8")
+    assert vd.main([str(broken)]) == 1 and "invalid JSON" in capsys.readouterr().out
+
+
+def test_a_follow_up_must_point_inside_the_development_set(tmp_path, capsys):
+    path = write(tmp_path / "dev.jsonl", [dev(id="dev-F01", category="multi_turn", question="And in fiscal 2023?",
+                                             previous_turn_id="A03")])
+    assert vd.main([str(path)]) == 1 and "previous_turn_id A03 does not exist" in capsys.readouterr().out
+
+
+def test_cli_final_rules_fail_on_an_unverified_or_short_set(tmp_path, capsys):
+    path = write(tmp_path / "dev.jsonl", [dev()])
+    assert vd.main([str(path)]) == 0                                          # draft rules: fine
+    assert vd.main([str(path), "--final"]) == 1
+    out = capsys.readouterr().out
+    assert "not verified by a second person" in out and "category B ratio: 0 items, target 2" in out
