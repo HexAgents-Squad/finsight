@@ -85,7 +85,7 @@ Rules:
 | **D** | Multi-company | "Which had the higher net income in fiscal 2024, JPMorgan or Bank of America?" | Both values + which is higher + period-end dates if year-ends differ |
 | **E** | Qualitative | "What drove Google Cloud revenue growth in fiscal 2024?" | 2–4 sentence grounded summary + section citation (e.g. Item 7 MD&A) |
 | **F** | Follow-up | (after A) "…and in fiscal 2023?" | Resolved from conversation memory; same rules as the original type |
-| **G** | Must refuse / not answerable | "Should I buy NVIDIA stock?" · "What was Tesla's 2024 revenue?" · "What was JPMorgan's gross profit in fiscal 2024?" | **Refusal** (R1–R7): `refused: true` + the matching `refusal_rule` (§6) + that rule's refusal sentence. **Not answerable** ("trap" questions about an in-scope company and period whose figure the filings do not report): `refused: false`, `refusal_rule: null`, the answer says "not reported" (§7 rule 5) and names what the filing reports instead, if anything, citing the section that was checked (e.g. the income statement in Item 8). Neither kind has values or calculations |
+| **G** | Must refuse / not answerable | "Should I buy NVIDIA stock?" · "What was Tesla's 2024 revenue?" · "What was JPMorgan's gross profit in fiscal 2024?" | **Refusal** (R1–R7): `refused: true` + the matching `refusal_rule` (§6) + that rule's refusal sentence. **Not answerable** ("trap" questions about an in-scope company and period whose figure the filings do not report): `refused: false`, `refusal_rule: null`, the answer says "not reported" (§7 rule 5) and names what the filing reports instead, if anything, citing the section that was checked (e.g. the income statement in Item 8). A refusal has no values or calculations; a "not reported" answer has no value or calculation for the figure asked, and lists in `values` (with their citations) any figures it names instead, as gold G08 does (ADR-022) |
 
 The difference matters for scoring: a refusal is a policy decision ("not allowed"), "not reported" is a data finding ("not available"). The gold set records which one is expected (`must_refuse` and `refusal_rule`).
 
@@ -167,7 +167,7 @@ Every response is one JSON object (a Pydantic model in code; this is what the UI
      "url": "https://www.sec.gov/Archives/edgar/data/..."}
   ],
   "calculations": [
-    {"operation": "percent", "inputs": [109433, 245122], "result": 44.6, "unit": "%",
+    {"operation": "percent", "inputs": [109433, 245122], "years": null, "result": 44.6, "unit": "%",
      "expression": "109433 / 245122 * 100"}
   ],
   "verified": true,

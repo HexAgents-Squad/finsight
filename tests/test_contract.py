@@ -29,7 +29,7 @@ XBRL = {"source_type": "xbrl", "form": "10-K", **PERIOD, "concept": "us-gaap:Ope
         "accession_no": "0000950170-24-087843", "url": "https://www.sec.gov/Archives/edgar/data/789019/"}
 FILING = {"source_type": "filing", "form": "10-K", **PERIOD, "item": "Item 8", "chunk_id": "MSFT_10-K_2024_Item8_C3_0012",
           "url": "https://www.sec.gov/Archives/edgar/data/789019/msft-10k.htm"}
-CALC = {"operation": "percent", "inputs": [109433, 245122], "result": 44.6, "unit": "%",
+CALC = {"operation": "percent", "inputs": [109433, 245122], "years": None, "result": 44.6, "unit": "%",
         "expression": "109433 / 245122 * 100"}
 
 
@@ -114,7 +114,7 @@ def test_an_inconsistent_xbrl_citation_is_rejected(changes, error):
     ({"chunk_id": None}, "needs item and chunk_id"),
     ({"accession_no": "0000950170-24-087843"}, "has no concept or accession_no"),
     ({"item": "Part I Item 2"}, "is not an Item of a 10-K"),
-    ({"item": "Item 99"}, "is not an Item of a 10-K"),
+    ({"item": "Item 99"}, "Input should be 'Item 1'"),                  # no such Item (enum in the schema)
     ({"chunk_id": "MSFT_10-K_2023_Item8_C3_0012"}, "is not a chunk of MSFT_10-K_2024_Item8"),    # another year
     ({"chunk_id": "MSFT_10-K_2024_Item7_C3_0012"}, "is not a chunk of"),                         # another Item
     ({"chunk_id": "AAPL_10-K_2024_Item8_C3_0012"}, "is not a chunk of"),                         # another company
@@ -159,9 +159,11 @@ def test_calculations_come_from_the_calculate_tool():
 
 
 def test_refusal_answers_are_the_spec_sentences():
-    assert refusal_answer("R1", "Apple's net sales in fiscal 2025?") == (
+    assert refusal_answer("R1", "Apple's net sales in fiscal 2025.") == (
         "I can't help with that because it is investment advice. I can share facts from the indexed SEC filings "
         "instead, for example Apple's net sales in fiscal 2025.")
+    assert refusal_answer("R1", "What were Apple's net sales in fiscal 2025?").endswith(
+        "for example What were Apple's net sales in fiscal 2025?")                  # a question keeps its "?"
     assert refusal_answer("R3", "Apple's revenue in fiscal 2024").startswith(
         "That is outside the filings FinSight has indexed (20 companies,")
     with pytest.raises(ValueError, match="needs a suggestion"):
@@ -199,4 +201,28 @@ def test_the_json_schema_suits_guided_decoding():
     # guided decoding matches a pattern against the whole string: every pattern must be a full match
     patterns = re.findall(r'"pattern": "((?:[^"\\]|\\.)*)"', text)
     assert patterns and all(p.startswith("^") and p.endswith("$") for p in patterns)
-    assert "Value" in schema["$defs"] and "Citation" in schema["$defs"]
+    assert "Value" in schema["$defs"] and "Citation" in schema["$defs"] and '"default"' not in text
+    # every property required (optional ones nullable), so decoding always writes e.g. a cagr's years
+    for definition in [schema, *schema["$defs"].values(), *schema["$defs"]["Citation"]["anyOf"]]:
+        if "properties" in definition:
+            assert definition["required"] == list(definition["properties"])
+    calc = schema["$defs"]["Calculation"]["properties"]
+    assert calc["result"] == {"type": "number"} and calc["years"]["anyOf"] == [{"type": "number"}, {"type": "null"}]
+
+
+def test_the_schema_has_one_citation_variant_per_source_type():
+    filing, xbrl = contract_json_schema()["$defs"]["Citation"]["anyOf"]
+    assert filing["properties"]["source_type"]["const"] == "filing" and xbrl["properties"]["source_type"]["const"] == "xbrl"
+    assert {"item", "chunk_id"} <= set(filing["required"]) and not {"concept", "accession_no"} & set(filing["properties"])
+    assert {"concept", "accession_no"} <= set(xbrl["required"]) and not {"item", "chunk_id"} & set(xbrl["properties"])
+    assert "Part II Item 1A" in filing["properties"]["item"]["enum"]                 # no invented Item
+    assert xbrl["properties"]["accession_no"]["pattern"] == "^\\d{10}-\\d{2}-\\d{6}$"
+
+
+def test_the_spec_example_validates_against_the_schema_and_a_mixed_citation_does_not():
+    jsonschema = pytest.importorskip("jsonschema")          # installed with chromadb, not in CI's requirements
+    schema = contract_json_schema()
+    jsonschema.validate(spec_example(), schema)
+    mixed = with_(spec_example(), citations=[with_(XBRL, item="Item 8", chunk_id=FILING["chunk_id"])])
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(mixed, schema)

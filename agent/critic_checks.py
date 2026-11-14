@@ -46,9 +46,25 @@ RELATIVE_EPSILON = 1e-9                 # float noise allowed when two numbers a
 NORMALISE = str.maketrans({"’": "'", "‘": "'", "–": "-", "—": "-", "“": '"', "”": '"'})
 PLACEHOLDER = re.compile(r"[{}]")                 # a template placeholder left in, e.g. "{suggestion}"
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
-DECLINE = re.compile(r"\b(?:can't|cannot|can not|won't|will not|unable to|do not|don't)\s+(?:\w+\s+){0,2}?"
-                     r"(?:help|provide|give|offer|answer|predict|forecast|share|comment|recommend|advise)\b",
-                     re.IGNORECASE)
+# A declining sentence speaks for FinSight ("I can't help ...", "FinSight does not provide ..."): "the filings do
+# not provide a fiscal 2026 figure" states a fact and is no decline
+DECLINE = re.compile(r"\b(?:I|FinSight)\s+(?:can't|cannot|can not|won't|will not|am unable to|is unable to|do not|"
+                     r"don't|does not|doesn't)\s+(?:\w+\s+){0,2}?(?:help|provide|give|offer|answer|predict|forecast|"
+                     r"share|comment|recommend|advise)\b", re.IGNORECASE)
+CANNOT = re.compile(r"\bcan ?not\b", re.IGNORECASE)       # "I cannot help" is the §6 sentence's "I can't help"
+# Rewrites before reading figures (critic only; the scorer's reading is unchanged): "52 weeks ended" is a period,
+# not a figure (gold A11, B11: Costco); "1.03x" is the ratio 1.03; "USD391,035" and "22.7-percent" spaced out
+FIGURE_REWRITES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"\b5[23][- ]weeks?\b", re.IGNORECASE), " "),
+    (re.compile(r"(\d)x\b"), r"\1 "),
+    (re.compile(r"\b(USD|US\$)(?=\d)"), r"\1 "),
+    (re.compile(r"(\d)-(percent|per cent)\b", re.IGNORECASE), r"\1 \2"),
+)
+# Units get_financial_fact never returns: such a value is computed or read from a passage, never an XBRL fact
+DERIVED_UNITS = frozenset({"%", "ratio"})
+# An answer that gives the inputs because the measure is undefined (§7 rule 2) or the figure is not reported
+# (§7 rule 5) has no calculation to show
+NO_RESULT = re.compile(r"\bnot meaningful\b|\bnot (?:\w+ )?(?:reported|disclosed)\b", re.IGNORECASE)
 
 # Question wording -> the operations that answer it (ADR-016: the critic checks the operation against the
 # question). Matched on the question text; no match means the question asks for no particular operation.
@@ -60,8 +76,9 @@ OPERATION_RULES: tuple[tuple[re.Pattern, frozenset[str]], ...] = (
      frozenset({"growth", "cagr"})),
     (re.compile(r"\bmargin\b|\bas an? (?:percentage|percent|share|proportion|fraction) of\b|\bshare of\b"
                 r"|\bpercent(?:age)? of\b|% of\b", re.IGNORECASE), frozenset({"percent"})),
-    (re.compile(r"\bratio\b", re.IGNORECASE), frozenset({"ratio"})),
-    (re.compile(r"\bhow much (?:more|less|higher|lower|larger|smaller|bigger)\b|\bdifference between\b"
+    # a bank's efficiency or CET1 ratio is stated in %, so a ratio question may be answered with percent
+    (re.compile(r"\bratio\b", re.IGNORECASE), frozenset({"ratio", "percent"})),
+    (re.compile(r"\bhow much (?:more|less|higher|lower|larger|smaller|bigger)\b|\bdifference (?:between|in)\b"
                 r"|\bby how much\b", re.IGNORECASE), frozenset({"difference"})),
     (re.compile(r"\bcombined\b|\bin total\b|\btotal of\b|\btogether\b|\bsum of\b", re.IGNORECASE),
      frozenset({"sum"})),
@@ -114,6 +131,8 @@ def _shown(fig: Figure, contract: AnswerContract) -> bool:
 
 def check_numbers_in_values(contract: AnswerContract) -> list[Violation]:
     text = _norm(contract.answer).replace(_norm(SCOPE_TEXT), " ")       # FinSight's own coverage, not figures
+    for pattern, replacement in FIGURE_REWRITES:
+        text = pattern.sub(replacement, text)
     return [Violation("1", f"the answer states {fig.text!r} but no value in values matches it")
             for fig in figures(text) if not _shown(fig, contract)]
 
@@ -123,14 +142,17 @@ def check_values_supported(contract: AnswerContract) -> list[Violation]:
     numbers = [v.value for v in contract.values]
     out = []
     for v in contract.values:
+        # a % or ratio is never an XBRL fact: it is computed, or stated in a cited passage (spec §7 rule 2)
+        kinds = ("filing",) if v.unit in DERIVED_UNITS else ("filing", "xbrl")
         cited = any((c.ticker, c.fiscal_year, c.fiscal_period) == (v.ticker, v.fiscal_year, v.fiscal_period)
-                    for c in contract.citations)
+                    and c.source_type in kinds for c in contract.citations)
         computed = any(same_number(calc.result, v.value) and calc.unit in (None, v.unit)
                        and all(any(same_number(x, n) for n in numbers) for x in calc.inputs)
                        for calc in contract.calculations)
         if not (cited or computed):
+            source = "filing passage" if v.unit in DERIVED_UNITS else "citation"
             out.append(Violation("2", f"value {v.name} = {v.value} {v.unit} ({v.ticker} {v.fiscal_period} "
-                                      f"{v.fiscal_year}) has no citation for that company and period and is not "
+                                      f"{v.fiscal_year}) has no {source} for that company and period and is not "
                                       f"the result of a calculation on the values"))
     return out
 
@@ -167,6 +189,14 @@ def check_scope(contract: AnswerContract, scope: QuestionScope | None) -> list[V
             out.append(Violation("4", f"{where}: fiscal {c.fiscal_year} is not a year the question asks about"))
         if scope.fiscal_periods and c.fiscal_period not in scope.fiscal_periods:
             out.append(Violation("4", f"{where}: {c.fiscal_period} is not a period the question asks about"))
+    for v in contract.values:                   # a computed value carries its own company and period too
+        where = f"value {v.name} ({v.ticker} {v.fiscal_period} {v.fiscal_year})"
+        if scope.tickers and v.ticker not in scope.tickers:
+            out.append(Violation("4", f"{where}: {v.ticker} is not a company the question asks about"))
+        if scope.fiscal_years and v.fiscal_year not in scope.fiscal_years:
+            out.append(Violation("4", f"{where}: fiscal {v.fiscal_year} is not a year the question asks about"))
+        if scope.fiscal_periods and v.fiscal_period not in scope.fiscal_periods:
+            out.append(Violation("4", f"{where}: {v.fiscal_period} is not a period the question asks about"))
     if not contract.refused:
         cited = {c.ticker for c in contract.citations}
         out += [Violation("4", f"{t} is in the question but has no citation") for t in sorted(scope.tickers - cited)]
@@ -175,15 +205,18 @@ def check_scope(contract: AnswerContract, scope: QuestionScope | None) -> list[V
 
 # ----------------------------------------------------------------------------------------------- invariants 5, 6
 def is_refusal_sentence(answer: str, rule: str) -> bool:
-    """`answer` is the §6 sentence of `rule`: its fixed text, then a non-empty suggestion ending the sentence
-    (both templates end in "{suggestion}."; a suggestion written as a question may end in "?"). Typographic
-    variants (curly apostrophes, dashes, spacing) are allowed; an unfilled placeholder is not a suggestion
-    (measured: Qwen3-8B copied "{suggestion}" as written)."""
-    before = _norm(refusal_template(rule)).split("{suggestion}")[0]
-    text = _norm(answer)
-    suggestion = text[len(before):]
-    return (text.startswith(before) and suggestion.endswith((".", "?")) and bool(suggestion.rstrip(".?").strip())
-            and not PLACEHOLDER.search(suggestion))
+    """`answer` is the §6 sentence of `rule`: its fixed text up to "for example", then a non-empty suggestion
+    ending the sentence (both templates end in "{suggestion}."; a suggestion written as a question may end in
+    "?", may be quoted, and may follow a comma or colon). Allowed variants: curly apostrophes and quotes, dashes,
+    spacing, "cannot" for "can't". An unfilled placeholder is not a suggestion (measured: Qwen3-8B copied
+    "{suggestion}" as written), and nothing may follow the suggestion's sentence."""
+    before = _norm(refusal_template(rule)).split("{suggestion}")[0].rstrip(" ,")       # "... for example"
+    text = CANNOT.sub("can't", _norm(answer))
+    if not text.startswith(before):
+        return False
+    suggestion = text[len(before):].replace('"', "").rstrip()
+    return (suggestion.endswith((".", "?")) and bool(suggestion.rstrip(".?").strip())
+            and not PLACEHOLDER.search(suggestion) and len(sentences(suggestion)) == 1)
 
 
 def check_refusal(contract: AnswerContract) -> list[Violation]:
@@ -216,7 +249,7 @@ def check_partial_refusal(contract: AnswerContract) -> list[Violation]:
         found = "none" if not declining else f"{len(declining)}"
         return [Violation("6", f"a partial refusal ({contract.refusal_rule}) declines the refused part in exactly "
                                f"one sentence; found {found}")]
-    if len(parts) < 2:
+    if len(parts) < 2 and not contract.values:          # "X was $416.2 billion, but I can't ..." is both
         return [Violation("6", "a partial refusal answers the factual part too; the answer only declines")]
     return []
 
@@ -255,11 +288,21 @@ def expected_operations(question: str) -> frozenset[str]:
 
 
 def check_operation(contract: AnswerContract, question: str | None) -> list[Violation]:
-    if not question or not contract.calculations:
+    """The question asks for an operation: a calculation must do it (§7 rule 2: every computed number comes
+    from the calculator), unless the answer says the measure is not meaningful or the figure not reported, or
+    the question is refused."""
+    if not question or contract.refused:
         return []
     wanted = expected_operations(question)
+    if not wanted:
+        return []
     used = {c.operation for c in contract.calculations}
-    if wanted and not used & wanted:
+    if not used:
+        if NO_RESULT.search(contract.answer):
+            return []
+        return [Violation("operation", f"the question asks for {' or '.join(sorted(wanted))}, but no calculation "
+                                       f"computes it (every computed number comes from the calculator)")]
+    if not used & wanted:
         return [Violation("operation", f"the question asks for {' or '.join(sorted(wanted))}, but the "
                                        f"calculations use {', '.join(sorted(used))}")]
     return []

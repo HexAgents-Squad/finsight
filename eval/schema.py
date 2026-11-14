@@ -1,6 +1,7 @@
 """Schema and rules for the FinSight gold evaluation set (eval/gold_set.jsonl).
 
-Single source of truth for the contracts in docs/week0_plan.txt §2.4 and §3 and docs/spec.md §3–§7.
+Single source of truth for the contracts in docs/week0_plan.txt §2.4 and §3 and docs/spec.md §3–§7 (units,
+fiscal periods, refusal rules and Item names come from core/spec.py, shared with the tools and the agent).
 Pydantic checks field types; the rule functions below check meaning and return ALL problems at once
 (so a writer can fix every issue in one pass instead of one error at a time).
 """

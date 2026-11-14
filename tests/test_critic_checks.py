@@ -134,13 +134,21 @@ def test_invariant_3_operations(calc, ok):
 # ----------------------------------------------------------------------------------------------- invariant 4
 def test_invariant_4_cited_companies_and_periods_are_the_questions():
     assert check_scope(make(), MSFT_2024) == [] and check_scope(make(), None) == []
-    assert [v.message for v in check_scope(make(), QuestionScope(frozenset({"AAPL"})))] == [
-        "citation MSFT 10-K FY 2024: MSFT is not a company the question asks about",
-        "citation MSFT 10-K FY 2024: MSFT is not a company the question asks about",
-        "AAPL is in the question but has no citation"]
-    assert rules(check_scope(make(), QuestionScope(frozenset({"MSFT"}), frozenset({2025})))) == ["4", "4"]
+    messages = [v.message for v in check_scope(make(), QuestionScope(frozenset({"AAPL"})))]
+    assert messages[:2] == ["citation MSFT 10-K FY 2024: MSFT is not a company the question asks about"] * 2
+    assert messages[2] == "value operating_income (MSFT FY 2024): MSFT is not a company the question asks about"
+    assert len(messages) == 6 and messages[-1] == "AAPL is in the question but has no citation"
+    assert rules(check_scope(make(), QuestionScope(frozenset({"MSFT"}), frozenset({2025})))) == ["4"] * 5
     q2 = QuestionScope(frozenset({"MSFT"}), frozenset({2024}), frozenset({"Q2"}))
     assert "FY is not a period the question asks about" in check_scope(make(), q2)[0].message
+
+
+def test_invariant_4_checks_a_computed_values_own_period():
+    # a growth value labelled with a year the question does not ask about, though its calculation is right
+    growth = with_(VALUE, name="revenue_growth", value=124.0, unit="%", fiscal_year=2026, period_end="2026-06-30")
+    c = make(values=[*spec_example()["values"], growth])
+    assert [v.message for v in check_scope(c, MSFT_2024)] == [
+        "value revenue_growth (MSFT FY 2026): fiscal 2026 is not a year the question asks about"]
 
 
 def test_invariant_4_every_company_of_a_comparison_is_cited():
@@ -171,6 +179,17 @@ def test_invariant_5_a_refusal_has_a_rule_no_values_and_the_spec_sentence():
     ("I can't help with that because it is a valuation opinion. I can share facts from the indexed SEC filings "
      "instead, for example Apple's net sales in fiscal 2025.", False),              # R4's reason under R1
     ("Sorry, I cannot give investment advice.", False),
+    # variants a model writes (W1-16 review): a comma or colon after "for example", a quoted suggestion, "cannot"
+    ("I can't help with that because it is investment advice. I can share facts from the indexed SEC filings "
+     "instead, for example, Costco's net income in fiscal 2025.", True),
+    ("I can't help with that because it is investment advice. I can share facts from the indexed SEC filings "
+     "instead, for example: Costco's net income in fiscal 2025.", True),
+    ('I can\'t help with that because it is investment advice. I can share facts from the indexed SEC filings '
+     'instead, for example "What was Costco\'s net income in fiscal 2025?"', True),
+    ("I cannot help with that because it is investment advice. I can share facts from the indexed SEC filings "
+     "instead, for example Costco's net income in fiscal 2025.", True),
+    ("I can't help with that because it is investment advice. I can share facts from the indexed SEC filings "
+     "instead, for example Costco's net income in fiscal 2025. Buy it anyway.", False),   # more than the sentence
 ])
 def test_invariant_5_the_refusal_sentence(answer, ok):
     assert (check_refusal(refusal(answer=answer)) == []) is ok
@@ -195,10 +214,29 @@ def partial(answer: str, rule: str = "R1") -> AnswerContract:
      "indexed.", "R3", True),
     ("Microsoft's operating margin in fiscal 2024 was 44.6%.", "R1", False),        # nothing declined
     ("I can't help with that because it is investment advice. I cannot recommend stocks.", "R1", False),  # two
-    ("I can't help with buying the stock because it is investment advice.", "R1", False),  # no factual part
+    ("Microsoft's operating margin in fiscal 2024 was 44.6%, but I can't help with whether to buy the stock "
+     "because it is investment advice.", "R1", True),                               # one sentence, both parts
+    ("Microsoft's operating margin in fiscal 2024 was 44.6%. The filings do not provide a fiscal 2026 figure. "
+     "I can't help with that because it is a forecast that the filings do not state.", "R2", True),  # a fact
 ])
 def test_invariant_6_a_partial_refusal(answer, rule, ok):
     assert (check_partial_refusal(partial(answer, rule)) == []) is ok
+
+
+def test_invariant_6_a_partial_refusal_that_only_declines():
+    only = make(answer="I can't help with buying the stock because it is investment advice.", refusal_rule="R1",
+                values=[], calculations=[])
+    assert [v.message for v in check_partial_refusal(only)] == [
+        "a partial refusal answers the factual part too; the answer only declines"]
+
+
+def test_invariant_6_rf15_with_the_full_policy_sentence():
+    answer = ("Amazon's net sales in fiscal 2024 were $638.0 billion. " + refusal_answer("R2", "Amazon's net sales "
+              "in fiscal 2023"))
+    v = with_(VALUE, ticker="AMZN", name="net_sales", value=637959, fiscal_year=2024, period_end="2024-12-31")
+    c = make(answer=answer, refusal_rule="R2", values=[v], calculations=[],
+             citations=[with_(XBRL, ticker="AMZN", url="https://www.sec.gov/x")])
+    assert check_contract(c, QuestionScope(frozenset({"AMZN"}), frozenset({2024, 2026}))) == []
 
 
 def test_invariant_6_only_applies_to_partial_refusals():
@@ -234,7 +272,8 @@ def test_the_operation_must_fit_the_question():
     ("By what percentage did NVIDIA's revenue change from fiscal 2024 to fiscal 2025?", {"growth", "cagr"}),
     ("What was the compound annual growth rate of Apple's revenue from fiscal 2023 to 2025?", {"cagr"}),
     ("What was NVIDIA's gross margin in fiscal 2023, in percent?", {"percent"}),     # "in percent" is no change
-    ("What was Johnson & Johnson's current ratio at the end of fiscal 2025?", {"ratio"}),
+    ("What was Johnson & Johnson's current ratio at the end of fiscal 2025?", {"ratio", "percent"}),
+    ("What was the difference in net income between JPMorgan and Bank of America in fiscal 2024?", {"difference"}),
     ("How much more net income did JPMorgan earn than Bank of America in fiscal 2024?", {"difference"}),
     ("What were Apple's and Microsoft's combined revenues in fiscal 2024?", {"sum"}),
     ("How did Wells Fargo's net income change from fiscal 2024 to fiscal 2025?", set()),   # % or $: either
@@ -250,7 +289,7 @@ def test_the_operation_rules_fit_the_gold_and_dev_questions():
     for item in items:
         ops = expected_operations(item["question"])
         if item["category"] == "ratio":
-            assert ops in ({"percent"}, {"ratio"}), item["id"]
+            assert ops and ops <= {"percent", "ratio"}, item["id"]
         elif item["category"] == "period_comparison":
             assert "growth" in ops, item["id"]
         elif item["category"] in ("fact", "multi_company", "qualitative", "multi_turn"):
@@ -278,3 +317,61 @@ def test_with_verification_marks_a_clean_answer_verified_and_drops_stale_notes()
 
 def test_violations_read_as_messages_for_the_model():
     assert str(Violation("3", "x")) == "invariant 3: x" and str(Violation("operation", "y")) == "operation: y"
+
+
+# ----------------------------------------------------------------------------------------------- review findings
+def test_a_wrong_margin_without_its_calculation_is_not_verified():
+    # W1-07 review B1: 44.7% instead of 44.6%, no calculation, only an XBRL citation
+    margin = with_(VALUE, name="operating_margin", value=44.7, unit="%")
+    c = make(answer="Microsoft's operating margin for fiscal 2024 was 44.7% (operating income $109.4 billion / "
+                    "revenue $245.1 billion).", values=[*spec_example()["values"][:2], margin],
+             citations=[XBRL], calculations=[])
+    found = check_contract(c, MSFT_2024, MARGIN_QUESTION)
+    assert rules(found) == ["2", "operation", "7"]
+    assert found[0].message.startswith("value operating_margin = 44.7 % (MSFT FY 2024) has no filing passage for "
+                                       "that company and period")
+    assert found[1].message.startswith("the question asks for percent, but no calculation computes it")
+
+
+def test_a_percentage_stated_in_a_cited_passage_needs_no_calculation():
+    # gold E02 style: "rose 142%" read from MD&A text, with a filing citation of that period
+    rise = with_(VALUE, name="revenue_growth", value=142.0, unit="%")
+    c = make(answer="Revenue rose 142% in fiscal 2024.", values=[rise], citations=[FILING], calculations=[])
+    assert check_contract(c, MSFT_2024, "What drove Microsoft's revenue in fiscal 2024?") == []
+
+
+def test_an_undefined_or_unreported_measure_has_no_calculation_to_show():
+    inputs = spec_example()["values"][:2]
+    for answer in ("The operating margin is not meaningful: revenue was $245.1 billion and operating income "
+                   "$109.4 billion.", "The operating margin is not separately reported; revenue was $245.1 billion "
+                   "and operating income $109.4 billion."):
+        c = make(answer=answer, values=inputs, calculations=[])
+        assert check_operation(c, MARGIN_QUESTION) == [], answer
+    assert check_operation(refusal(), MARGIN_QUESTION) == []
+
+
+@pytest.mark.parametrize("answer", [
+    "Net income attributable to Costco was $109,433 million in fiscal 2024 (52 weeks ended September 1, 2024).",
+    "Revenue was $245.1 billion in the 53-week fiscal year.",
+    "Operating income was USD109,433 million.",
+    "The margin was a 44.6-percent share of revenue.",
+])
+def test_invariant_1_reads_weeks_multiples_and_spelled_units(answer):
+    assert check_numbers_in_values(make(answer=answer)) == []
+
+
+def test_invariant_1_a_ratio_written_as_a_multiple():
+    ratio = with_(VALUE, name="current_ratio", value=1.03, unit="ratio")
+    assert check_numbers_in_values(make(answer="The current ratio was 1.03x.", values=[ratio])) == []
+    assert rules(check_numbers_in_values(make(answer="The current ratio was 1.3x.", values=[ratio]))) == ["1"]
+
+
+def test_invariant_1_ignores_the_scope_text_in_a_partial_r3_answer():
+    answer = ("Microsoft's operating margin in fiscal 2024 was 44.6%. Fiscal 2026 is outside the filings FinSight "
+              "has indexed (20 companies, 10-K fiscal 2023–2025 and 10-Q fiscal 2025 Q1–Q3).")
+    assert check_numbers_in_values(make(answer=answer, refusal_rule="R3")) == []
+
+
+def test_invariant_3_an_input_the_calculator_refuses():
+    c = make(calculations=[with_(CALC, inputs=[2e15, 1])])               # beyond the calculator's input range
+    assert "cannot be recomputed" in check_calculations(c)[0].message

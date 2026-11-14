@@ -21,8 +21,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from core.spec import ITEMS_OF_FORM, FiscalPeriod, Form, RefusalRule, Unit
-from ingest.sections import doc_id
+from core.spec import ITEMS_OF_FORM, FiscalPeriod, Form, ItemName, RefusalRule, Unit, doc_id
 from tools.calculator import Operation
 
 STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
@@ -82,9 +81,11 @@ def refusal_template(rule: str) -> str:
 
 def refusal_answer(rule: str, suggestion: str) -> str:
     """The refusal answer: the §6 sentence for `rule` with one concrete in-scope question as the suggestion."""
-    if not suggestion.strip():
+    text = suggestion.strip().rstrip(".").strip()
+    if not text:
         raise ValueError("a refusal needs a suggestion (spec §6)")
-    return refusal_template(rule).replace("{suggestion}", suggestion.strip().rstrip(".?"))
+    # both templates end in "{suggestion}."; a suggestion written as a question keeps its "?" instead
+    return refusal_template(rule).replace("{suggestion}.", text if text.endswith("?") else f"{text}.")
 
 
 class Value(BaseModel):
@@ -129,7 +130,7 @@ class Citation(BaseModel):
     form: Form
     fiscal_year: int
     fiscal_period: FiscalPeriod
-    item: str | None = None
+    item: ItemName | None = None
     chunk_id: str | None = None
     concept: str | None = Field(default=None, pattern=CONCEPT_PATTERN)
     accession_no: str | None = Field(default=None, pattern=ACCESSION_PATTERN)
@@ -205,15 +206,52 @@ class AnswerContract(BaseModel):
     notes: list[str] = []
 
 
-def _drop_titles(node: Any) -> Any:
-    if isinstance(node, dict):
-        return {k: _drop_titles(v) for k, v in node.items() if k != "title" or not isinstance(v, str)}
+INT_OR_NUMBER = [{"type": "integer"}, {"type": "number"}]
+
+
+def _for_decoding(node: Any) -> Any:
+    """Pydantic's schema made plain for guided decoding: no titles or defaults, every property required (an
+    optional field is required and nullable, so the model always writes it, e.g. a cagr's years), and int | float
+    as "number"."""
     if isinstance(node, list):
-        return [_drop_titles(v) for v in node]
-    return node
+        return [_for_decoding(v) for v in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: _for_decoding(v) for k, v in node.items()
+           if not (k == "title" and isinstance(v, str)) and k != "default"}
+    if out.get("anyOf") == INT_OR_NUMBER:
+        del out["anyOf"]
+        out["type"] = "number"
+    elif "anyOf" in out and out["anyOf"][:2] == INT_OR_NUMBER:
+        out["anyOf"] = [{"type": "number"}, *out["anyOf"][2:]]
+    if "properties" in out:
+        out["required"] = list(out["properties"])
+    return out
+
+
+CITATION_KIND_FIELDS = {"filing": ("item", "chunk_id"), "xbrl": ("concept", "accession_no")}
+
+
+def _citation_variants(citation: dict[str, Any]) -> dict[str, Any]:
+    """The citation as one variant per source_type, each with exactly its own fields, non-null. With every field
+    required, a single object made the model fill item and chunk_id in an xbrl citation (measured), which the
+    model then refuses; with the variants, guided decoding cannot mix the two kinds."""
+    props = citation["properties"]
+    own = {f for fields in CITATION_KIND_FIELDS.values() for f in fields}
+    shared = {k: v for k, v in props.items() if k not in own and k != "source_type"}
+    variants = []
+    for kind, fields in CITATION_KIND_FIELDS.items():
+        properties = {"source_type": {"const": kind, "type": "string"}, **shared,
+                      **{f: props[f]["anyOf"][0] for f in fields}}               # the non-null branch
+        variants.append({"type": "object", "additionalProperties": False, "properties": properties,
+                         "required": list(properties)})
+    return {"description": citation.get("description", ""), "anyOf": variants}
 
 
 def contract_json_schema() -> dict[str, Any]:
-    """The contract's JSON schema without pydantic's titles: for response_format json_schema with strict guided
-    decoding (ADR-016) and for prompts. Cross-field rules (citation kinds, durations) are checked after parsing."""
-    return _drop_titles(AnswerContract.model_json_schema())
+    """The contract's JSON schema for response_format json_schema with strict guided decoding (ADR-016) and for
+    prompts (see _for_decoding and _citation_variants). Other cross-field rules (durations, chunk ids naming
+    their filing) are checked after parsing."""
+    schema = _for_decoding(AnswerContract.model_json_schema())
+    schema["$defs"]["Citation"] = _citation_variants(schema["$defs"]["Citation"])
+    return schema
