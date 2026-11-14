@@ -370,6 +370,9 @@ W1-06 (Amresh + all): eval/dev_set.jsonl, 15 items in the gold format (each memb
 W1-07 (Amresh): agent/contract.py (spec §8 AnswerContract as a pydantic model) and agent/critic_checks.py
   (every number in the answer is in values; each value supported by a citation or calculation; calculations
   equal tools.calculator.compute; refusal invariants). Tests for each invariant, passing and failing.
+  Done as in ADR-022: check_contract(contract, scope, question) runs the seven invariants, the citation rule
+  and ADR-016's operation check; with_verification sets verified and the "could not verify" notes; W1-09 scores
+  its structured replies with the same checks (scope from the gold item's companies and fiscal years).
 W1-04 (Chandra Shekhar): ingest/sections.py drops lone "Table of Contents" lines, bare page numbers and page
   footers (precompiled patterns, positive and negative tests); re-parse to a temporary --out-dir and diff
   (1,260 documents, no Item lost, gold verbatim-figure check passes); promote; re-chunk; rebuild BM25 and dense

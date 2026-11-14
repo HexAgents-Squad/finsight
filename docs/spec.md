@@ -196,7 +196,7 @@ Every response is one JSON object (a Pydantic model in code; this is what the UI
 | `citations[].item` | string | Exact Item name (§3), same field name as `sections.jsonl` and `gold_sources` |
 | `citations[].chunk_id` | string | ID of the retrieved chunk (used for citation accuracy and trace links) |
 | `citations[].url` | string | SEC URL of the source: the filing document for text (`search_filings` `source_url`), the filing's folder for XBRL facts (`get_financial_fact` `url`) |
-| `calculations[]` | list | Every computed number: `operation` (§7 rule 2), numeric `inputs`, `result`, `unit`, `expression` (as returned by the `calculate` tool) |
+| `calculations[]` | list | Every computed number: `operation` (§7 rule 2), numeric `inputs`, `years` (cagr only, else `null`; needed to recompute it), `result`, `unit`, `expression` (as returned by the `calculate` tool, without its `notes`, which go to `notes`; ADR-022) |
 | `verified` | bool | `true` only if all critic checks pass (see invariants) |
 | `refused` | bool | `true` when the whole question is refused (§6) |
 | `refusal_rule` | `"R1"`…`"R7"`\|`null` | The rule that applied; also set for partial refusals (`refused: false`) |
