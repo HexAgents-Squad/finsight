@@ -1,7 +1,7 @@
 {
  "meta": {
   "probe_version": "p-v1",
-  "date": "2026-11-14T05:36:32+00:00",
+  "date": "2026-11-14T05:39:57+00:00",
   "model": "Qwen/Qwen3-8B",
   "endpoint": "hosted",
   "thinking_setting": false,
@@ -9,7 +9,8 @@
   "context_setting": 8192,
   "min_gap_s": 1.1,
   "timeout_s": 120.0,
-  "git_commit": "9d3b66763e60f3f634ae76da22b69f126d481d7d"
+  "git_commit": "6b0b6fc09528fd14a9ff2ea242353a82e1a866c8",
+  "script_changed_since_commit": false
  },
  "probes": {
   "tools": {
@@ -17,7 +18,7 @@
     {
      "label": "no tools (baseline for prompt tokens)",
      "ok": true,
-     "seconds": 0.303,
+     "seconds": 0.344,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -32,7 +33,7 @@
     {
      "label": "tools, tool_choice=auto",
      "ok": true,
-     "seconds": 1.302,
+     "seconds": 1.133,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -52,7 +53,7 @@
     {
      "label": "tools, tool_choice=required",
      "ok": true,
-     "seconds": 1.407,
+     "seconds": 1.403,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -72,7 +73,7 @@
     {
      "label": "tools, tool_choice=calculate (named)",
      "ok": true,
-     "seconds": 0.896,
+     "seconds": 0.984,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -92,7 +93,7 @@
     {
      "label": "agent loop, reply 1",
      "ok": true,
-     "seconds": 1.109,
+     "seconds": 1.046,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -112,7 +113,7 @@
     {
      "label": "agent loop, reply 2",
      "ok": true,
-     "seconds": 0.971,
+     "seconds": 0.907,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -132,7 +133,7 @@
     {
      "label": "agent loop, reply 3",
      "ok": true,
-     "seconds": 0.795,
+     "seconds": 0.787,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -196,7 +197,7 @@
     {
      "label": "prompt only (no response_format)",
      "ok": true,
-     "seconds": 2.039,
+     "seconds": 2.036,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -211,7 +212,7 @@
     {
      "label": "response_format=json_object",
      "ok": true,
-     "seconds": 2.038,
+     "seconds": 2.034,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -226,7 +227,7 @@
     {
      "label": "response_format=json_schema (B0Answer, strict)",
      "ok": true,
-     "seconds": 2.101,
+     "seconds": 2.11,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -241,7 +242,7 @@
     {
      "label": "json_schema against a prose instruction",
      "ok": true,
-     "seconds": 1.923,
+     "seconds": 1.911,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -280,7 +281,7 @@
     {
      "label": "enable_thinking=true",
      "ok": true,
-     "seconds": 0.439,
+     "seconds": 0.308,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -295,7 +296,7 @@
     {
      "label": "enable_thinking=false",
      "ok": true,
-     "seconds": 0.308,
+     "seconds": 0.303,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -310,7 +311,7 @@
     {
      "label": "switch not sent",
      "ok": true,
-     "seconds": 0.306,
+     "seconds": 0.386,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -329,21 +330,21 @@
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.439
+     "seconds": 0.308
     },
     "off": {
      "ok": true,
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.308
+     "seconds": 0.303
     },
     "not_sent": {
      "ok": true,
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.306
+     "seconds": 0.386
     },
     "identical_replies": true,
     "switch_honoured": false
@@ -354,7 +355,7 @@
     {
      "label": "max_tokens=16",
      "ok": true,
-     "seconds": 0.4,
+     "seconds": 0.392,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -369,7 +370,7 @@
     {
      "label": "max_tokens=128",
      "ok": true,
-     "seconds": 2.816,
+     "seconds": 2.813,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -384,7 +385,7 @@
     {
      "label": "max_tokens=512",
      "ok": true,
-     "seconds": 11.115,
+     "seconds": 11.216,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -399,7 +400,7 @@
     {
      "label": "max_tokens=1024",
      "ok": true,
-     "seconds": 22.247,
+     "seconds": 22.231,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -416,23 +417,23 @@
     "points": [
      {
       "completion_tokens": 16,
-      "seconds": 0.4
+      "seconds": 0.392
      },
      {
       "completion_tokens": 128,
-      "seconds": 2.816
+      "seconds": 2.813
      },
      {
       "completion_tokens": 512,
-      "seconds": 11.115
+      "seconds": 11.216
      },
      {
       "completion_tokens": 1024,
-      "seconds": 22.247
+      "seconds": 22.231
      }
     ],
     "fit": {
-     "overhead_s": 0.04,
+     "overhead_s": 0.06,
      "tokens_per_s": 46.1
     }
    }
@@ -442,7 +443,7 @@
     {
      "label": "max_tokens=1025",
      "ok": false,
-     "seconds": 0.028,
+     "seconds": 0.029,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400",
@@ -457,7 +458,7 @@
     {
      "label": "max_tokens=2048",
      "ok": false,
-     "seconds": 0.033,
+     "seconds": 0.027,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400",
@@ -510,7 +511,7 @@
     {
      "label": "temperature_0 #1",
      "ok": true,
-     "seconds": 0.613,
+     "seconds": 0.608,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -525,7 +526,7 @@
     {
      "label": "temperature_0 #2",
      "ok": true,
-     "seconds": 0.614,
+     "seconds": 0.606,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -540,7 +541,7 @@
     {
      "label": "temperature_0 #3",
      "ok": true,
-     "seconds": 0.606,
+     "seconds": 0.608,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -555,7 +556,7 @@
     {
      "label": "temperature_0.9_seed_1234 #1",
      "ok": true,
-     "seconds": 0.68,
+     "seconds": 0.679,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -570,7 +571,7 @@
     {
      "label": "temperature_0.9_seed_1234 #2",
      "ok": true,
-     "seconds": 0.678,
+     "seconds": 0.677,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -585,22 +586,7 @@
     {
      "label": "temperature_0.9_no_seed #1",
      "ok": true,
-     "seconds": 0.74,
-     "status": 200,
-     "error_type": null,
-     "error": null,
-     "retry_after": null,
-     "finish_reason": "stop",
-     "prompt_tokens": 23,
-     "completion_tokens": 32,
-     "text": "A bank's balance sheet shows the total assets it holds, the liabilities it owes to others, and the equity that represents the net worth of the institution.",
-     "reasoning_chars": null,
-     "tool_calls": []
-    },
-    {
-     "label": "temperature_0.9_no_seed #2",
-     "ok": true,
-     "seconds": 0.631,
+     "seconds": 0.609,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -613,9 +599,24 @@
      "tool_calls": []
     },
     {
+     "label": "temperature_0.9_no_seed #2",
+     "ok": true,
+     "seconds": 0.676,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 29,
+     "text": "A bank's balance sheet is a snapshot of its financial position, showing its assets, liabilities, and equity at a specific point in time.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
      "label": "temperature_0.9_seeds_1_2_3 #1",
      "ok": true,
-     "seconds": 0.61,
+     "seconds": 0.614,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -630,7 +631,7 @@
     {
      "label": "temperature_0.9_seeds_1_2_3 #2",
      "ok": true,
-     "seconds": 0.875,
+     "seconds": 0.879,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -682,7 +683,7 @@
     {
      "label": "concurrent request A",
      "ok": true,
-     "seconds": 5.593,
+     "seconds": 5.578,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -697,7 +698,7 @@
     {
      "label": "concurrent request B",
      "ok": false,
-     "seconds": 0.089,
+     "seconds": 0.081,
      "status": 429,
      "error_type": "RateLimitError",
      "error": "Error code: 429",
