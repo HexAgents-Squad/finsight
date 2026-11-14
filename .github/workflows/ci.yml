@@ -46,3 +46,8 @@ jobs:
 
       - name: Validate refusal and prompt-injection test sets
         run: python eval/validate_test_sets.py
+
+      # Final rules, because every item is verified: format, the split, second-person verification and separation
+      # from gold-v1 (no shared filing period or company-year, no reworded gold or test question)
+      - name: Validate development set (final rules, no overlap with gold-v1)
+        run: python eval/validate_dev_set.py --final

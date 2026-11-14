@@ -4,6 +4,8 @@
 |---|---|
 | `schema.py` | The gold-item format and every validation rule (single source of truth for week0_plan §2.4/§3 and spec §5–§7) |
 | `validate_gold.py` | Checks `gold_set.jsonl`; `--final` adds the freeze rules |
+| `dev_set.jsonl` | W1-06: 15 development questions in the gold format (`dev-` ids) on filing periods gold-v1 does not use; the prompting baselines S1–S3 are tuned here, never on gold |
+| `validate_dev_set.py` | Checks `dev_set.jsonl` with the gold rules and shows it does not overlap gold-v1 (no shared filing period or company-year, no reworded gold or test question); `--final` adds the split and second-person verification |
 | `sheet_to_jsonl.py` | Converts the team's Google Sheet (CSV export) to `gold_set.jsonl`; writes only if every row is valid |
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
