@@ -163,3 +163,37 @@ def test_no_sentence_is_joined_onto_a_running_title():
 def test_a_word_hyphenated_across_the_page_break_is_joined_without_a_space():
     out, _ = strip_furniture("recognized on a trade-\n12\nTable of Contents\ndate basis.", Furniture())
     assert out == "recognized on a trade-date basis."
+
+
+def test_a_footer_shaped_table_row_stays_even_when_it_repeats():
+    # AbbVie's statement row names the company and carries one small number, in every year's statement (review)
+    rows = "Gross margin | 8,597\nNet earnings attributable to AbbVie Inc. | {n}\nTotal | 1,204"
+    text = "\n\n".join(rows.replace("{n}", str(v)) for v in (822, 715, 904))
+    furniture = find_furniture([text], NAMES["ABBV"])
+    assert "Net earnings attributable to AbbVie Inc. | 822" in furniture        # the shape alone looks like a footer
+    assert strip_furniture(text, furniture) == (text, 0)
+
+
+def test_a_footer_next_to_its_header_is_still_removed():
+    # Goldman Sachs: the footer's "|" is no table row, so the header right under it goes too
+    page = "the end of a page.\n{n} | Goldman Sachs 2024 Form 10-K\nTHE GOLDMAN SACHS GROUP, INC. AND SUBSIDIARIES\nNext."
+    furniture = furniture_of("GS", "{n} | Goldman Sachs 2024 Form 10-K", "THE GOLDMAN SACHS GROUP, INC. AND SUBSIDIARIES")
+    out, removed = strip_furniture(page.replace("{n}", "38"), furniture)
+    assert removed == 2 and out == "the end of a page.\nNext."
+
+
+def test_a_number_hyphenated_across_the_page_break_keeps_its_space():
+    out, _ = strip_furniture("in fiscal 2023-\n12\nTable of Contents\nto-date results.", Furniture())
+    assert out == "in fiscal 2023- to-date results."
+
+
+@pytest.mark.parametrize("line", ["− 3 −", "‑ 12 ‑", "— 7 —"])
+def test_page_numbers_between_any_dash_are_furniture(line):
+    assert line in Furniture()
+
+
+def test_furniture_of_a_dropped_item_is_not_counted():
+    # an Item too short to keep, with a contents link: the corpus does not lose its line (parse_report, review)
+    short = "x" * 50 + "</p><p>Table of Contents</p><p>73"
+    parsed = parse_filing(html_to_text(tenk_html({**STANDARD, "12": short})), "10-K")
+    assert all(s.key != "Item 12" for s in parsed.sections) and parsed.furniture_lines == 0

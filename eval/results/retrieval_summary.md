@@ -24,9 +24,9 @@ furniture removed from the corpus ADR-023 (W1-04).
   Index build 20-34 s per variant.
 - **Dense:** Chroma (cosine, HNSW), 384-dimension embeddings from `bge-small-en-v1.5` on the course's embedding
   endpoint via `core.llm.embed()` (ADR-021; it replaced `all-MiniLM-L6-v2`, which ADR-013 had picked for its local
-  speed). Each text is cut to 512 tokens, the model's limit: that touches 0.0% of C1, 0.4% of C2 and 3.3% of C3
-  chunks (C3's whole tables; every chunk counted, ADR-023; `eval/results/chunk_token_lengths.md` has the same count
-  on the corpus before W1-04), and BM25 still sees every chunk whole. Full builds, 16 texts per request:
+  speed). Each embedded text (context header plus chunk) is cut to 512 tokens, the model's limit: that touched
+  no C1 chunk, 368 C2 chunks (0.6%) and 2,054 C3 chunks (3.5%, C3's whole tables), counted in the build; BM25
+  still sees every chunk whole. Full builds, 16 texts per request:
 
   | Variant | Chunks | Dense build | Chunks/s |
   |---|---:|---:|---:|
@@ -104,32 +104,36 @@ Hybrid helps C2 (0.719, above both its parts) and C3, and is level on C1 (0.685 
 **C3 (table-aware) helps where it should.** Whole tables with their caption keep a statement's title, units,
 dates and rows together: C3 has the best filtered recall@5 for dense (0.740) and hybrid (0.774), and its fact
 and ratio questions reach recall@5 0.867. For BM25 the three variants are within noise (0.664-0.692). With
-bge-small's 512-token limit C2's larger chunks are no longer cut (0.4% vs 23% under MiniLM's 256).
+bge-small's 512-token limit C2's larger chunks are almost never cut (0.6%, against about 23% at MiniLM's 256).
 
 **Without filters dense is the best retriever on C3** (recall@5 0.425 and recall@10 0.589, the best unfiltered
 rows; C1 hybrid has the best unfiltered MRR, 0.268), but no unfiltered setting is good enough to answer from; see below for why
 unfiltered dense lost ground in W1-04.
 
 **What W1-04 changed.** Two things changed since the previous table: the corpus lost its page furniture and the
-dense model moved from MiniLM to bge-small (ADR-021). They are separated here question by question (recall@5,
-two-sided sign test on the questions that differ; differences of a few questions are noise).
+dense model moved from MiniLM to bge-small (ADR-021). They are separated here question by question: the counts
+are questions with a gold source in the top 5 in one run and not in the other (better / worse), with a
+two-sided sign test on those; differences of a few questions are noise.
 - *Furniture, BM25 (same retriever, only the text changed):* every row moved within noise, -0.048 to +0.055 in
   recall@5; the most lopsided are C1 unfiltered (8 questions better, 3 worse, p = 0.23) and C2 unfiltered
-  (2 / 7, p = 0.18), in opposite directions. Removing furniture
-  did not cost term matching anything, and gained nothing measurable on 73 questions either.
+  (2 / 7, p = 0.18), in opposite directions. Removing furniture did not cost term matching anything, and gained
+  nothing measurable on 73 questions either.
 - *Furniture, dense (bge-small on C3, against the W1-16 run on the old corpus, `eval/results/embedding_comparison`):*
-  with filters level, 0.788 → 0.740 (3 better, 6 worse, p = 0.51), and hybrid with filters 0.760 → 0.774 (3 / 1).
-  Without filters dense lost: 0.555 → 0.425 (3 better, 14 worse, p = 0.013). The running headers and footers
-  were naming the company in the text ("Bank of America Corporation and Subsidiaries", "Apple Inc. | 2024 Form
-  10-K | 23"): 22.8% of C3 chunks contained their company's name before W1-04 and 12.8% after, while the chunk
-  header gives only the ticker. In 3 of the 14 losses the asked-about company left the top 5 altogether ("Bank
-  of America" → Citigroup, "Coca-Cola" → NVIDIA and Walmart, "Apple" → NVIDIA and Pfizer); in the others the
-  company stayed but the year and form cue ("2024 Form 10-K") went, and another year's filing or a 10-Q took
-  the place. With filters company and year are fixed, so nothing is lost there. The fix is to name the
-  company in every chunk's header instead of in a fifth of them by accident of page breaks (a follow-up: it
-  changes the chunk text, so all three variants are re-embedded, ~95 min).
-- *Net, against the previous committed table (MiniLM on the old corpus):* C3 hybrid with filters 0.747 →
-  0.774 (6 better, 3 worse, p = 0.51), C3 dense with filters 0.630 → 0.740 (16 / 8, p = 0.15).
+  with filters level, recall@5 0.788 → 0.740 (3 better, 6 worse, p = 0.51), and hybrid with filters 0.760 →
+  0.774 (3 / 1). Without filters dense lost: 0.555 → 0.425 (3 better, 14 worse, p = 0.013). The running headers
+  and footers were naming the company in the text ("Bank of America Corporation and Subsidiaries", "Apple Inc. |
+  2024 Form 10-K | 23"): 22.8% of C3 chunks contained their company's name (the full name in
+  `config/companies.yaml` without "Inc." or "Corporation", or a multi-word alias) before W1-04 and 12.8% after,
+  while the chunk header gives only the ticker. In 6 of the 14 losses an asked-about company left the top 5
+  altogether ("Bank of America" → Citigroup, "Coca-Cola" → NVIDIA, Walmart and AbbVie, "Apple" → NVIDIA,
+  Pfizer, Amazon and Microsoft, and one company of each of three multi-company questions); in 4 the gold filing
+  is still there but another of its Items outranks the gold one, and in 4 another filing of the same company
+  takes the place, the year and form cue ("2024 Form 10-K") being gone. With filters company and year are
+  fixed, so nothing is lost there. The fix is to name the company in every chunk's header instead of in some
+  chunks by accident of page breaks (a follow-up: it changes the chunk text, so all three variants are
+  re-embedded, ~95 min).
+- *Net, against the previous committed table (MiniLM on the old corpus):* C3 hybrid with filters recall@5 0.747
+  → 0.774 (6 better, 3 worse, p = 0.51), C3 dense with filters 0.630 → 0.740 (16 / 8, p = 0.15).
 
 **Where it still misses** (C3 hybrid, filtered, rank 5): 25 gold sources are missed (27 before). 22 of them are
 in the right filing but the wrong Item, 21 being statement questions (gold Item 8, or Part I Item 1 for a 10-Q)

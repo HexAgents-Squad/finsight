@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 MAIN_DOCUMENT = "main document"
 EXHIBIT = "Exhibit 13"
 # Shorter Items ("Not applicable", "[Reserved]") are dropped (spec §3), judged before page furniture is removed:
-# 8 pointer Items (e.g. GS Item 11, BAC Item 14) are 235-299 characters without their footers (ADR-023)
+# 8 pointer Items (e.g. GS Item 11, BAC Item 14) are 235-278 characters without their footers (ADR-023)
 MIN_SECTION_CHARS = 300
 MIN_ITEMS_FOR_HEADINGS = 4       # fewer Item headings than this = the filing does not use them
 STUB_CHARS = 3_000               # an MD&A / financial-statement Item shorter than this is only a pointer
@@ -343,10 +343,10 @@ class ParsedFiling:
 # What a printed page adds to the text and a reader skips (W1-04, ADR-023): the "Table of Contents" link at the
 # top of every page, the page number, and the running footer and header naming the company or the report
 # ("Wells Fargo & Company | 27", "Apple Inc. | 2024 Form 10-K | 31", "THE GOLDMAN SACHS GROUP, INC. AND
-# SUBSIDIARIES"). Measured on the corpus before W1-04: 2,455 lone "Table of Contents" lines and ~6,500 bare page
-# numbers, mostly in the middle of a sentence cut by the page break.
+# SUBSIDIARIES"). Measured on the corpus before W1-04: 2,455 lone "Table of Contents" lines and 6,742 bare page
+# numbers, a fifth of them right after a sentence the page break cut (1,345).
 TOC_LINK = re.compile(r"table\s+of\s+contents(?:\s*\|\s*[^|\d]{1,40})?", re.IGNORECASE)   # "... | Alphabet Inc."
-PAGE_NUMBER_LINE = re.compile(r"\d{1,3}\.?|[-–—]\s*\d{1,3}\s*[-–—]")    # "31", "37." (Alphabet), "- 3 -" (Merck)
+PAGE_NUMBER_LINE = re.compile(r"\d{1,3}\.?|[-‑–—−]\s*\d{1,3}\s*[-‑–—−]")    # "31", "37." (Alphabet), "- 3 -" (Merck)
 PAGE_REF = r"(?:\d{1,3}|[A-Z]-\d{1,3})"                        # "31", "F-12"
 FORM_TOKEN = re.compile(r"\b10-([KQ])\b")                      # masked to "X-K" so "10" is not a second number
 QUARTER_TOKEN = re.compile(r"\bQ([1-4])\b")                    # "Apple Inc. | Q1 2025 Form 10-Q | 1": masked too
@@ -375,12 +375,20 @@ class Furniture:
 def furniture_lines(lines: list[str], furniture: Furniture) -> set[int]:
     """Indexes of the lines to remove. A bare number right under a table row (no blank line between) is the
     row's value, not a page number: Merck's total "704" under "... attributable to noncontrolling interests | 3",
-    whose label cell is empty (measured; every page number in the corpus follows a blank line or text)."""
+    whose label cell is empty (measured; every page number in the corpus follows a blank line or text). A
+    footer- or header-shaped line with a table row right above or below it that is not furniture itself is a
+    row of that table ("Net earnings attributable to AbbVie Inc. | 822" in every year's statement): no removed
+    footer or header in the corpus touches a table row (measured)."""
     out = set()
     for i, line in enumerate(lines):
         if line not in furniture:
             continue
-        if PAGE_NUMBER_LINE.fullmatch(line.strip()) and i > 0 and "|" in lines[i - 1]:
+        s = line.strip()
+        if PAGE_NUMBER_LINE.fullmatch(s):
+            if i > 0 and "|" in lines[i - 1]:
+                continue
+        elif not TOC_LINK.fullmatch(s) and any(
+                0 <= j < len(lines) and "|" in lines[j] and lines[j] not in furniture for j in (i - 1, i + 1)):
             continue
         out.add(i)
     return out
@@ -647,7 +655,8 @@ def parse_filing(main_text: str, form: str, exhibit_text: str | None = None,
         # (a 301-character pointer Item ending in a footer stays, as before W1-04)
         long_enough[key] = len(section.text) >= MIN_SECTION_CHARS
         body, removed = strip_furniture(section.text, furniture)
-        furniture_lines += removed
+        furniture_lines += removed if long_enough[key] else 0     # count only what the corpus loses
+
         result[key] = Section(key, body, section.location)
 
     kept = [s for key, s in result.items() if long_enough[key]]

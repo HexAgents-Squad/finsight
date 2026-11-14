@@ -50,7 +50,7 @@ def test_a_value_taken_for_a_page_number_is_caught():
     old = BODY + "\n88\n\nTable of Contents\nNet income attributable | 3\n704\n\n" + BODY + "\n89\n"
     new = BODY + "Net income attributable | 3\n\n" + BODY
     problems = run(old, new, ticker="MRK")
-    assert any("page number directly under a table row" in p for p in problems)
+    assert any("removed line next to a table row" in p for p in problems)
     assert any("page number out of the page sequence" in p and "704" in p for p in problems)
 
 
@@ -72,3 +72,43 @@ def test_a_lost_gold_figure_is_caught():
 
 def test_joined_pairs_maps_old_pieces_to_new_lines():
     assert cs.joined_pairs(["a b", "c", "d"], ["a b c", "d"]) == [("a b", "c")]
+
+
+def test_a_removed_line_next_to_a_table_row_is_caught():
+    # a statement row that names the company, taken for a footer (review): the row above stays
+    old = BODY + "Total revenue | 8,597\nNet income attributable to Wells Fargo & Company | 822\n\n" + BODY
+    new = BODY + "Total revenue | 8,597\n\n" + BODY
+    assert any("removed line next to a table row" in p for p in run(old, new))
+
+
+def test_a_single_page_number_is_checked_against_the_filing():
+    # Item 9 has one page number only; the filing's pages around it are 40-41 and 43
+    old = corpus(doc(BODY + "\n40\n\n" + BODY + "\n41\n\n" + BODY), doc(BODY + "\n704\n\n" + BODY, item="Item 9"),
+                 doc(BODY + "\n43\n\n" + BODY, item="Item 10"))
+    new = corpus(doc(BODY * 3), doc(BODY * 2, item="Item 9"), doc(BODY * 2, item="Item 10"))
+    problems = cs.compare(old, new, NAMES, [])[0]
+    assert any("page number out of the page sequence" in p and "704" in p for p in problems)
+    old["WFC_10-K_2024_Item9"]["text"] = BODY + "\n42\n\n" + BODY
+    assert cs.compare(old, new, NAMES, [])[0] == []
+
+
+def test_the_checker_shares_no_rule_with_the_remover():
+    import ast
+    from pathlib import Path
+    tree = ast.parse(Path(cs.__file__).read_text(encoding="utf-8"))
+    imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    assert "ingest.sections" not in imported
+
+
+@pytest.mark.parametrize("line, kind", [
+    ("Table of Contents", "table of contents"), ("Table of Contents | Wells Fargo", "table of contents"),
+    ("31", "page number"), ("37.", "page number"), ("- 3 -", "page number"),
+    ("Wells Fargo & Company | 27", "running footer"), ("27 | Wells Fargo & Company", "running footer"),
+    ("Wells Fargo & Company 2024 Form 10-K | 27", "running footer"), ("2024 Annual Report | 27", "running footer"),
+    ("Wells Fargo & Company and Subsidiaries", "running header"),
+    ("Wells Fargo & Company", None), ("Wells Fargo & Company | 27 | 28", None), ("Wells Fargo & Company | 1,234", None),
+    ("Wells Fargo & Company and Subsidiaries 27", "running footer"), ("Total | 27", None), ("2024", None),
+    ("(12)", None), ("1,234", None), ("Subsidiaries of the registrant", None), ("Managing Global Risk", None),
+])
+def test_the_checker_has_its_own_idea_of_furniture(line, kind):
+    assert cs.Looks(NAMES["WFC"]).kind(line) == kind

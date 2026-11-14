@@ -21,16 +21,22 @@ DISTANCE = "cosine"
 
 
 LEGACY_BACKENDS = ("sentence-transformers", "openai")   # recorded as "<backend>:<model>" before W1-04
+# Publishers whose local models are the hosted ones (cosine 1.0, W1-16); another publisher's model of the same
+# name (a fine-tuned fork) is a different model
+SAME_MODEL_PUBLISHERS = ("BAAI/", "sentence-transformers/")
 
 
 def model_name(model_id: str) -> str:
-    """The model an embedder id names, without the backend or the publisher: "bge-small-en-v1.5" for the hosted
-    endpoint's "bge-small-en-v1.5" and for "BAAI/bge-small-en-v1.5" run locally (the same vectors, cosine 1.0,
-    W1-16), so an index built through one is searched with the other (ADR-021). Ids recorded before W1-04
-    carried the backend ("sentence-transformers:all-MiniLM-L6-v2") and read the same."""
+    """The model an embedder id names, without the backend or a known publisher: "bge-small-en-v1.5" for the
+    hosted endpoint's "bge-small-en-v1.5" and for "BAAI/bge-small-en-v1.5" run locally (the same vectors, cosine
+    1.0, W1-16), so an index built through one is searched with the other (ADR-021). Ids recorded before W1-04
+    carried the backend ("sentence-transformers:all-MiniLM-L6-v2") and read the same. Ollama's default tag is
+    dropped ("nomic-embed-text:latest" is "nomic-embed-text"); any other tag stays."""
     for backend in LEGACY_BACKENDS:
         model_id = model_id.removeprefix(f"{backend}:")
-    return model_id.rpartition("/")[2]               # an Ollama tag ("nomic-embed-text:latest") stays whole
+    for publisher in SAME_MODEL_PUBLISHERS:
+        model_id = model_id.removeprefix(publisher)
+    return model_id.removesuffix(":latest")
 
 
 @dataclass
