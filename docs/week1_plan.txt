@@ -359,7 +359,7 @@ W1-06 (Amresh + all): eval/dev_set.jsonl, 15 items in the gold format (each memb
   verifies), on companies/periods no gold item uses; validated in CI; a script shows no overlap with gold-v1.
   Prompts for S1–S3 are tuned on this set only. Done as in ADR-012 (ADR-020): items drafted by Claude from the
   filings (every figure checked in the period's own statement and against the XBRL facts), each verified by one
-  member (3 each); eval/validate_dev_set.py: gold rules with dev- ids, no gold filing period or company-year, no
+  member (all 15 verified: Alok 5, Giridharan 3, Anirudh 3, Amresh 2, Chandra Shekhar 2); eval/validate_dev_set.py: gold rules with dev- ids, no gold filing period or company-year, no
   question closer to a gold or test question than gold's own closest pair (word overlap 0.79; limit 0.8).
 W1-07 (Amresh): agent/contract.py (spec §8 AnswerContract as a pydantic model) and agent/critic_checks.py
   (every number in the answer is in values; each value supported by a citation or calculation; calculations
