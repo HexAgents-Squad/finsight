@@ -1,7 +1,7 @@
 {
  "meta": {
   "probe_version": "p-v1",
-  "date": "2026-11-14T05:39:57+00:00",
+  "date": "2026-11-14T05:57:36+00:00",
   "model": "Qwen/Qwen3-8B",
   "endpoint": "hosted",
   "thinking_setting": false,
@@ -9,8 +9,8 @@
   "context_setting": 8192,
   "min_gap_s": 1.1,
   "timeout_s": 120.0,
-  "git_commit": "6b0b6fc09528fd14a9ff2ea242353a82e1a866c8",
-  "script_changed_since_commit": false
+  "git_commit": "ffd2c3485b3c13e13126cbe3c0aaed4829969304",
+  "code_changed_since_commit": false
  },
  "probes": {
   "tools": {
@@ -18,7 +18,7 @@
     {
      "label": "no tools (baseline for prompt tokens)",
      "ok": true,
-     "seconds": 0.344,
+     "seconds": 0.295,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -33,7 +33,7 @@
     {
      "label": "tools, tool_choice=auto",
      "ok": true,
-     "seconds": 1.133,
+     "seconds": 1.134,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -53,7 +53,7 @@
     {
      "label": "tools, tool_choice=required",
      "ok": true,
-     "seconds": 1.403,
+     "seconds": 1.401,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -73,7 +73,7 @@
     {
      "label": "tools, tool_choice=calculate (named)",
      "ok": true,
-     "seconds": 0.984,
+     "seconds": 0.895,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -93,7 +93,7 @@
     {
      "label": "agent loop, reply 1",
      "ok": true,
-     "seconds": 1.046,
+     "seconds": 1.042,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -113,7 +113,7 @@
     {
      "label": "agent loop, reply 2",
      "ok": true,
-     "seconds": 0.907,
+     "seconds": 0.914,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -133,7 +133,7 @@
     {
      "label": "agent loop, reply 3",
      "ok": true,
-     "seconds": 0.787,
+     "seconds": 0.784,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -154,6 +154,7 @@
      "arguments_valid": true,
      "expected_tool": true,
      "tool_accepts": false,
+     "tool_error_type": "invalid_input",
      "tool_error": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
     },
     "required": {
@@ -162,6 +163,7 @@
      "finish_reason": "tool_calls",
      "arguments_valid": true,
      "tool_accepts": false,
+     "tool_error_type": "invalid_input",
      "tool_error": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
     },
     "named": {
@@ -171,6 +173,7 @@
      "arguments_valid": true,
      "expected_tool": true,
      "tool_accepts": false,
+     "tool_error_type": "invalid_input",
      "tool_error": "unit is only for difference and sum; percent returns '%'"
     },
     "schema_prompt_tokens": 1646,
@@ -197,7 +200,7 @@
     {
      "label": "prompt only (no response_format)",
      "ok": true,
-     "seconds": 2.036,
+     "seconds": 2.037,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -212,7 +215,7 @@
     {
      "label": "response_format=json_object",
      "ok": true,
-     "seconds": 2.034,
+     "seconds": 2.04,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -227,7 +230,7 @@
     {
      "label": "response_format=json_schema (B0Answer, strict)",
      "ok": true,
-     "seconds": 2.11,
+     "seconds": 2.105,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -242,7 +245,7 @@
     {
      "label": "json_schema against a prose instruction",
      "ok": true,
-     "seconds": 1.911,
+     "seconds": 1.912,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -281,7 +284,7 @@
     {
      "label": "enable_thinking=true",
      "ok": true,
-     "seconds": 0.308,
+     "seconds": 0.306,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -296,7 +299,7 @@
     {
      "label": "enable_thinking=false",
      "ok": true,
-     "seconds": 0.303,
+     "seconds": 0.316,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -311,7 +314,7 @@
     {
      "label": "switch not sent",
      "ok": true,
-     "seconds": 0.386,
+     "seconds": 0.31,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -330,21 +333,21 @@
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.308
+     "seconds": 0.306
     },
     "off": {
      "ok": true,
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.303
+     "seconds": 0.316
     },
     "not_sent": {
      "ok": true,
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.386
+     "seconds": 0.31
     },
     "identical_replies": true,
     "switch_honoured": false
@@ -355,7 +358,7 @@
     {
      "label": "max_tokens=16",
      "ok": true,
-     "seconds": 0.392,
+     "seconds": 0.391,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -370,7 +373,7 @@
     {
      "label": "max_tokens=128",
      "ok": true,
-     "seconds": 2.813,
+     "seconds": 2.815,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -385,7 +388,7 @@
     {
      "label": "max_tokens=512",
      "ok": true,
-     "seconds": 11.216,
+     "seconds": 11.117,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -400,7 +403,7 @@
     {
      "label": "max_tokens=1024",
      "ok": true,
-     "seconds": 22.231,
+     "seconds": 22.241,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -417,23 +420,23 @@
     "points": [
      {
       "completion_tokens": 16,
-      "seconds": 0.392
+      "seconds": 0.391
      },
      {
       "completion_tokens": 128,
-      "seconds": 2.813
+      "seconds": 2.815
      },
      {
       "completion_tokens": 512,
-      "seconds": 11.216
+      "seconds": 11.117
      },
      {
       "completion_tokens": 1024,
-      "seconds": 22.231
+      "seconds": 22.241
      }
     ],
     "fit": {
-     "overhead_s": 0.06,
+     "overhead_s": 0.04,
      "tokens_per_s": 46.1
     }
    }
@@ -443,7 +446,7 @@
     {
      "label": "max_tokens=1025",
      "ok": false,
-     "seconds": 0.029,
+     "seconds": 0.028,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400",
@@ -458,7 +461,7 @@
     {
      "label": "max_tokens=2048",
      "ok": false,
-     "seconds": 0.027,
+     "seconds": 0.031,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400",
@@ -473,7 +476,7 @@
     {
      "label": "prompt of 7581 tokens + max_tokens 1024 (over 8192)",
      "ok": false,
-     "seconds": 0.088,
+     "seconds": 0.08,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)",
@@ -502,7 +505,8 @@
      "target": 7568,
      "accepted": false,
      "status": 400,
-     "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)"
+     "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)",
+     "note": "the server's 'at least N input tokens' is its bound (context - max_tokens + 1), not the prompt's size"
     }
    }
   },
@@ -511,7 +515,7 @@
     {
      "label": "temperature_0 #1",
      "ok": true,
-     "seconds": 0.608,
+     "seconds": 0.609,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -526,7 +530,7 @@
     {
      "label": "temperature_0 #2",
      "ok": true,
-     "seconds": 0.606,
+     "seconds": 0.61,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -541,7 +545,7 @@
     {
      "label": "temperature_0 #3",
      "ok": true,
-     "seconds": 0.608,
+     "seconds": 0.615,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -586,22 +590,22 @@
     {
      "label": "temperature_0.9_no_seed #1",
      "ok": true,
-     "seconds": 0.609,
+     "seconds": 0.894,
      "status": 200,
      "error_type": null,
      "error": null,
      "retry_after": null,
      "finish_reason": "stop",
      "prompt_tokens": 23,
-     "completion_tokens": 26,
-     "text": "A bank's balance sheet reflects its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "completion_tokens": 39,
+     "text": "A bank's balance sheet shows its assets, such as loans and investments, balanced against its liabilities, including deposits and borrowings, to reflect its financial position at a given point in time.",
      "reasoning_chars": null,
      "tool_calls": []
     },
     {
      "label": "temperature_0.9_no_seed #2",
      "ok": true,
-     "seconds": 0.676,
+     "seconds": 0.687,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -609,14 +613,14 @@
      "finish_reason": "stop",
      "prompt_tokens": 23,
      "completion_tokens": 29,
-     "text": "A bank's balance sheet is a snapshot of its financial position, showing its assets, liabilities, and equity at a specific point in time.",
+     "text": "A bank's balance sheet provides a snapshot of its financial position at a specific point in time, showing its assets, liabilities, and equity.",
      "reasoning_chars": null,
      "tool_calls": []
     },
     {
      "label": "temperature_0.9_seeds_1_2_3 #1",
      "ok": true,
-     "seconds": 0.614,
+     "seconds": 0.619,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -631,7 +635,7 @@
     {
      "label": "temperature_0.9_seeds_1_2_3 #2",
      "ok": true,
-     "seconds": 0.879,
+     "seconds": 0.889,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -646,7 +650,7 @@
     {
      "label": "temperature_0.9_seeds_1_2_3 #3",
      "ok": true,
-     "seconds": 0.677,
+     "seconds": 0.678,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -683,7 +687,7 @@
     {
      "label": "concurrent request A",
      "ok": true,
-     "seconds": 5.578,
+     "seconds": 5.592,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -698,7 +702,7 @@
     {
      "label": "concurrent request B",
      "ok": false,
-     "seconds": 0.081,
+     "seconds": 0.097,
      "status": 429,
      "error_type": "RateLimitError",
      "error": "Error code: 429",
