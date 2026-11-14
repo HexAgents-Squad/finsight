@@ -91,6 +91,11 @@ As in Week 0, contracts let everyone work in parallel against fakes and sample f
   replies and before JSON extraction. Measured on 10 Nov: the endpoint ignores the switch (enable_thinking
   true/false, no switch and the "/think" soft switch gave identical replies with no reasoning), i.e. it serves
   Qwen3-8B with thinking off; W1-03 records this in ADR-016.
+- W1-03 probe (scripts/probe_endpoint.py, 14 Nov; eval/results/endpoint_probe.md; decisions in ADR-016): thinking
+  switch ignored (confirmed); response_format json_schema (strict) enforced, json_object and prompt-only JSON not
+  enough for B0Answer; native tool calling works with the tools.registry schemas (1,646 prompt tokens for the four);
+  max_tokens above 1,024 and prompt + max_tokens above 8,192 refused with 400; a second concurrent request gets
+  429 without Retry-After; about 46 generated tokens/s; temperature 0 deterministic, seed honoured.
 - The certificate is the group's CA (Caddy local root, valid for years); the server certificate is renewed every
   few hours, so never pin it. Relative LLM_CA_CERT paths start at the repo root; certs/ is git-ignored.
 - The key, the URL and the certificate stay out of git, logs, screenshots and chat outside the team.

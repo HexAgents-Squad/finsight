@@ -17,6 +17,7 @@ Everything marked "planned" below does not exist yet; check that a file exists b
 
 - Setup (see `LOCAL_SETUP.md`): Python 3.11–3.14 venv (CI: 3.12), `pip install -r requirements.txt`, copy `.env.example` to `.env`, then `ollama pull llama3.2:3b`. Embeddings run locally (`EMBED_BACKEND=sentence-transformers`, `all-MiniLM-L6-v2`, the model the index was built with; downloaded on first use).
 - LLM smoke test: `python scripts/smoke_llm.py` (local Ollama or the hosted endpoint; prints how TLS is verified and hides a remote host)
+- Endpoint capability probe (W1-03): `python scripts/probe_endpoint.py` (~30 requests, provokes one 429; writes `eval/results/endpoint_probe.{json,md}`; decisions in ADR-016)
 - Dev tools: `pip install -r requirements-dev.txt` (everything CI needs: pydantic, pyyaml, openai, httpx, pydantic-settings, requests, bs4, lxml, numpy, rank-bm25, pytest, ruff; no chromadb or torch); config in `pyproject.toml`.
 - Tests: `pytest` (single test: `pytest tests/test_companies_config.py::test_name`). Tests must run offline in seconds, using synthetic fixtures (`tests/factories.py`, `tests/fixtures/`) and fake retrievers/clients.
 - Lint (exists): `ruff check .`

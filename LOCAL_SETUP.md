@@ -84,6 +84,10 @@ file; verification is never switched off.
 4. **Run the smoke test**: `python scripts/smoke_llm.py`. It shows `TLS: verified against <group>-ca.crt` and
    `Thinking: off`, hides the endpoint's address, and ends with `OK: ...`. Post that output (never the key) in
    the team chat as your smoke-test check.
+5. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
+   thinking switch, latency, limits and determinism (~30 requests, about 2 minutes) and writes
+   `eval/results/endpoint_probe.md`. It deliberately sends two requests at once to confirm the 429, so run it only
+   when nobody else is using the key (or add `--skip concurrency`).
 
 Rules for the team key: **one active request at a time for the whole team**, 60 requests per minute and 8,192
 tokens per call (prompt + reply). The client enforces them within one process: one request at a time per
