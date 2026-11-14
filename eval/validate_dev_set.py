@@ -8,7 +8,12 @@ The development set is where the prompting baselines S1-S3 (W1-09) are tuned, so
 the gold questions (CLAUDE.md: prompts are never tuned on gold-v1). Rules:
 - Format: every gold rule (eval/schema.py item_problems / set_problems) with "dev-" ids (DevItem).
 - No shared filing period: no dev item cites a (company, fiscal year, period) that a gold item cites, and no dev
-  item asks about a company and fiscal year that a gold item asks about (its companies x fiscal_years).
+  item asks about a company and fiscal year that a gold item asks about (by its companies x fiscal_years fields;
+  refusal items leave them empty). This keeps facts apart, not filings: a later gold-cited 10-K still shows a dev
+  figure in its prior-year column.
+- The word check catches a reworded gold question, not the same idea in other words (a refusal on the same
+  template, e.g. a forecast question about another company, scores low).
+- At least one item (an emptied file must not pass).
 - No near-duplicate wording: each dev question's word overlap (Jaccard over lower-case word sets) with every gold
   question and every refusal / injection test question stays below NEAR_DUPLICATE.
 - --final: the split DEV_TARGET_COUNTS and verified_by (a second person) on every item.
@@ -32,8 +37,8 @@ EVAL_DIR = Path(__file__).resolve().parent
 DEV_FILE = EVAL_DIR / "dev_set.jsonl"
 OTHER_QUESTION_FILES = (EVAL_DIR / "refusal_tests.jsonl", EVAL_DIR / "injection_tests.jsonl")
 # Word-set overlap at which a dev question counts as a gold question reworded. Measured on gold-v1 itself: two
-# different gold questions built on one template ("What were Pfizer's / Walmart's total revenues in fiscal 2025?")
-# reach 0.79, so the limit sits just above: a shared template is fine (the dev set should look like the gold set,
+# different gold questions built on one template ("By what percentage did Alphabet's revenues / AbbVie's net
+# revenues grow from fiscal 2024 to fiscal 2025?", C03/C06) reach 0.79, so the limit sits just above: a shared template is fine (the dev set should look like the gold set,
 # and the period rule above already keeps the facts apart); a question closer than any two gold questions is not.
 NEAR_DUPLICATE = 0.8
 WORD = re.compile(r"[a-z0-9&']+")
@@ -123,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {args.gold} is invalid; validate it first (eval/validate_gold.py)", file=sys.stderr)
         return 1
 
-    errors = list(dev_rep.errors)
+    errors = list(dev_rep.errors) + ([] if dev_rep.items else [f"{args.path} has no items"])
     overlap, highest = overlap_problems(dev_rep.items, gold_rep.items, others)
     errors += overlap
     if args.final:

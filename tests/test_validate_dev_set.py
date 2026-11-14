@@ -1,5 +1,6 @@
 """eval/validate_dev_set.py: the committed development set and the rules that keep it apart from gold-v1."""
 import json
+from collections import Counter
 
 import pytest
 
@@ -26,9 +27,9 @@ def test_the_committed_development_set_is_valid_and_separate():
 
 def test_the_committed_set_has_the_planned_split():
     items = validate_file(vd.DEV_FILE, model=DevItem).items
-    assert len(items) == sum(DEV_TARGET_COUNTS.values()) == 15
-    assert vd.final_problems(items) == [f"not verified by a second person: {[i.id for i in items]}"] or \
-        all(i.verified_by for i in items)
+    assert Counter(i.category for i in items) == Counter(DEV_TARGET_COUNTS) and len(items) == 15
+    unverified = [i.id for i in items if not i.verified_by]
+    assert vd.final_problems(items) == ([f"not verified by a second person: {unverified}"] if unverified else [])
 
 
 @pytest.mark.parametrize("bad_id", ["A01", "dev-A1", "DEV-A01", "dev-H01"])
@@ -116,3 +117,9 @@ def test_cli_reports_overlap_and_missing_files(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "overlap with gold-v1: 2 problem(s)" in out and "FAILED" in out
     assert vd.main([str(tmp_path / "missing.jsonl")]) == 2
+
+
+def test_an_emptied_development_set_fails(tmp_path, capsys):
+    path = tmp_path / "dev.jsonl"
+    path.write_text("", encoding="utf-8")
+    assert vd.main([str(path)]) == 1 and "has no items" in capsys.readouterr().out
