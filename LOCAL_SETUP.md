@@ -84,7 +84,7 @@ file; verification is never switched off.
    error means the wrong file or group.
 4. **Run the smoke test**: `python scripts/smoke_llm.py`. It shows `TLS: verified against <group>-ca.crt` and
    `Thinking: off`, hides the endpoint's address, and ends with `OK: ...`. Post that output (never the key) in
-   the team chat as your smoke-test check.
+   the team chat as your smoke-test check, and add your result line to `docs/smoke_tests.md`.
 5. **Embedding endpoint (W1-16)**: put the course's `vm02-ca.crt` in `certs/` (git-ignored) and add to `.env`
    `EMBED_BASE_URL`, `EMBED_API_KEY` (the shared embedding key), `EMBED_CA_CERT=certs/vm02-ca.crt`,
    `EMBED_MODEL=bge-small-en-v1.5`, `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512`. Since the W1-04
