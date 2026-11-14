@@ -218,6 +218,7 @@ def test_main_writes_both_reports_without_the_key_or_the_host(tmp_path, monkeypa
         assert SECRET_KEY not in text and SECRET_HOST not in text
     report = json.loads(texts[0])
     assert set(report["probes"]) == set(pe.PROBES) and report["meta"]["endpoint"] == "hosted"
+    assert report["meta"]["script_changed_since_commit"] in (True, False, None)
     refused = report["probes"]["concurrency"]["outcomes"]
     assert any("<endpoint>" in (o["error"] or "") and "<key>" in o["error"] for o in refused)
     assert not list(tmp_path.glob("*.part"))

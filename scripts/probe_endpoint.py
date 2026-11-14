@@ -377,13 +377,22 @@ def git_commit() -> str | None:
         return None
 
 
+def script_changed() -> bool | None:
+    """Whether this script differs from the recorded commit (then the commit alone does not reproduce the report)."""
+    try:
+        return bool(subprocess.run(["git", "status", "--porcelain", "--", str(Path(__file__).resolve())], cwd=ROOT,
+                                   capture_output=True, text=True, check=True, timeout=10).stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def report_meta(settings: Settings) -> dict[str, Any]:
     return {"probe_version": PROBE_VERSION, "date": datetime.now(UTC).isoformat(timespec="seconds"),
             "model": settings.LLM_MODEL,
             "endpoint": "hosted" if settings.LLM_BASE_URL.lower().startswith(HTTPS) else "local",
             "thinking_setting": settings.LLM_ENABLE_THINKING, "max_tokens_setting": settings.LLM_MAX_COMPLETION_TOKENS,
             "context_setting": settings.LLM_CONTEXT_TOKENS, "min_gap_s": MIN_GAP_S, "timeout_s": PROBE_TIMEOUT_S,
-            "git_commit": git_commit()}
+            "git_commit": git_commit(), "script_changed_since_commit": script_changed()}
 
 
 def markdown(report: dict[str, Any]) -> str:
