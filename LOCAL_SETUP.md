@@ -84,7 +84,13 @@ file; verification is never switched off.
 4. **Run the smoke test**: `python scripts/smoke_llm.py`. It shows `TLS: verified against <group>-ca.crt` and
    `Thinking: off`, hides the endpoint's address, and ends with `OK: ...`. Post that output (never the key) in
    the team chat as your smoke-test check.
-5. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
+5. **Embedding endpoint (W1-16)**: put the course's `vm02-ca.crt` in `certs/` (git-ignored) and add to `.env`
+   `EMBED_BASE_URL`, `EMBED_API_KEY` (the shared embedding key), `EMBED_CA_CERT=certs/vm02-ca.crt`,
+   `EMBED_MODEL=bge-small-en-v1.5`, `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512`. Keep
+   `EMBED_BACKEND=sentence-transformers` and `EMBED_LOCAL_MODEL_NAME=all-MiniLM-L6-v2` until the index is rebuilt
+   with bge-small (ADR-021, with W1-04): search refuses an index built with another model. To try the endpoint
+   before then, override for one command, e.g. `EMBED_BACKEND=openai python scripts/smoke_llm.py`.
+6. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
    thinking switch, latency, limits and determinism (~33 requests, about 2 minutes) and writes
    `eval/results/endpoint_probe.md`. It deliberately sends two requests at once to confirm the 429, so run it only
    when nobody else is using the key (a subset such as `--skip concurrency` needs `--out-dir` elsewhere).

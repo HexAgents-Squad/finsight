@@ -103,6 +103,11 @@ As in Week 0, contracts let everyone work in parallel against fakes and sample f
   few hours, so never pin it. Relative LLM_CA_CERT paths start at the repo root; certs/ is git-ignored.
 - The key, the URL and the certificate stay out of git, logs, screenshots and chat outside the team.
 - Embeddings stay local (the endpoint has none): EMBED_BACKEND=sentence-transformers, as the index was built.
+- W1-16 (added 14 Nov): the course's embedding endpoint (bge-small-en-v1.5, own CA, 16 texts / 512 tokens per
+  request) is connected (EMBED_CA_CERT, EMBED_MAX_INPUT_TOKENS, retries) and probed
+  (scripts/probe_embeddings.py); on C3 it lifts dense recall@5 from 0.630 to 0.788 with filters (p = 0.011) and
+  leaves hybrid level (eval/results/embedding_comparison.md). ADR-021: the index moves to it in one rebuild with
+  W1-04; until then .env keeps all-MiniLM-L6-v2.
 
 2.2 Shared-key rules (W1-02, implemented in core/llm.py)
 --------------------------------------------------------
