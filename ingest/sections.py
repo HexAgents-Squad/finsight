@@ -14,6 +14,8 @@ How it works
    Item headings at all), the regions starting at "Management's Discussion and Analysis" and at the financial
    statements are labelled Item 7 / Item 8 (10-Q: Part I Item 2 / Item 1), with source_location telling where
    the text physically is. Text that maps to no Item is dropped and counted in the parse report.
+6. Page furniture is removed from every section (W1-04): "Table of Contents" links, page numbers, and the
+   running footers and headers that name the company or the report (see strip_furniture).
 """
 from __future__ import annotations
 
@@ -29,7 +31,9 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 MAIN_DOCUMENT = "main document"
 EXHIBIT = "Exhibit 13"
-MIN_SECTION_CHARS = 300          # shorter Items ("Not applicable", "[Reserved]") are dropped (spec §3)
+# Shorter Items ("Not applicable", "[Reserved]") are dropped (spec §3), judged before page furniture is removed:
+# 8 pointer Items (e.g. GS Item 11, BAC Item 14) are 235-278 characters without their footers (ADR-023)
+MIN_SECTION_CHARS = 300
 MIN_ITEMS_FOR_HEADINGS = 4       # fewer Item headings than this = the filing does not use them
 STUB_CHARS = 3_000               # an MD&A / financial-statement Item shorter than this is only a pointer
 MIN_MDNA_CHARS = 20_000          # financial statements start at least this far after the MD&A heading
@@ -332,6 +336,129 @@ class ParsedFiling:
     headings_found: int
     relocated: list[str] = field(default_factory=list)     # Item keys taken from outside their heading
     unassigned_chars: int = 0
+    furniture_lines: int = 0                               # page-furniture lines removed (W1-04)
+
+
+# ----------------------------------------------------------------------------------------------- page furniture
+# What a printed page adds to the text and a reader skips (W1-04, ADR-023): the "Table of Contents" link at the
+# top of every page, the page number, and the running footer and header naming the company or the report
+# ("Wells Fargo & Company | 27", "Apple Inc. | 2024 Form 10-K | 31", "THE GOLDMAN SACHS GROUP, INC. AND
+# SUBSIDIARIES"). Measured on the corpus before W1-04: 2,455 lone "Table of Contents" lines and 6,742 bare page
+# numbers, a fifth of them right after a sentence the page break cut (1,345).
+TOC_LINK = re.compile(r"table\s+of\s+contents(?:\s*\|\s*[^|\d]{1,40})?", re.IGNORECASE)   # "... | Alphabet Inc."
+PAGE_NUMBER_LINE = re.compile(r"\d{1,3}\.?|[-‑–—−]\s*\d{1,3}\s*[-‑–—−]")    # "31", "37." (Alphabet), "- 3 -" (Merck)
+PAGE_REF = r"(?:\d{1,3}|[A-Z]-\d{1,3})"                        # "31", "F-12"
+FORM_TOKEN = re.compile(r"\b10-([KQ])\b")                      # masked to "X-K" so "10" is not a second number
+QUARTER_TOKEN = re.compile(r"\bQ([1-4])\b")                    # "Apple Inc. | Q1 2025 Form 10-Q | 1": masked too
+REPORT_NAME = r"form\s+x-[kq]|annual\s+report|quarterly\s+report"
+SUBSIDIARIES = r"\s*,?\s*and\s+(?:its\s+)?subsidiar(?:y|ies)(?:\s+companies)?"     # required for a header
+FURNITURE_MAX_CHARS = 80
+# A footer or header must repeat in the filing, so a one-off line that happens to name the company stays
+MIN_FURNITURE_REPEATS = 3
+SENTENCE_END_CHARS = ".!?:;"
+DIGIT = re.compile(r"\d")
+
+
+@dataclass(frozen=True)
+class Furniture:
+    """One filing's running footers and headers: the line shapes (digits as "#") that name the company or the
+    report, carry at most one page number, and repeat at least MIN_FURNITURE_REPEATS times. `line in furniture`
+    says what a line looks like on its own; furniture_lines() decides with its neighbours."""
+    shapes: frozenset[str] = frozenset()
+
+    def __contains__(self, line: str) -> bool:
+        s = line.strip()
+        return bool(s) and (TOC_LINK.fullmatch(s) is not None or PAGE_NUMBER_LINE.fullmatch(s) is not None
+                            or DIGIT.sub("#", s) in self.shapes)
+
+
+def furniture_lines(lines: list[str], furniture: Furniture) -> set[int]:
+    """Indexes of the lines to remove. A bare number right under a table row (no blank line between) is the
+    row's value, not a page number: Merck's total "704" under "... attributable to noncontrolling interests | 3",
+    whose label cell is empty (measured; every page number in the corpus follows a blank line or text). A
+    footer- or header-shaped line with a table row right above or below it that is not furniture itself is a
+    row of that table ("Net earnings attributable to AbbVie Inc. | 822" in every year's statement): no removed
+    footer or header in the corpus touches a table row (measured)."""
+    out = set()
+    for i, line in enumerate(lines):
+        if line not in furniture:
+            continue
+        s = line.strip()
+        if PAGE_NUMBER_LINE.fullmatch(s):
+            if i > 0 and "|" in lines[i - 1]:
+                continue
+        elif not TOC_LINK.fullmatch(s) and any(
+                0 <= j < len(lines) and "|" in lines[j] and lines[j] not in furniture for j in (i - 1, i + 1)):
+            continue
+        out.add(i)
+    return out
+
+
+def _running_line_patterns(names: tuple[str, ...]) -> tuple[re.Pattern, re.Pattern]:
+    """(footer, header) patterns for a company. Footer: one page reference before or after text naming the
+    company or the report, with no other number but a year (and a quarter, masked first). Header: the company's
+    name followed by "and Subsidiaries" (or "and Subsidiary Companies"); the name alone is not enough, as it also
+    labels table rows and chart legends ("Bank of America Corporation" above its senior notes, measured). Only
+    full names and aliases of more than one word count: "Chase | 12" may be a table row."""
+    body = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) or r"(?!)"
+    core = (rf"(?=.*(?:{body}|{REPORT_NAME}))[^|\d]*(?:\d{{4}}[^|\d]*)?"
+            r"(?:\|[^|\d]*(?:\d{4}[^|\d]*)?)*")
+    footer = re.compile(rf"{PAGE_REF}\s*(?:\|\s*)+{core}|{PAGE_REF}\s+{core}|{core}(?:\s*\|)+\s*{PAGE_REF}"
+                        rf"|{core}\s+{PAGE_REF}", re.IGNORECASE)
+    header = re.compile(rf"(?:{body}){SUBSIDIARIES}", re.IGNORECASE)
+    return footer, header
+
+
+def find_furniture(texts: list[str], names: tuple[str, ...]) -> Furniture:
+    """The running footers and headers of one filing (main document and exhibit), given the company's names."""
+    footer, header = _running_line_patterns(names)
+    counts: dict[str, int] = {}
+    for text in texts:
+        for line in text.split("\n"):
+            s = line.strip()
+            if not s or len(s) > FURNITURE_MAX_CHARS:
+                continue
+            masked = QUARTER_TOKEN.sub(r"QX", FORM_TOKEN.sub(r"X-\1", s))
+            if footer.fullmatch(masked) or header.fullmatch(s):
+                key = DIGIT.sub("#", s)
+                counts[key] = counts.get(key, 0) + 1
+    return Furniture(frozenset(k for k, n in counts.items() if n >= MIN_FURNITURE_REPEATS))
+
+
+def strip_furniture(text: str, furniture: Furniture) -> tuple[str, int]:
+    """(text without its furniture lines, lines removed). A sentence the page break cut ("... For example," |
+    "31" | "Table of Contents" | "protect our ...") is joined again when the kept line before the removed run
+    does not end a sentence, is no table row and does not itself follow removed furniture (a running section
+    title between a footer and a header, Pfizer's "Notes to Consolidated Financial Statements", measured), and
+    the line after the run starts in lower case. A word hyphenated across the break is joined without a space."""
+    lines = text.split("\n")
+    drop = furniture_lines(lines, furniture)
+    if not drop:
+        return text, 0
+    out: list[str] = []
+    after_furniture: set[int] = set()        # indexes in `out` of kept lines that directly follow furniture
+    cut = False                              # furniture removed since the last kept non-blank line
+    for i, line in enumerate(lines):
+        if i in drop:
+            cut = True
+            continue
+        if not line.strip():
+            out.append(line)
+            continue
+        if cut:
+            prev = next((j for j in range(len(out) - 1, -1, -1) if out[j].strip()), None)
+            target = out[prev].rstrip() if prev is not None else ""
+            if (target and prev not in after_furniture and target[-1] not in SENTENCE_END_CHARS
+                    and "|" not in target and line.lstrip()[:1].islower()):
+                del out[prev + 1:]
+                glue = "" if target.endswith("-") and target[-2:-1].isalpha() else " "
+                out[prev] = target + glue + line.lstrip()
+                cut = False
+                continue
+            after_furniture.add(len(out))
+        cut = False
+        out.append(line)
+    return BLANK_LINE_RUN.sub("\n\n", "\n".join(out)).strip(), len(drop)
 
 
 def toc_row_page(line: str) -> int | None:
@@ -432,8 +559,12 @@ def _regions(unassigned: str, exhibit_text: str | None) -> list[tuple[str, str, 
     return out
 
 
-def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> ParsedFiling:
+def parse_filing(main_text: str, form: str, exhibit_text: str | None = None,
+                 names: tuple[str, ...] = ()) -> ParsedFiling:
+    """The filing's sections. `names` are the company's name and aliases (company_names), which identify its
+    running footers and headers; without them only "Table of Contents" lines and page numbers are removed."""
     mdna_key, fs_key = MDNA_KEY[form], FS_KEY[form]
+    furniture = find_furniture([main_text, exhibit_text or ""], names)
     sections, unassigned = split_items(main_text, form)
     headings_found = len(sections)
     if headings_found < MIN_ITEMS_FOR_HEADINGS:          # no usable Item headings: everything is unassigned
@@ -503,12 +634,14 @@ def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> 
             relocated.append(key)
 
     trimmed_chars = 0                                    # cut off sections below, counted as unassigned
+    furniture_lines = 0                                  # page furniture is not text: counted on its own
     if fs_key in relocated:                              # other 10-K sections after relocated statements (Citi)
         body = result[fs_key].text
         ends = [p for p in heading_offsets(body, STATEMENTS_END) if p > MIN_MDNA_CHARS]
         if ends:
             trimmed_chars += len(body) - ends[0]
             result[fs_key] = Section(fs_key, body[:ends[0]].rstrip(), result[fs_key].location)
+    long_enough: dict[str, bool] = {}
     for key, section in result.items():
         body = strip_toc(section.text)
         trimmed_chars += len(section.text) - len(body)
@@ -516,13 +649,21 @@ def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> 
         page = SIGNATURE_PAGE.search(section.text)
         if page:
             trimmed_chars += len(section.text) - page.start()
-            result[key] = Section(key, section.text[:page.start()].rstrip(), section.location)
+            section = result[key] = Section(key, section.text[:page.start()].rstrip(), section.location)
+        # after strip_toc, which takes a "Table of Contents" line as the header of a contents block. Whether a
+        # section is long enough to keep is judged before: removing furniture never changes which Items exist
+        # (a 301-character pointer Item ending in a footer stays, as before W1-04)
+        long_enough[key] = len(section.text) >= MIN_SECTION_CHARS
+        body, removed = strip_furniture(section.text, furniture)
+        furniture_lines += removed if long_enough[key] else 0     # count only what the corpus loses
 
-    kept = [s for s in result.values() if len(s.text) >= MIN_SECTION_CHARS]
+        result[key] = Section(key, body, section.location)
+
+    kept = [s for key, s in result.items() if long_enough[key]]
     total_unassigned = len(unassigned) - used.get(MAIN_DOCUMENT, 0) + trimmed_chars
     if exhibit_text:
         total_unassigned += len(exhibit_text) - used.get(EXHIBIT, 0)
-    return ParsedFiling(kept, headings_found, relocated, max(total_unassigned, 0))
+    return ParsedFiling(kept, headings_found, relocated, max(total_unassigned, 0), furniture_lines)
 
 
 # ----------------------------------------------------------------------------------------------- documents
@@ -568,6 +709,11 @@ def corpus_problems(docs: list[dict], expected_10k: int) -> list[str]:
     toc_like = sorted(d["doc_id"] for d in docs if "text" in d and toc_blocks(d["text"].split("\n")))
     if toc_like:
         out.append(f"documents containing a table-of-contents block: {toc_like}")
+    furnished = sorted(d["doc_id"] for d in docs if "text" in d
+                       and furniture_lines(d["text"].split("\n"), Furniture()))
+    if furnished:
+        out.append(f"documents still holding 'Table of Contents' lines or page numbers: {furnished[:10]}"
+                   f"{' ...' if len(furnished) > 10 else ''} ({len(furnished)})")
     for key in ("Item 7", "Item 8"):
         long_enough = {(d["ticker"], d["fiscal_year"]) for d in docs
                        if d["form"] == "10-K" and d["item"] == key and d["n_chars"] > MIN_CORE_ITEM_CHARS}

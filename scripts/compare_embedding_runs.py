@@ -2,8 +2,8 @@
 
 Run:  python scripts/compare_embedding_runs.py      # -> eval/results/embedding_comparison.{json,md}
 
-Inputs are run files written by eval/run_retrieval.py: the committed all-MiniLM-L6-v2 runs (eval/results/runs/,
-the index ADR-013 built) and the bge-small-en-v1.5 runs (eval/results/embedding_comparison/runs_bge/, from a C3
+Inputs are run files written by eval/run_retrieval.py: the all-MiniLM-L6-v2 runs (eval/results/embedding_comparison/
+runs_minilm/, copied from eval/results/runs/ as they were before the W1-04 rebuild: the index ADR-013 built) and the bge-small-en-v1.5 runs (eval/results/embedding_comparison/runs_bge/, from a C3
 index built through the hosted endpoint with EMBED_MAX_INPUT_TOKENS=512). For C3 dense and hybrid, with and
 without the company+year filters, it reports recall@1/5/10 and MRR for each model (eval/retrieval_eval.py) and
 a paired comparison of recall@5 per question: how many questions each model does better on, and a two-sided
@@ -26,7 +26,9 @@ from eval.validate_gold import DEFAULT_PATH as GOLD_FILE  # noqa: E402
 from eval.validate_gold import validate_file  # noqa: E402
 
 RESULTS = ROOT / "eval" / "results"
-MODELS = {"all-MiniLM-L6-v2": RESULTS / "runs", "bge-small-en-v1.5": RESULTS / "embedding_comparison" / "runs_bge"}
+# Both sets are the W1-16 runs on the corpus before W1-04 (eval/results/runs/ has moved on to the cleaned corpus)
+MODELS = {"all-MiniLM-L6-v2": RESULTS / "embedding_comparison" / "runs_minilm",
+          "bge-small-en-v1.5": RESULTS / "embedding_comparison" / "runs_bge"}
 SETTINGS = [("C3", r, f) for r in ("dense", "hybrid") for f in ("none", "company_year")]
 PAIRED_K = 5
 OUT_DIR = RESULTS                       # where the report goes (the inputs stay under RESULTS)

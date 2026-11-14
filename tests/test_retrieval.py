@@ -197,6 +197,32 @@ def test_dense_refuses_a_different_model_or_a_stale_collection():
         DenseIndex(col, CHUNKS, Embedder(fake_embed, "fake:other"))
     with pytest.raises(ValueError, match="run ingest/04_index.py again"):
         DenseIndex(col, CHUNKS[:-1], EMBEDDER)
+    col.metadata = {"hnsw:space": "cosine"}                          # no recorded model: refused too
+    with pytest.raises(ValueError, match="embedded with None"):
+        DenseIndex(col, CHUNKS, EMBEDDER)
+
+
+def test_model_names_ignore_the_backend_and_the_publisher():
+    from retrieval.dense import model_name
+    assert model_name("bge-small-en-v1.5") == model_name("BAAI/bge-small-en-v1.5") == "bge-small-en-v1.5"
+    assert model_name("sentence-transformers:all-MiniLM-L6-v2") == "all-MiniLM-L6-v2"     # recorded before W1-04
+    assert model_name("openai:bge-small-en-v1.5") == "bge-small-en-v1.5"
+    # an Ollama tag other than the default stays: two models tagged "latest" must not look alike (review)
+    assert model_name("nomic-embed-text:latest") != model_name("mxbai-embed-large:latest")
+    assert model_name("nomic-embed-text:latest") == model_name("nomic-embed-text") == "nomic-embed-text"
+    assert model_name("nomic-embed-text:v1.5") == "nomic-embed-text:v1.5"
+    assert model_name("acme/bge-small-en-v1.5") != model_name("BAAI/bge-small-en-v1.5")   # a fork (review)
+    assert model_name("sentence-transformers/all-MiniLM-L6-v2") == "all-MiniLM-L6-v2"
+
+
+def test_an_index_built_through_the_endpoint_is_searched_with_the_local_model():
+    # ADR-021: the hosted bge-small and BAAI/bge-small-en-v1.5 run locally give the same vectors
+    col = build_collection(FakeClient(), CHUNKS, Embedder(fake_embed, "bge-small-en-v1.5"))
+    assert DenseIndex(col, CHUNKS, Embedder(fake_embed, "BAAI/bge-small-en-v1.5")).search("interest", k=1)
+    legacy = build_collection(FakeClient(), CHUNKS, Embedder(fake_embed, "sentence-transformers:all-MiniLM-L6-v2"))
+    assert DenseIndex(legacy, CHUNKS, Embedder(fake_embed, "all-MiniLM-L6-v2")).search("interest", k=1)
+    with pytest.raises(ValueError, match="embedded with 'bge-small-en-v1.5'"):
+        DenseIndex(col, CHUNKS, Embedder(fake_embed, "all-MiniLM-L6-v2"))
 
 
 def test_dense_refuses_chunks_with_other_ids_even_at_the_same_count():
@@ -227,7 +253,7 @@ def test_embedder_close_is_safe_twice_and_closes_the_client(monkeypatch):
     monkeypatch.setattr(core.llm, "LLMClient", FakeLLM)
     monkeypatch.setattr(core.settings, "get_settings", lambda: settings)
     emb = embedder_from_settings()
-    assert emb.model_id == "sentence-transformers:m" and emb.embed(["a", "b"]) == [[1.0], [1.0]]
+    assert emb.model_id == "m" and emb.embed(["a", "b"]) == [[1.0], [1.0]]
     emb.close()
     emb.close()
     assert FakeLLM.closed == 1

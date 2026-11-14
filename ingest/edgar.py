@@ -65,6 +65,14 @@ class Scope:
         return min(self.tenk_years | self.tenq_years)
 
 
+def company_names(path=COMPANIES_FILE) -> dict[str, tuple[str, ...]]:
+    """Per ticker, the names its filings print in running footers and headers: the full name and every alias
+    of more than one word (a one-word alias such as "Chase" or "Meta" is too likely to start a table row)."""
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return {c["ticker"]: (c["name"], *(a for a in c.get("aliases") or () if " " in a.strip()))
+            for c in cfg["companies"]}
+
+
 def load_scope(path=COMPANIES_FILE) -> Scope:
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     forms = cfg["forms"]

@@ -35,9 +35,10 @@
    On a CPU a long prompt takes about a minute, so pass `--timeout 300` to `eval/run_models.py` for local runs,
    and `--context-window 8192` so the truncation check looks for a cut at the model's real window (only with
    the 8k model: on plain `llama3.2:3b` that value would hide a cut at Ollama's smaller window).
-   Embeddings need no server: `EMBED_BACKEND=sentence-transformers` (the default) runs `all-MiniLM-L6-v2`
-   locally, and the first run downloads it from Hugging Face (~90 MB, about 40 s; internet needed once). The
-   retrieval index is built with this model, so keep it unless you rebuild the index (ADR-013).
+   Embeddings need no server: `EMBED_BACKEND=sentence-transformers` (the default) runs `BAAI/bge-small-en-v1.5`
+   locally, and the first run downloads it from Hugging Face (~130 MB; internet needed once). The retrieval index
+   is built with bge-small-en-v1.5 (ADR-021, W1-04); the course's embedding endpoint (step 5 below) serves the
+   same model, so either embeds queries for it. Another model needs a rebuilt index.
 
 5. **Configure environment variables**
    ```bash
@@ -86,10 +87,11 @@ file; verification is never switched off.
    the team chat as your smoke-test check.
 5. **Embedding endpoint (W1-16)**: put the course's `vm02-ca.crt` in `certs/` (git-ignored) and add to `.env`
    `EMBED_BASE_URL`, `EMBED_API_KEY` (the shared embedding key), `EMBED_CA_CERT=certs/vm02-ca.crt`,
-   `EMBED_MODEL=bge-small-en-v1.5`, `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512`. Keep
-   `EMBED_BACKEND=sentence-transformers` and `EMBED_LOCAL_MODEL_NAME=all-MiniLM-L6-v2` until the index is rebuilt
-   with bge-small (ADR-021, with W1-04): search refuses an index built with another model. To try the endpoint
-   before then, override for one command, e.g. `EMBED_BACKEND=openai python scripts/smoke_llm.py`.
+   `EMBED_MODEL=bge-small-en-v1.5`, `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512`. Since the W1-04
+   rebuild the index is bge-small-en-v1.5: with `EMBED_BACKEND=openai` queries go to the endpoint; with the default
+   `EMBED_BACKEND=sentence-transformers` and `EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5` they are embedded
+   locally with the same model (the fallback when the endpoint is down). A full rebuild
+   (`EMBED_BACKEND=openai python ingest/04_index.py`) takes about 1.6 h through the endpoint (94 min measured in W1-04).
 6. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
    thinking switch, latency, limits and determinism (~33 requests, about 2 minutes) and writes
    `eval/results/endpoint_probe.md`. It deliberately sends two requests at once to confirm the 429, so run it only

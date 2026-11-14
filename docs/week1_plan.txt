@@ -108,6 +108,9 @@ As in Week 0, contracts let everyone work in parallel against fakes and sample f
   (scripts/probe_embeddings.py); on C3 it lifts dense recall@5 from 0.630 to 0.788 with filters (p = 0.011) and
   leaves hybrid level (eval/results/embedding_comparison.md). ADR-021: the index moves to it in one rebuild with
   W1-04; until then .env keeps all-MiniLM-L6-v2.
+- W1-04 (14 Nov): the index is rebuilt with bge-small-en-v1.5 and MiniLM is refused. Set EMBED_BACKEND=openai
+  (the endpoint), or EMBED_BACKEND=sentence-transformers with EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5 (the
+  same vectors, run locally, e.g. when the endpoint is down).
 
 2.2 Shared-key rules (W1-02, implemented in core/llm.py)
 --------------------------------------------------------
@@ -377,6 +380,12 @@ W1-04 (Chandra Shekhar): ingest/sections.py drops lone "Table of Contents" lines
   footers (precompiled patterns, positive and negative tests); re-parse to a temporary --out-dir and diff
   (1,260 documents, no Item lost, gold verbatim-figure check passes); promote; re-chunk; rebuild BM25 and dense
   overnight; re-run eval/run_retrieval.py. Closes ADR-015 item 6 ("Table of Contents" lines 2,455 → ~0).
+  Done as in ADR-023: 16,817 furniture lines removed (Table of Contents 2,754, page numbers 6,871, running footers
+  5,365, running headers 1,827; 0.69% of the characters), 1,260 documents, no other word changed, the gold
+  verbatim-figure check 118/118 (scripts/compare_sections.py, eval/results/furniture_removal.md); the dense
+  rebuild is bge-small-en-v1.5 through the endpoint (ADR-021), ~31 min per variant. C3 hybrid with filters
+  recall@5 0.747 -> 0.774; BM25 within noise on every row; unfiltered dense lost the company names the running
+  headers carried (follow-up: name the company in the chunk header; eval/results/retrieval_summary.md).
 W1-10 (Alok, with Amresh, Chandra Shekhar, all): second verifier for the 22 refusal and 12 injection tests
   (validate_test_sets.py --final passes); independent WP2 spot check; smoke test against the endpoint on every
   laptop; LOCAL_SETUP wording fix; docs/mentor_meetings.md entry for 7 Nov; UPGRAD-41 closed.
