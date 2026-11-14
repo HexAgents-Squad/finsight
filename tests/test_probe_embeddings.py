@@ -184,3 +184,26 @@ def test_chunk_length_summary_counts_both_limits():
     assert row["over_256_pct"] == 50.0 and row["over_512_pct"] == 25.0
     md = cl.markdown({"C3": row})
     assert "| C3 | 4 |" in md and "2 (50.0%)" in md and "1 (25.0%)" in md
+
+
+def test_sign_test_is_the_exact_two_sided_binomial():
+    import scripts.compare_embedding_runs as ce
+    assert ce.sign_test(0, 0) == 1.0 and ce.sign_test(5, 5) == 1.0
+    assert abs(ce.sign_test(23, 5) - 0.000903) < 1e-5                  # the dense / no-filter row (measured)
+    assert ce.sign_test(1, 0) == 1.0 and abs(ce.sign_test(6, 0) - 0.03125) < 1e-9
+
+
+def test_paired_comparison_counts_questions_per_model():
+    import scripts.compare_embedding_runs as ce
+    from eval.validate_gold import DEFAULT_PATH, validate_file
+    items = [i for i in validate_file(DEFAULT_PATH).items if i.gold_sources][:3]
+    gold = {i.id: [s.key() for s in i.gold_sources] for i in items}
+    a = {items[0].id: gold[items[0].id], items[1].id: [], items[2].id: gold[items[2].id]}
+    b = {items[0].id: [], items[1].id: gold[items[1].id], items[2].id: gold[items[2].id]}
+    assert ce.compare(items, a, b) == {"better": 1, "worse": 1, "same": 1, "sign_test_p": 1.0}
+
+
+def test_the_committed_comparison_regenerates():
+    import scripts.compare_embedding_runs as ce
+    committed = (ce.RESULTS / "embedding_comparison.md").read_text(encoding="utf-8")
+    assert ce.main() == 0 and (ce.RESULTS / "embedding_comparison.md").read_text(encoding="utf-8") == committed
