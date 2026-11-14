@@ -17,7 +17,9 @@ Requests go through core.llm's configured client (the group CA, the timeout belo
 or cache: a failure is measured as it happens. The output never contains the API key, and a remote host is shown
 as <endpoint> (scripts/smoke_llm.py's redaction) in everything written: replies, errors and tool results, so the
 report can be committed and pasted. Tool calls in the agent loop run through tools.registry.call_tool_async, as
-the Week 2 agent will. A probe that crashes is recorded as crashed and the others still run.
+the Week 2 agent will. A probe that crashes is recorded as crashed and the others still run. If the model calls search_filings and
+EMBED_BACKEND is the remote openai backend, its embedding requests use the key outside this script's spacing
+(the default local sentence-transformers backend sends none).
 Exit codes: 0 = written (a probe that finds a feature missing still counts), 1 = settings missing, a subset aimed
 at the committed report, or no request answered successfully (bad key, network, TLS: nothing written).
 """
@@ -125,17 +127,18 @@ class Session:
             return Outcome(label, False, round(time.perf_counter() - start, 3), error_type=type(err).__name__,
                            error=self.clean(str(err))), None
         outcome = outcome_of(label, response, time.perf_counter() - start)
-        if outcome.text:
-            outcome.text = self.clean(outcome.text)
+        if outcome.text:                    # whole (the checks parse it), redacted; cut only in the report
+            outcome.text = self.clean(outcome.text, keep=None)
         for call in outcome.tool_calls:
-            call["arguments"] = self.clean(call["arguments"])
+            call["arguments"] = self.clean(call["arguments"], keep=None)
         return outcome, response
 
-    def clean(self, text: str) -> str:
-        """An error message fit for the report: no host, no key, not too long."""
+    def clean(self, text: str, keep: int | None = TEXT_KEEP) -> str:
+        """`text` fit for the report: no host, no key, and at most `keep` characters (None: all)."""
         key = self.settings.LLM_API_KEY.get_secret_value()
         text = redact(text, self.settings.LLM_BASE_URL)
-        return (text.replace(key, "<key>") if key else text)[:TEXT_KEEP]
+        text = text.replace(key, "<key>") if key else text
+        return text if keep is None else text[:keep]
 
 
 def outcome_of(label: str, response: Any, seconds: float) -> Outcome:
@@ -150,7 +153,7 @@ def outcome_of(label: str, response: Any, seconds: float) -> Outcome:
     return Outcome(label, True, round(seconds, 3), status=200, finish_reason=getattr(choice, "finish_reason", None),
                    prompt_tokens=getattr(usage, "prompt_tokens", None),
                    completion_tokens=getattr(usage, "completion_tokens", None),
-                   text=content[:TEXT_KEEP] if isinstance(content, str) else None,
+                   text=content if isinstance(content, str) else None,
                    reasoning_chars=len(reasoning) if isinstance(reasoning, str) else None, tool_calls=calls)
 
 
@@ -241,8 +244,12 @@ async def tool_verdict(s: Session, outcome: Outcome) -> dict[str, Any]:
     call = outcome.tool_calls[0]
     result = await call_tool_async(call["name"], call["arguments"])
     error = result.get("error") if isinstance(result, dict) else None
-    rejected = isinstance(error, dict) and error.get("type") == "invalid_input"
-    return {"tool_accepts": not rejected, **({"tool_error": s.clean(str(error.get("message")))} if rejected else {})}
+    if not isinstance(error, dict):
+        return {"tool_accepts": True}
+    # invalid_input = the tool refuses the arguments; data_missing, out_of_corpus etc. = arguments accepted but no
+    # answer here (e.g. no fact cache on this machine), so the type is always recorded
+    return {"tool_accepts": error.get("type") != "invalid_input", "tool_error_type": error.get("type"),
+            "tool_error": s.clean(str(error.get("message")))}
 
 
 async def tool_loop(s: Session, messages: list[dict[str, Any]]) -> tuple[list[Outcome], dict[str, Any]]:
@@ -266,7 +273,7 @@ async def tool_loop(s: Session, messages: list[dict[str, Any]]) -> tuple[list[Ou
             result = await call_tool_async(c.function.name, c.function.arguments)
             working.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(result, default=str)})
             shown = result.get("error", {}).get("message") if isinstance(result, dict) and "error" in result \
-                else (result.get("result") if isinstance(result, dict) else result)
+                else (result.get("result", result.get("value")) if isinstance(result, dict) else result)
             rounds.append({"call": s.clean(f"{c.function.name}({c.function.arguments})"),
                            "result": shown if isinstance(shown, int | float) or shown is None else s.clean(str(shown))})
     return outcomes, {"rounds": rounds, "replies": MAX_TOOL_ROUNDS, "answered": False, "answer": "",
@@ -333,8 +340,10 @@ async def probe_limits(s: Session) -> dict[str, Any]:
                                 f"(over {context})",
                                 s.base([{"role": "user", "content": prompt + "Summarise in one line."}]))
             outcomes.append(o)
-            findings["over_context"] = {"prompt_tokens_counted": counted, "target": target, "accepted": o.ok,
-                                        "status": o.status, "error": o.error}
+            findings["over_context"] = {
+                "prompt_tokens_counted": counted, "target": target, "accepted": o.ok, "status": o.status,
+                "error": o.error, "note": "the server's 'at least N input tokens' is its bound (context - max_tokens"
+                                          " + 1), not the prompt's size"}
     return {"outcomes": outcomes, "findings": findings}
 
 
@@ -377,11 +386,13 @@ def git_commit() -> str | None:
         return None
 
 
-def script_changed() -> bool | None:
-    """Whether this script differs from the recorded commit (then the commit alone does not reproduce the report)."""
+def working_tree_changed() -> bool | None:
+    """Whether tracked code differs from the recorded commit (this script, tools/, core/, eval/ all shape the
+    probe), in which case the commit alone does not reproduce the report. The report files themselves are left out."""
     try:
-        return bool(subprocess.run(["git", "status", "--porcelain", "--", str(Path(__file__).resolve())], cwd=ROOT,
-                                   capture_output=True, text=True, check=True, timeout=10).stdout.strip())
+        out = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True,
+                             text=True, check=True, timeout=10).stdout
+        return any(line.strip() and OUT_NAME not in line for line in out.splitlines())
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -392,7 +403,7 @@ def report_meta(settings: Settings) -> dict[str, Any]:
             "endpoint": "hosted" if settings.LLM_BASE_URL.lower().startswith(HTTPS) else "local",
             "thinking_setting": settings.LLM_ENABLE_THINKING, "max_tokens_setting": settings.LLM_MAX_COMPLETION_TOKENS,
             "context_setting": settings.LLM_CONTEXT_TOKENS, "min_gap_s": MIN_GAP_S, "timeout_s": PROBE_TIMEOUT_S,
-            "git_commit": git_commit(), "script_changed_since_commit": script_changed()}
+            "git_commit": git_commit(), "code_changed_since_commit": working_tree_changed()}
 
 
 def markdown(report: dict[str, Any]) -> str:
@@ -431,6 +442,16 @@ def write_report(report: dict[str, Any], out_dir: Path) -> list[Path]:
     return paths
 
 
+def for_report(outcome: Outcome) -> dict[str, Any]:
+    """The outcome as written: replies and tool arguments cut to TEXT_KEEP (the checks saw them whole)."""
+    row = asdict(outcome)
+    if row["text"]:
+        row["text"] = row["text"][:TEXT_KEEP]
+    for call in row["tool_calls"]:
+        call["arguments"] = call["arguments"][:TEXT_KEEP]
+    return row
+
+
 async def run(client: Any, settings: Settings, names: list[str]) -> dict[str, Any]:
     session = Session(client, settings)
     probes = {}
@@ -443,7 +464,7 @@ async def run(client: Any, settings: Settings, names: list[str]) -> dict[str, An
             print(f"[{name}] crashed: {message}", flush=True)
             probes[name] = {"outcomes": [], "findings": {"crashed": message}}
             continue
-        probes[name] = {"outcomes": [asdict(o) for o in result["outcomes"]], "findings": result["findings"]}
+        probes[name] = {"outcomes": [for_report(o) for o in result["outcomes"]], "findings": result["findings"]}
         failed = sum(not o.ok for o in result["outcomes"])
         print(f"[{name}] {len(result['outcomes'])} requests, {failed} refused or failed", flush=True)
     return {"meta": report_meta(settings), "probes": probes}
@@ -461,7 +482,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = get_settings()
     except ValidationError as err:
-        print(f"ERROR: settings are incomplete (copy .env.example to .env):\n{err}", file=sys.stderr)
+        fields = ", ".join(".".join(str(x) for x in e["loc"]) for e in err.errors())
+        print(f"ERROR: settings are incomplete or invalid ({fields}); check .env against .env.example",
+              file=sys.stderr)
         return 1
     for handler in logging.getLogger().handlers:
         handler.addFilter(RedactHost(settings.LLM_BASE_URL))

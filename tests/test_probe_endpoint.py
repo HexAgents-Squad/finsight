@@ -20,6 +20,22 @@ VALID_B0 = json.dumps({"answer": "Apple's total net sales were $391,035 million.
 @pytest.fixture(autouse=True)
 def no_gap(monkeypatch):
     monkeypatch.setattr(pe, "MIN_GAP_S", 0.0)
+    monkeypatch.setattr(pe, "call_tool_async", fake_tool)       # never the developer's data/ (hermetic)
+
+
+async def fake_tool(name, arguments):
+    """The registry's answers for the calls the fake endpoint makes, without data/ or an index."""
+    args = json.loads(arguments)
+    if name == "calculate":
+        if "unit" in args:
+            return {"error": {"type": "invalid_input", "message": "unit is only for difference and sum; "
+                                                                  f"{args['operation']} returns '%'"}}
+        return {"operation": args["operation"], "result": 2.0 if args["operation"] == "growth" else 98.0}
+    if name == "get_financial_fact":
+        if "ticker" not in args or args.get("metric") != "revenue":
+            return {"error": {"type": "invalid_input", "message": "unknown metric or missing ticker"}}
+        return {"value": 391035, "unit": "USD millions"}
+    return {"error": {"type": "data_missing", "message": "no index"}}
 
 
 def settings(**kw):
@@ -218,7 +234,7 @@ def test_main_writes_both_reports_without_the_key_or_the_host(tmp_path, monkeypa
         assert SECRET_KEY not in text and SECRET_HOST not in text
     report = json.loads(texts[0])
     assert set(report["probes"]) == set(pe.PROBES) and report["meta"]["endpoint"] == "hosted"
-    assert report["meta"]["script_changed_since_commit"] in (True, False, None)
+    assert report["meta"]["code_changed_since_commit"] is pe.working_tree_changed()
     refused = report["probes"]["concurrency"]["outcomes"]
     assert any("<endpoint>" in (o["error"] or "") and "<key>" in o["error"] for o in refused)
     assert not list(tmp_path.glob("*.part"))
@@ -339,5 +355,82 @@ def test_a_schema_valid_call_the_tool_rejects_is_flagged(monkeypatch):
     monkeypatch.setattr(pe, "call_tool_async", tool)
     outcome = pe.Outcome("x", True, 1.0, tool_calls=[{"name": "get_financial_fact", "arguments": "{}"}])
     assert asyncio.run(pe.tool_verdict(pe.Session(Endpoint(), settings()), outcome)) == {
-        "tool_accepts": False, "tool_error": "unknown metric 'net_sales'"}
+        "tool_accepts": False, "tool_error_type": "invalid_input", "tool_error": "unknown metric 'net_sales'"}
     assert asyncio.run(pe.tool_verdict(pe.Session(Endpoint(), settings()), pe.Outcome("x", True, 1.0))) == {}
+
+
+# --- added after the final review of PR #25 ----------------------------------------------------------------------
+
+def test_checks_see_the_whole_reply_and_the_report_keeps_400_characters():
+    long_b0 = json.loads(VALID_B0) | {"answer": "x" * 600}
+    outcome = pe.outcome_of("x", completion(json.dumps(long_b0)), 1.0)
+    assert len(outcome.text) > pe.TEXT_KEEP and pe.b0_check(outcome) == {"accepted": True, "valid_b0": True}
+    long_args = json.dumps({"query": "q" * 600, "ticker": "AAPL"})
+    call = pe.outcome_of("x", completion(tool_calls=[("search_filings", long_args)]), 1.0)
+    assert call.tool_calls[0]["arguments"] == long_args
+    row = pe.for_report(outcome)
+    assert len(row["text"]) == pe.TEXT_KEEP and len(pe.for_report(call)["tool_calls"][0]["arguments"]) == pe.TEXT_KEEP
+    a = pe.outcome_of("a", completion("same start " * 50 + "A"), 1.0)
+    b = pe.outcome_of("b", completion("same start " * 50 + "B"), 1.0)
+    assert pe.same_text([a, b]) is False                                # differ after character 400
+
+
+def test_a_tool_error_other_than_invalid_input_is_recorded_with_its_type(monkeypatch):
+    async def missing(name, arguments):
+        return {"error": {"type": "data_missing", "message": "XBRL cache not built"}}
+
+    monkeypatch.setattr(pe, "call_tool_async", missing)
+    outcome = pe.Outcome("x", True, 1.0, tool_calls=[{"name": "get_financial_fact", "arguments": "{}"}])
+    assert asyncio.run(pe.tool_verdict(pe.Session(Endpoint(), settings()), outcome)) == {
+        "tool_accepts": True, "tool_error_type": "data_missing", "tool_error": "XBRL cache not built"}
+
+
+def test_the_loop_shows_a_fact_tools_value():
+    class FactThenAnswer(Endpoint):
+        def answer(self, r):
+            if any(m["role"] == "tool" for m in r["messages"]):
+                return completion("Apple's net sales were $391,035 million.")
+            return completion(tool_calls=[("get_financial_fact", '{"ticker": "AAPL", "metric": "revenue", '
+                                                                 '"fiscal_year": 2024}')], finish="tool_calls")
+
+    _, loop = asyncio.run(pe.tool_loop(pe.Session(FactThenAnswer(), settings()), [{"role": "user", "content": "q"}]))
+    assert loop["rounds"][0]["result"] == 391035 and loop["answered"] is True
+
+
+def test_no_tokenizer_skips_the_over_context_request(monkeypatch):
+    import core.tokens
+
+    def unavailable(text):
+        raise OSError("no tokenizer files")
+
+    monkeypatch.setattr(core.tokens, "count_tokens", unavailable)
+    result, ep = probe("limits", LLM_CONTEXT_TOKENS=4096)
+    assert result["findings"]["over_context"] == {"skipped": "Qwen tokenizer unavailable (OSError)"}
+    assert len(ep.sent) == len(pe.LIMIT_MAX_TOKENS)
+
+
+def test_a_changed_working_tree_is_flagged_but_the_reports_themselves_are_not(monkeypatch):
+    import subprocess
+
+    def status(out):
+        return lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(pe.subprocess, "run", status(" M eval/results/endpoint_probe.json\n"))
+    assert pe.working_tree_changed() is False
+    monkeypatch.setattr(pe.subprocess, "run", status(" M tools/calculator.py\n M eval/results/endpoint_probe.md\n"))
+    assert pe.working_tree_changed() is True
+
+
+def test_a_settings_error_names_fields_but_not_their_values(monkeypatch, capsys):
+    from pydantic import ValidationError
+
+    def bad():
+        Settings(_env_file=None, LLM_BASE_URL=f"https://{SECRET_HOST}/v1", LLM_API_KEY=SECRET_KEY, LLM_MODEL="m",
+                 SEC_USER_AGENT="a b@c.d", LLM_CA_CERT=f"/{SECRET_HOST}/ca.crt")      # the error quotes the input
+
+    with pytest.raises(ValidationError):
+        bad()
+    monkeypatch.setattr(pe, "get_settings", bad)
+    assert pe.main(["--out-dir", "unused"]) == 1
+    err = capsys.readouterr().err
+    assert "LLM_CA_CERT" in err and SECRET_HOST not in err and SECRET_KEY not in err
