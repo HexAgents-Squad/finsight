@@ -45,17 +45,27 @@ RELATIVE_EPSILON = 1e-9                 # float noise allowed when two numbers a
 # Typographic variants a model writes for the §6 sentences
 NORMALISE = str.maketrans({"’": "'", "‘": "'", "–": "-", "—": "-", "“": '"', "”": '"'})
 PLACEHOLDER = re.compile(r"[{}]")                 # a template placeholder left in, e.g. "{suggestion}"
-SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
+# A sentence ends at . ! or ? before a capital, except after an abbreviation ("U.S. GAAP", "e.g. Data Center")
+SENTENCE_END = re.compile(r"(?<!\bU\.S\.)(?<!\be\.g\.)(?<!\bi\.e\.)(?<!\bInc\.)(?<!\bCorp\.)(?<!\bCo\.)(?<!\bvs\.)"
+                          r"(?<!\bNo\.)(?<=[.!?])\s+(?=[A-Z\"'(])")
+# The §6 sentence's offer ("I can share facts ... instead, for example ...") is not the factual part of an answer
+OFFER = re.compile(r"\bI can share facts from the indexed SEC filings\b|\bI can answer, for example\b", re.IGNORECASE)
+QUOTED = re.compile(r"\s*'(.*)'([.?]?)\s*", re.DOTALL)     # a suggestion in single quotes
 # A declining sentence speaks for FinSight ("I can't help ...", "FinSight does not provide ..."): "the filings do
 # not provide a fiscal 2026 figure" states a fact and is no decline
 DECLINE = re.compile(r"\b(?:I|FinSight)\s+(?:can't|cannot|can not|won't|will not|am unable to|is unable to|do not|"
                      r"don't|does not|doesn't)\s+(?:\w+\s+){0,2}?(?:help|provide|give|offer|answer|predict|forecast|"
                      r"share|comment|recommend|advise)\b", re.IGNORECASE)
 CANNOT = re.compile(r"\bcan ?not\b", re.IGNORECASE)       # "I cannot help" is the §6 sentence's "I can't help"
-# Rewrites before reading figures (critic only; the scorer's reading is unchanged): "52 weeks ended" is a period,
-# not a figure (gold A11, B11: Costco); "1.03x" is the ratio 1.03; "USD391,035" and "22.7-percent" spaced out
+# Rewrites before reading figures (critic only; the scorer's reading is unchanged). Not figures: a period's length
+# ("the 6 months ended", "52 weeks ended": Costco, gold A11/B11), a fiscal-year span ("2024-25", "FY2024/25"), a
+# split ratio ("10-for-1"), a page or note reference. Read as meant: "1.03x" is the ratio 1.03; "USD391,035" and
+# "22.7-percent" spaced out
 FIGURE_REWRITES: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"\b5[23][- ]weeks?\b", re.IGNORECASE), " "),
+    (re.compile(r"\b(?:3|6|9|12|13|26|39|52|53)[- ](?:months?|weeks?)\b", re.IGNORECASE), " "),
+    (re.compile(r"(?<!\d)((?:19|20)\d{2})[-/]\d{2}\b"), r"\1"),          # "FY2024/25": no \b after "FY"
+    (re.compile(r"\b\d+-for-\d+\b", re.IGNORECASE), " "),
+    (re.compile(r"\b(?:page|pages|p\.|note|notes)\s+\d+\b", re.IGNORECASE), " "),
     (re.compile(r"(\d)x\b"), r"\1 "),
     (re.compile(r"\b(USD|US\$)(?=\d)"), r"\1 "),
     (re.compile(r"(\d)-(percent|per cent)\b", re.IGNORECASE), r"\1 \2"),
@@ -119,14 +129,16 @@ def sentences(text: str) -> list[str]:
 # ----------------------------------------------------------------------------------------------- invariant 1
 def _shown(fig: Figure, contract: AnswerContract) -> bool:
     """`fig` displays one of the values: the value as written in its unit ("391,035") or scaled to dollars,
-    shares ... ("$391.0 billion"), at the precision the answer printed it; % only as a percentage."""
+    shares ... ("$391.0 billion"), at the precision the answer printed it; % only as a percentage, and a ratio
+    also as one ("0.45, i.e. 45%"). A CAGR's number of years ("a 3-year CAGR") is backed by its calculation."""
+    candidates: list[tuple[float, bool]] = [(abs(c.years), False) for c in contract.calculations if c.years]
     for v in contract.values:
-        if fig.percent != (v.unit == "%"):
-            continue
-        for candidate in {abs(v.value), abs(v.value) * UNIT_SCALE[v.unit]}:
-            if abs(fig.value - candidate) <= fig.tolerance + RELATIVE_EPSILON * max(1.0, candidate):
-                return True
-    return False
+        candidates += [(abs(v.value), v.unit == "%"), (abs(v.value) * UNIT_SCALE[v.unit], v.unit == "%")]
+        if v.unit == "ratio":
+            candidates.append((abs(v.value) * 100, True))
+    return any(fig.percent == percent
+               and abs(fig.value - number) <= fig.tolerance + RELATIVE_EPSILON * max(1.0, number)
+               for number, percent in candidates)
 
 
 def check_numbers_in_values(contract: AnswerContract) -> list[Violation]:
@@ -215,6 +227,9 @@ def is_refusal_sentence(answer: str, rule: str) -> bool:
     if not text.startswith(before):
         return False
     suggestion = text[len(before):].replace('"', "").rstrip()
+    quoted = QUOTED.fullmatch(suggestion)
+    if quoted:                                           # one pair of single quotes, apostrophes kept
+        suggestion = quoted.group(1) + quoted.group(2)
     return (suggestion.endswith((".", "?")) and bool(suggestion.rstrip(".?").strip())
             and not PLACEHOLDER.search(suggestion) and len(sentences(suggestion)) == 1)
 
@@ -249,7 +264,8 @@ def check_partial_refusal(contract: AnswerContract) -> list[Violation]:
         found = "none" if not declining else f"{len(declining)}"
         return [Violation("6", f"a partial refusal ({contract.refusal_rule}) declines the refused part in exactly "
                                f"one sentence; found {found}")]
-    if len(parts) < 2 and not contract.values:          # "X was $416.2 billion, but I can't ..." is both
+    factual = [s for s in parts if s not in declining and not OFFER.search(s)]
+    if not factual and not contract.values:             # "X was $416.2 billion, but I can't ..." is both
         return [Violation("6", "a partial refusal answers the factual part too; the answer only declines")]
     return []
 
@@ -298,7 +314,11 @@ def check_operation(contract: AnswerContract, question: str | None) -> list[Viol
         return []
     used = {c.operation for c in contract.calculations}
     if not used:
-        if NO_RESULT.search(contract.answer):
+        stated = [v for v in contract.values if v.unit in DERIVED_UNITS and any(
+            c.source_type == "filing" and (c.ticker, c.fiscal_year, c.fiscal_period)
+            == (v.ticker, v.fiscal_year, v.fiscal_period) for c in contract.citations)]
+        # a % or ratio the filing states itself (Apple's gross margin percentage, gold B13) is read, not computed
+        if NO_RESULT.search(contract.answer) or stated:
             return []
         return [Violation("operation", f"the question asks for {' or '.join(sorted(wanted))}, but no calculation "
                                        f"computes it (every computed number comes from the calculator)")]

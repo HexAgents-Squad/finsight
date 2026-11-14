@@ -375,3 +375,84 @@ def test_invariant_1_ignores_the_scope_text_in_a_partial_r3_answer():
 def test_invariant_3_an_input_the_calculator_refuses():
     c = make(calculations=[with_(CALC, inputs=[2e15, 1])])               # beyond the calculator's input range
     assert "cannot be recomputed" in check_calculations(c)[0].message
+
+
+# ----------------------------------------------------------------------------------------------- PR #28 review
+@pytest.mark.parametrize("answer", [
+    "Operating income was $109.4 billion for the 6 months ended December 31, 2024.",
+    "Operating income was $109.4 billion in the 9-month period and $245.1 billion over 12 months ended June 30.",
+    "Operating income was $109.4 billion in the 13 weeks ended March 30, 2025.",
+    "Operating income was $109.4 billion in fiscal 2024-25 (FY2024/25).",
+    "After the 10-for-1 split, operating income was $109.4 billion (see Note 12, page 28).",
+])
+def test_invariant_1_period_lengths_spans_splits_and_references_are_not_figures(answer):
+    assert check_numbers_in_values(make(answer=answer)) == []
+
+
+def test_invariant_1_a_cagr_years_count_is_backed_by_its_calculation():
+    cagr = {"operation": "cagr", "inputs": [100, 121], "years": 2, "result": 10.0, "unit": "%", "expression": "x"}
+    values = [with_(VALUE, value=100), with_(VALUE, value=121), with_(VALUE, name="revenue_cagr", value=10.0, unit="%")]
+    c = make(answer="Revenue grew at a 2-year CAGR of 10.0%.", values=values, calculations=[cagr])
+    assert check_numbers_in_values(c) == []
+    assert rules(check_numbers_in_values(make(answer="Revenue grew at a 3-year CAGR of 10.0%.", values=values,
+                                              calculations=[cagr]))) == ["1"]
+
+
+def test_invariant_1_a_ratio_may_also_be_shown_as_a_percentage():
+    ratio = with_(VALUE, name="efficiency_ratio", value=0.45, unit="ratio")
+    assert check_numbers_in_values(make(answer="The ratio was 0.45, i.e. 45%.", values=[ratio])) == []
+    assert rules(check_numbers_in_values(make(answer="The ratio was 46%.", values=[ratio]))) == ["1"]
+
+
+def test_invariant_6_the_full_refusal_sentence_is_not_a_partial_answer():
+    # the §6 sentence's offer ("I can share facts ... for example ...") is no factual part
+    c = make(answer=refusal_answer("R1", "What was Apple's total net sales in fiscal 2025?"), refusal_rule="R1",
+             values=[], calculations=[])
+    assert [v.message for v in check_partial_refusal(c)] == [
+        "a partial refusal answers the factual part too; the answer only declines"]
+
+
+def test_the_operation_check_accepts_a_percentage_the_filing_states():
+    # gold B13: Apple's gross margin percentage is stated in Item 7; read from the passage, not computed
+    margin = with_(VALUE, ticker="AAPL", name="gross_margin", value=46.9, unit="%", fiscal_year=2025,
+                   period_end="2025-09-27")
+    passage = with_(FILING, ticker="AAPL", fiscal_year=2025, item="Item 7", chunk_id="AAPL_10-K_2025_Item7_C3_0040")
+    c = make(answer="Apple's total gross margin percentage was 46.9% in fiscal 2025 (Item 7).", values=[margin],
+             citations=[passage], calculations=[])
+    question = "What was Apple's gross margin percentage in fiscal 2025?"
+    assert check_contract(c, QuestionScope(frozenset({"AAPL"}), frozenset({2025})), question) == []
+    xbrl_only = make(answer=c.answer, values=[margin], citations=[with_(XBRL, ticker="AAPL", fiscal_year=2025)],
+                     calculations=[])
+    assert "operation" in rules(check_contract(xbrl_only, QuestionScope(frozenset({"AAPL"})), question))
+
+
+@pytest.mark.parametrize("ending", [
+    "'What was NVIDIA's revenue in fiscal 2025?'",              # single quotes, an apostrophe inside
+    "NVIDIA's revenue under U.S. GAAP in fiscal 2025.",          # an abbreviation is no sentence end
+    "segment revenue, e.g. Data Center revenue in fiscal 2025.",
+])
+def test_invariant_5_quoted_suggestions_and_abbreviations(ending):
+    answer = ("I can't help with that because it is investment advice. I can share facts from the indexed SEC "
+              "filings instead, for example " + ending)
+    assert check_refusal(refusal(answer=answer)) == []
+
+
+def test_the_gold_refusal_sentences_pass_every_check():
+    # each gold G01-G07 answer quotes the §6 sentence the agent must give (Refuse (R1): "...")
+    items = [json.loads(line) for line in GOLD_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+    refusals = [i for i in items if i["must_refuse"]]
+    assert len(refusals) == 7
+    for item in refusals:
+        sentence = item["gold_answer"].split('"', 1)[1].rsplit('"', 1)[0]
+        c = AnswerContract(answer=sentence, verified=True, refused=True, refusal_rule=item["refusal_rule"])
+        assert check_contract(c, QuestionScope(frozenset(item["companies"]))) == [], item["id"]
+
+
+def test_a_degenerate_reply_neither_crashes_nor_stalls_the_critic():
+    import time
+    for answer in ("Revenue was " + "9" * 20_000 + ".", "Revenue was " + "0" * 8_000 + ".",
+                   "I can't " * 5_000 + "help.", "Revenue rose. " * 5_000):
+        c = make(answer=answer, refusal_rule="R1")
+        started = time.perf_counter()
+        check_contract(c, MSFT_2024, MARGIN_QUESTION)
+        assert time.perf_counter() - started < 2.0, answer[:30]

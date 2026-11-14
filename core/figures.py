@@ -8,6 +8,7 @@ Moved here unchanged from eval/score_answers.py so the agent does not depend on 
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -24,7 +25,7 @@ NOT_A_FIGURE = re.compile(
     r"|\b10-[KQ]s?\b|\b(?:Part\s+I{1,2}\s+)?Item\s+\d{1,2}[A-C]?\b|\bQ[1-4]\b|\b\d+Q\d{2,4}\b|\bFY\s?\d{2,4}\b"
     r"|\b\d+(?:st|nd|rd|th)\b|\bS&P\s*500\b|\bCOVID-19\b|(?<=[A-Za-z)])\(\d{1,2}\)|\[P\d+\]|\bP\d+\b",
     re.IGNORECASE)
-PERCENT_RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%")       # "10-12%" -> "10% 12%"
+PERCENT_RANGE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%")       # "10-12%" -> "10% 12%"
 FIGURE = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?:\s*(%|percent|per cent|pp|percentage points?)"
                     r"|\s*(thousands?|millions?|billions?|trillions?|bn|mn|mm|tn|k|m|b)\b)?(?![\w%])", re.IGNORECASE)
 YEAR_RANGE = range(1990, 2040)
@@ -46,6 +47,8 @@ def figures(text: str) -> list[Figure]:
     for m in FIGURE.finditer(clean):
         whole, frac, pct, word = m.group(1), m.group(2) or "", m.group(3), m.group(4)
         number = float(whole.replace(",", "") + frac)
+        if not math.isfinite(number):                 # hundreds of digits: no figure, and int() would overflow
+            continue
         if not frac and not pct and not word and "," not in whole and int(number) in YEAR_RANGE:
             continue                                  # a bare year such as 2024
         scale = SCALE_WORDS[word.lower()] if word else 1.0
