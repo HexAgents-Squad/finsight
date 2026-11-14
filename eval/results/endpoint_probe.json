@@ -1,0 +1,734 @@
+{
+ "meta": {
+  "probe_version": "p-v1",
+  "date": "2026-11-14T05:57:36+00:00",
+  "model": "Qwen/Qwen3-8B",
+  "endpoint": "hosted",
+  "thinking_setting": false,
+  "max_tokens_setting": 1024,
+  "context_setting": 8192,
+  "min_gap_s": 1.1,
+  "timeout_s": 120.0,
+  "git_commit": "ffd2c3485b3c13e13126cbe3c0aaed4829969304",
+  "code_changed_since_commit": false
+ },
+ "probes": {
+  "tools": {
+   "outcomes": [
+    {
+     "label": "no tools (baseline for prompt tokens)",
+     "ok": true,
+     "seconds": 0.295,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "length",
+     "prompt_tokens": 31,
+     "completion_tokens": 1,
+     "text": "As",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "tools, tool_choice=auto",
+     "ok": true,
+     "seconds": 1.134,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "tool_calls",
+     "prompt_tokens": 1677,
+     "completion_tokens": 49,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": [
+      {
+       "name": "get_financial_fact",
+       "arguments": "{\"ticker\": \"AAPL\", \"metric\": \"net_sales\", \"fiscal_year\": 2024, \"fiscal_period\": \"FY\"}"
+      }
+     ]
+    },
+    {
+     "label": "tools, tool_choice=required",
+     "ok": true,
+     "seconds": 1.401,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "tool_calls",
+     "prompt_tokens": 1677,
+     "completion_tokens": 61,
+     "text": "",
+     "reasoning_chars": null,
+     "tool_calls": [
+      {
+       "name": "get_financial_fact",
+       "arguments": "{\"ticker\": \"AAPL\", \"metric\": \"net_sales\", \"fiscal_year\": 2024, \"fiscal_period\": \"FY\"}"
+      }
+     ]
+    },
+    {
+     "label": "tools, tool_choice=calculate (named)",
+     "ok": true,
+     "seconds": 0.895,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 1691,
+     "completion_tokens": 38,
+     "text": "",
+     "reasoning_chars": null,
+     "tool_calls": [
+      {
+       "name": "calculate",
+       "arguments": "{\n  \"operation\": \"percent\",\n  \"inputs\": [383285, 391035],\n  \"unit\": \"USD millions\"\n}"
+      }
+     ]
+    },
+    {
+     "label": "agent loop, reply 1",
+     "ok": true,
+     "seconds": 1.042,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "tool_calls",
+     "prompt_tokens": 1691,
+     "completion_tokens": 45,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": [
+      {
+       "name": "calculate",
+       "arguments": "{\"operation\": \"percent\", \"inputs\": [383285, 391035], \"unit\": \"USD millions\"}"
+      }
+     ]
+    },
+    {
+     "label": "agent loop, reply 2",
+     "ok": true,
+     "seconds": 0.914,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "tool_calls",
+     "prompt_tokens": 1774,
+     "completion_tokens": 39,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": [
+      {
+       "name": "calculate",
+       "arguments": "{\"operation\": \"percent\", \"inputs\": [383285, 391035]}"
+      }
+     ]
+    },
+    {
+     "label": "agent loop, reply 3",
+     "ok": true,
+     "seconds": 0.784,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 1897,
+     "completion_tokens": 33,
+     "text": "Net sales grew by **98.0%** from 383,285 to 391,035 USD millions.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "auto": {
+     "tool_call": true,
+     "name": "get_financial_fact",
+     "finish_reason": "tool_calls",
+     "arguments_valid": true,
+     "expected_tool": true,
+     "tool_accepts": false,
+     "tool_error_type": "invalid_input",
+     "tool_error": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+    },
+    "required": {
+     "tool_call": true,
+     "name": "get_financial_fact",
+     "finish_reason": "tool_calls",
+     "arguments_valid": true,
+     "tool_accepts": false,
+     "tool_error_type": "invalid_input",
+     "tool_error": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+    },
+    "named": {
+     "tool_call": true,
+     "name": "calculate",
+     "finish_reason": "stop",
+     "arguments_valid": true,
+     "expected_tool": true,
+     "tool_accepts": false,
+     "tool_error_type": "invalid_input",
+     "tool_error": "unit is only for difference and sum; percent returns '%'"
+    },
+    "schema_prompt_tokens": 1646,
+    "loop": {
+     "rounds": [
+      {
+       "call": "calculate({\"operation\": \"percent\", \"inputs\": [383285, 391035], \"unit\": \"USD millions\"})",
+       "result": "unit is only for difference and sum; percent returns '%'"
+      },
+      {
+       "call": "calculate({\"operation\": \"percent\", \"inputs\": [383285, 391035]})",
+       "result": 98.0
+      }
+     ],
+     "replies": 3,
+     "answered": true,
+     "answer": "Net sales grew by **98.0%** from 383,285 to 391,035 USD millions.",
+     "correct": false
+    }
+   }
+  },
+  "json": {
+   "outcomes": [
+    {
+     "label": "prompt only (no response_format)",
+     "ok": true,
+     "seconds": 2.037,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 119,
+     "completion_tokens": 92,
+     "text": "{\n  \"answer\": \"Apple's total net sales in fiscal 2024 were $391,035 million.\",\n  \"value\": 391035,\n  \"unit\": \"million\",\n  \"company\": \"Apple\",\n  \"fiscal_year\": 2024,\n  \"citations\": [1],\n  \"refused\": false,\n  \"refusal_rule\": null\n}",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "response_format=json_object",
+     "ok": true,
+     "seconds": 2.04,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 119,
+     "completion_tokens": 92,
+     "text": "{\n  \"answer\": \"Apple's total net sales in fiscal 2024 were $391,035 million.\",\n  \"value\": 391035,\n  \"unit\": \"million\",\n  \"company\": \"Apple\",\n  \"fiscal_year\": 2024,\n  \"citations\": [1],\n  \"refused\": false,\n  \"refusal_rule\": null\n}",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "response_format=json_schema (B0Answer, strict)",
+     "ok": true,
+     "seconds": 2.105,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 119,
+     "completion_tokens": 95,
+     "text": "{\n  \"answer\": \"Apple's total net sales in fiscal 2024 were $391,035 million.\",\n  \"value\": 391035,\n  \"unit\": \"million\",\n  \"company\": \"Apple\",\n  \"fiscal_year\": 2024,\n  \"citations\": [ \"P1\" ],\n  \"refused\": false,\n  \"refusal_rule\": null\n}",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "json_schema against a prose instruction",
+     "ok": true,
+     "seconds": 1.912,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 127,
+     "completion_tokens": 86,
+     "text": "{\"answer\": \"Apple's total net sales in fiscal 2024 were $391,035 million.\", \"value\": 391035, \"unit\": \"million dollars\", \"company\": \"Apple\", \"fiscal_year\": 2024, \"citations\": [ \"P1\" ], \"refused\": false, \"refusal_rule\": null}",
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "prompt_only": {
+     "accepted": true,
+     "valid_b0": false,
+     "why": "citations.0: Input should be a valid string"
+    },
+    "json_object": {
+     "accepted": true,
+     "valid_b0": false,
+     "why": "citations.0: Input should be a valid string"
+    },
+    "json_schema": {
+     "accepted": true,
+     "valid_b0": true
+    },
+    "json_schema_vs_prose": {
+     "accepted": true,
+     "valid_b0": true
+    }
+   }
+  },
+  "thinking": {
+   "outcomes": [
+    {
+     "label": "enable_thinking=true",
+     "ok": true,
+     "seconds": 0.306,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 37,
+     "completion_tokens": 12,
+     "text": "The growth in percent is **25%**.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "enable_thinking=false",
+     "ok": true,
+     "seconds": 0.316,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 37,
+     "completion_tokens": 12,
+     "text": "The growth in percent is **25%**.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "switch not sent",
+     "ok": true,
+     "seconds": 0.31,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 37,
+     "completion_tokens": 12,
+     "text": "The growth in percent is **25%**.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "on": {
+     "ok": true,
+     "think_block": false,
+     "reasoning_field_chars": null,
+     "completion_tokens": 12,
+     "seconds": 0.306
+    },
+    "off": {
+     "ok": true,
+     "think_block": false,
+     "reasoning_field_chars": null,
+     "completion_tokens": 12,
+     "seconds": 0.316
+    },
+    "not_sent": {
+     "ok": true,
+     "think_block": false,
+     "reasoning_field_chars": null,
+     "completion_tokens": 12,
+     "seconds": 0.31
+    },
+    "identical_replies": true,
+    "switch_honoured": false
+   }
+  },
+  "latency": {
+   "outcomes": [
+    {
+     "label": "max_tokens=16",
+     "ok": true,
+     "seconds": 0.391,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "length",
+     "prompt_tokens": 31,
+     "completion_tokens": 16,
+     "text": "**The History of Financial Reporting Standards: A Comprehensive Overview**\n\nFinancial reporting standards have",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "max_tokens=128",
+     "ok": true,
+     "seconds": 2.815,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "length",
+     "prompt_tokens": 31,
+     "completion_tokens": 128,
+     "text": "**The History of Financial Reporting Standards: A Comprehensive Overview**\n\nFinancial reporting standards have evolved over centuries, shaped by the needs of businesses, investors, and governments. These standards serve as the backbone of financial communication, ensuring transparency, consistency, and reliability in the presentation of financial information. The journey of financial reporting sta",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "max_tokens=512",
+     "ok": true,
+     "seconds": 11.117,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "length",
+     "prompt_tokens": 31,
+     "completion_tokens": 512,
+     "text": "**The History of Financial Reporting Standards: A Comprehensive Overview**\n\nFinancial reporting standards have evolved over centuries, shaped by the needs of businesses, investors, and governments. These standards serve as the backbone of financial communication, ensuring transparency, consistency, and reliability in the presentation of financial information. The journey of financial reporting sta",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "max_tokens=1024",
+     "ok": true,
+     "seconds": 22.241,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "length",
+     "prompt_tokens": 31,
+     "completion_tokens": 1024,
+     "text": "**The History of Financial Reporting Standards: A Comprehensive Overview**\n\nFinancial reporting standards have evolved over centuries, shaped by the needs of businesses, investors, and governments. These standards serve as the backbone of financial communication, ensuring transparency, consistency, and reliability in the presentation of financial information. The journey of financial reporting sta",
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "points": [
+     {
+      "completion_tokens": 16,
+      "seconds": 0.391
+     },
+     {
+      "completion_tokens": 128,
+      "seconds": 2.815
+     },
+     {
+      "completion_tokens": 512,
+      "seconds": 11.117
+     },
+     {
+      "completion_tokens": 1024,
+      "seconds": 22.241
+     }
+    ],
+    "fit": {
+     "overhead_s": 0.04,
+     "tokens_per_s": 46.1
+    }
+   }
+  },
+  "limits": {
+   "outcomes": [
+    {
+     "label": "max_tokens=1025",
+     "ok": false,
+     "seconds": 0.028,
+     "status": 400,
+     "error_type": "BadRequestError",
+     "error": "Error code: 400",
+     "retry_after": null,
+     "finish_reason": null,
+     "prompt_tokens": null,
+     "completion_tokens": null,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "max_tokens=2048",
+     "ok": false,
+     "seconds": 0.031,
+     "status": 400,
+     "error_type": "BadRequestError",
+     "error": "Error code: 400",
+     "retry_after": null,
+     "finish_reason": null,
+     "prompt_tokens": null,
+     "completion_tokens": null,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "prompt of 7581 tokens + max_tokens 1024 (over 8192)",
+     "ok": false,
+     "seconds": 0.08,
+     "status": 400,
+     "error_type": "BadRequestError",
+     "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)",
+     "retry_after": null,
+     "finish_reason": null,
+     "prompt_tokens": null,
+     "completion_tokens": null,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "max_tokens_1025": {
+     "accepted": false,
+     "status": 400,
+     "error": "Error code: 400"
+    },
+    "max_tokens_2048": {
+     "accepted": false,
+     "status": 400,
+     "error": "Error code: 400"
+    },
+    "over_context": {
+     "prompt_tokens_counted": 7581,
+     "target": 7568,
+     "accepted": false,
+     "status": 400,
+     "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)",
+     "note": "the server's 'at least N input tokens' is its bound (context - max_tokens + 1), not the prompt's size"
+    }
+   }
+  },
+  "determinism": {
+   "outcomes": [
+    {
+     "label": "temperature_0 #1",
+     "ok": true,
+     "seconds": 0.609,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 26,
+     "text": "A bank's balance sheet reflects its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0 #2",
+     "ok": true,
+     "seconds": 0.61,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 26,
+     "text": "A bank's balance sheet reflects its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0 #3",
+     "ok": true,
+     "seconds": 0.615,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 26,
+     "text": "A bank's balance sheet reflects its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seed_1234 #1",
+     "ok": true,
+     "seconds": 0.679,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 29,
+     "text": "A bank's balance sheet is a snapshot of its financial position, showing its assets, liabilities, and equity at a specific point in time.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seed_1234 #2",
+     "ok": true,
+     "seconds": 0.677,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 29,
+     "text": "A bank's balance sheet is a snapshot of its financial position, showing its assets, liabilities, and equity at a specific point in time.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_no_seed #1",
+     "ok": true,
+     "seconds": 0.894,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 39,
+     "text": "A bank's balance sheet shows its assets, such as loans and investments, balanced against its liabilities, including deposits and borrowings, to reflect its financial position at a given point in time.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_no_seed #2",
+     "ok": true,
+     "seconds": 0.687,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 29,
+     "text": "A bank's balance sheet provides a snapshot of its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seeds_1_2_3 #1",
+     "ok": true,
+     "seconds": 0.619,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 26,
+     "text": "A bank's balance sheet reflects its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seeds_1_2_3 #2",
+     "ok": true,
+     "seconds": 0.889,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 38,
+     "text": "A bank's balance sheet shows the total assets it holds, such as loans and investments, compared to its liabilities, like customer deposits and borrowings, along with its shareholders' equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seeds_1_2_3 #3",
+     "ok": true,
+     "seconds": 0.678,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 29,
+     "text": "A bank's balance sheet is a snapshot of its financial health, showing its assets, liabilities, and equity at a specific point in time.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "temperature_0": {
+     "identical": true,
+     "distinct_replies": 1
+    },
+    "temperature_0.9_seed_1234": {
+     "identical": true,
+     "distinct_replies": 1
+    },
+    "temperature_0.9_no_seed": {
+     "identical": false,
+     "distinct_replies": 2
+    },
+    "temperature_0.9_seeds_1_2_3": {
+     "identical": false,
+     "distinct_replies": 3
+    }
+   }
+  },
+  "concurrency": {
+   "outcomes": [
+    {
+     "label": "concurrent request A",
+     "ok": true,
+     "seconds": 5.592,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "length",
+     "prompt_tokens": 31,
+     "completion_tokens": 256,
+     "text": "**The History of Financial Reporting Standards: A Comprehensive Overview**\n\nFinancial reporting standards have evolved over centuries, shaped by the needs of businesses, investors, and governments. These standards serve as the backbone of financial communication, ensuring transparency, consistency, and reliability in the presentation of financial information. The journey of financial reporting sta",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "concurrent request B",
+     "ok": false,
+     "seconds": 0.097,
+     "status": 429,
+     "error_type": "RateLimitError",
+     "error": "Error code: 429",
+     "retry_after": null,
+     "finish_reason": null,
+     "prompt_tokens": null,
+     "completion_tokens": null,
+     "text": null,
+     "reasoning_chars": null,
+     "tool_calls": []
+    }
+   ],
+   "findings": {
+    "statuses": [
+     200,
+     429
+    ],
+    "both_ok": false,
+    "refused": [
+     {
+      "status": 429,
+      "error_type": "RateLimitError",
+      "retry_after": null
+     }
+    ]
+   }
+  }
+ }
+}
