@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
+from core.spec import doc_id  # noqa: F401  (the naming rule lives in core/spec.py)
+
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 MAIN_DOCUMENT = "main document"
@@ -524,12 +526,6 @@ def parse_filing(main_text: str, form: str, exhibit_text: str | None = None) -> 
 
 
 # ----------------------------------------------------------------------------------------------- documents
-def doc_id(ticker: str, form: str, fiscal_year: int, fiscal_period: str, key: str) -> str:
-    """'AAPL_10-K_2024_Item7', 'AAPL_10-Q_2025Q2_PartIItem2' (week0_plan §2.1)."""
-    period = "" if fiscal_period == "FY" else fiscal_period
-    return f"{ticker}_{form}_{fiscal_year}{period}_{key.replace(' ', '')}"
-
-
 def section_records(filing: dict, parsed: ParsedFiling) -> list[dict]:
     """sections.jsonl lines for one manifest entry (schema: week0_plan §2.1)."""
     out = []

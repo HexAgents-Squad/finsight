@@ -1,6 +1,7 @@
 """Schema and rules for the FinSight gold evaluation set (eval/gold_set.jsonl).
 
-Single source of truth for the contracts in docs/week0_plan.txt §2.4 and §3 and docs/spec.md §3–§7.
+Single source of truth for the contracts in docs/week0_plan.txt §2.4 and §3 and docs/spec.md §3–§7 (units,
+fiscal periods, refusal rules and Item names come from core/spec.py, shared with the tools and the agent).
 Pydantic checks field types; the rule functions below check meaning and return ALL problems at once
 (so a writer can fix every issue in one pass instead of one error at a time).
 """
@@ -14,6 +15,16 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from core.spec import (  # noqa: F401  (re-exported: eval code and tests import these names from here)
+    ALLOWED_UNITS,
+    NOT_REPORTED,
+    REFUSAL_RULES,
+    TENK_ITEMS,
+    TENQ_ITEMS,
+    FiscalPeriod,
+    RefusalRule,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 COMPANIES_FILE = ROOT / "config" / "companies.yaml"
 
@@ -25,10 +36,6 @@ TARGET_COUNTS: dict[str, int] = {"fact": 15, "ratio": 15, "period_comparison": 1
                                  "qualitative": 12, "multi_turn": 6, "refuse": 10}
 TRAPS_MIN, TRAPS_MAX = 2, 3                      # "not reported" traps among the G items (week0 §3 rule 5)
 
-RefusalRule = Literal["R1", "R2", "R3", "R4", "R5", "R6", "R7"]
-REFUSAL_RULES: tuple[str, ...] = ("R1", "R2", "R3", "R4", "R5", "R6", "R7")
-FiscalPeriod = Literal["FY", "Q1", "Q2", "Q3"]
-NOT_REPORTED = "not reported"
 GOLD_ID_PATTERN = r"^[A-G]\d{2}$"                # category letter + 2 digits, e.g. "B07"
 # Development set (W1-06): the same format with a "dev-" prefix, so a dev id can never be read as a gold id
 DEV_PREFIX = "dev-"
@@ -37,19 +44,6 @@ DEV_TARGET_COUNTS: dict[str, int] = {"fact": 3, "ratio": 2, "period_comparison":
                                      "qualitative": 2, "multi_turn": 2, "refuse": 2}
 MIN_QUESTION_CHARS = 10                         # catches placeholders like "tbd" or "?"
 DEFAULT_TOLERANCE_PCT = 1.0                     # week0 §2.4 example; a question can set its own
-
-# docs/spec.md §7 "Allowed unit values"
-ALLOWED_UNITS: frozenset[str] = frozenset({"USD", "USD thousands", "USD millions", "USD billions", "USD per share",
-                                           "shares", "shares millions", "%", "ratio", "count"})
-
-# docs/spec.md §3 "Item naming"
-TENK_ITEMS: frozenset[str] = frozenset(f"Item {n}" for n in (
-    "1", "1A", "1B", "1C", "2", "3", "4", "5", "6", "7", "7A", "8", "9", "9A", "9B", "9C",
-    "10", "11", "12", "13", "14", "15", "16"))
-TENQ_ITEMS: frozenset[str] = frozenset(
-    [f"Part I Item {n}" for n in ("1", "2", "3", "4")]
-    + [f"Part II Item {n}" for n in ("1", "1A", "2", "3", "4", "5", "6")])
-
 
 # ----------------------------------------------------------------------------------------------- scope
 @dataclass(frozen=True)
