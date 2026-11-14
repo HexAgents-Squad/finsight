@@ -123,10 +123,11 @@ def text_of_tokens(n: int) -> str:
     return text
 
 
-def c3_sample(n: int, path: Path = C3_CHUNKS) -> list[str]:
-    """`n` real C3 chunk texts spread over the file, cut to MAX_TOKENS as the client cuts them."""
+def c3_sample(n: int, path: Path | None = None) -> list[str]:
+    """`n` real C3 chunk texts spread over the file (C3_CHUNKS, read when called), cut to MAX_TOKENS as the client
+    cuts them."""
     from core.tokens import cut_to_embedding_tokens
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = (path or C3_CHUNKS).read_text(encoding="utf-8").splitlines()
     step = max(1, len(lines) // n)
     return [cut_to_embedding_tokens(json.loads(line)["text"], MAX_TOKENS)[0] for line in lines[::step][:n]]
 
