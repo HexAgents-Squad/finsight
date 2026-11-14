@@ -377,6 +377,10 @@ W1-04 (Chandra Shekhar): ingest/sections.py drops lone "Table of Contents" lines
   footers (precompiled patterns, positive and negative tests); re-parse to a temporary --out-dir and diff
   (1,260 documents, no Item lost, gold verbatim-figure check passes); promote; re-chunk; rebuild BM25 and dense
   overnight; re-run eval/run_retrieval.py. Closes ADR-015 item 6 ("Table of Contents" lines 2,455 → ~0).
+  Done as in ADR-023: 16,624 furniture lines removed (Table of Contents 2,754, page numbers 6,742, running footers
+  5,301, running headers 1,827; 0.68% of the characters), 1,260 documents, no other word changed, the gold
+  verbatim-figure check 118/118 (scripts/compare_sections.py, eval/results/furniture_removal.md); the dense
+  rebuild is bge-small-en-v1.5 through the endpoint (ADR-021).
 W1-10 (Alok, with Amresh, Chandra Shekhar, all): second verifier for the 22 refusal and 12 injection tests
   (validate_test_sets.py --final passes); independent WP2 spot check; smoke test against the endpoint on every
   laptop; LOCAL_SETUP wording fix; docs/mentor_meetings.md entry for 7 Nov; UPGRAD-41 closed.

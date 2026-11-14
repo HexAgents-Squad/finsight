@@ -20,12 +20,17 @@ EMBED_SLICE = 1_024                  # chunks per embed + add round (progress ou
 DISTANCE = "cosine"
 
 
+LEGACY_BACKENDS = ("sentence-transformers", "openai")   # recorded as "<backend>:<model>" before W1-04
+
+
 def model_name(model_id: str) -> str:
     """The model an embedder id names, without the backend or the publisher: "bge-small-en-v1.5" for the hosted
     endpoint's "bge-small-en-v1.5" and for "BAAI/bge-small-en-v1.5" run locally (the same vectors, cosine 1.0,
     W1-16), so an index built through one is searched with the other (ADR-021). Ids recorded before W1-04
     carried the backend ("sentence-transformers:all-MiniLM-L6-v2") and read the same."""
-    return model_id.rpartition(":")[2].rpartition("/")[2]
+    for backend in LEGACY_BACKENDS:
+        model_id = model_id.removeprefix(f"{backend}:")
+    return model_id.rpartition("/")[2]               # an Ollama tag ("nomic-embed-text:latest") stays whole
 
 
 @dataclass

@@ -207,6 +207,9 @@ def test_model_names_ignore_the_backend_and_the_publisher():
     assert model_name("bge-small-en-v1.5") == model_name("BAAI/bge-small-en-v1.5") == "bge-small-en-v1.5"
     assert model_name("sentence-transformers:all-MiniLM-L6-v2") == "all-MiniLM-L6-v2"     # recorded before W1-04
     assert model_name("openai:bge-small-en-v1.5") == "bge-small-en-v1.5"
+    # Ollama tags stay whole: two models tagged "latest" must not look alike (review)
+    assert model_name("nomic-embed-text:latest") != model_name("mxbai-embed-large:latest")
+    assert model_name("nomic-embed-text:latest") == "nomic-embed-text:latest"
 
 
 def test_an_index_built_through_the_endpoint_is_searched_with_the_local_model():

@@ -79,8 +79,10 @@ class Settings(SecSettings):
     EMBED_CA_CERT: Path | None = Field(None, description="PEM CA certificate for EMBED_BASE_URL; empty = "
                                                          "LLM_CA_CERT on the same server, else the default store")
     EMBED_API_KEY: SecretStr | None = Field(None, description="Key for EMBED_BASE_URL; empty = LLM_API_KEY")
-    EMBED_MODEL: str = Field("nomic-embed-text", description="Model name on the embeddings endpoint")
-    EMBED_LOCAL_MODEL_NAME: str = Field("all-MiniLM-L6-v2", description="HuggingFace sentence-transformers model")
+    # The index is built with bge-small-en-v1.5 (ADR-021, rebuilt with W1-04): the endpoint's model and the same
+    # model run locally give the same vectors, so either default searches it (retrieval/dense.py model_name)
+    EMBED_MODEL: str = Field("bge-small-en-v1.5", description="Model name on the embeddings endpoint")
+    EMBED_LOCAL_MODEL_NAME: str = Field("BAAI/bge-small-en-v1.5", description="HuggingFace sentence-transformers model")
     EMBED_BATCH_SIZE: int = Field(64, gt=0, description="Texts per embeddings request (hosted endpoint: max 16)")
     # The hosted bge-small-en-v1.5 refuses (422) any text over 512 tokens, counting [CLS] and [SEP] (measured,
     # W1-16), and one long text fails its whole batch. Set, texts are cut to this many tokens with the model's

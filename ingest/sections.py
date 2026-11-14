@@ -31,7 +31,9 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 MAIN_DOCUMENT = "main document"
 EXHIBIT = "Exhibit 13"
-MIN_SECTION_CHARS = 300          # shorter Items ("Not applicable", "[Reserved]") are dropped (spec §3)
+# Shorter Items ("Not applicable", "[Reserved]") are dropped (spec §3), judged before page furniture is removed:
+# 8 pointer Items (e.g. GS Item 11, BAC Item 14) are 235-299 characters without their footers (ADR-023)
+MIN_SECTION_CHARS = 300
 MIN_ITEMS_FOR_HEADINGS = 4       # fewer Item headings than this = the filing does not use them
 STUB_CHARS = 3_000               # an MD&A / financial-statement Item shorter than this is only a pointer
 MIN_MDNA_CHARS = 20_000          # financial statements start at least this far after the MD&A heading
@@ -344,9 +346,10 @@ class ParsedFiling:
 # SUBSIDIARIES"). Measured on the corpus before W1-04: 2,455 lone "Table of Contents" lines and ~6,500 bare page
 # numbers, mostly in the middle of a sentence cut by the page break.
 TOC_LINK = re.compile(r"table\s+of\s+contents(?:\s*\|\s*[^|\d]{1,40})?", re.IGNORECASE)   # "... | Alphabet Inc."
-PAGE_NUMBER_LINE = re.compile(r"\d{1,3}\.?")                   # "31", "37." (Alphabet)
+PAGE_NUMBER_LINE = re.compile(r"\d{1,3}\.?|[-–—]\s*\d{1,3}\s*[-–—]")    # "31", "37." (Alphabet), "- 3 -" (Merck)
 PAGE_REF = r"(?:\d{1,3}|[A-Z]-\d{1,3})"                        # "31", "F-12"
 FORM_TOKEN = re.compile(r"\b10-([KQ])\b")                      # masked to "X-K" so "10" is not a second number
+QUARTER_TOKEN = re.compile(r"\bQ([1-4])\b")                    # "Apple Inc. | Q1 2025 Form 10-Q | 1": masked too
 REPORT_NAME = r"form\s+x-[kq]|annual\s+report|quarterly\s+report"
 SUBSIDIARIES = r"\s*,?\s*and\s+(?:its\s+)?subsidiar(?:y|ies)(?:\s+companies)?"     # required for a header
 FURNITURE_MAX_CHARS = 80
@@ -359,7 +362,8 @@ DIGIT = re.compile(r"\d")
 @dataclass(frozen=True)
 class Furniture:
     """One filing's running footers and headers: the line shapes (digits as "#") that name the company or the
-    report, carry at most one page number, and repeat at least MIN_FURNITURE_REPEATS times."""
+    report, carry at most one page number, and repeat at least MIN_FURNITURE_REPEATS times. `line in furniture`
+    says what a line looks like on its own; furniture_lines() decides with its neighbours."""
     shapes: frozenset[str] = frozenset()
 
     def __contains__(self, line: str) -> bool:
@@ -368,12 +372,26 @@ class Furniture:
                             or DIGIT.sub("#", s) in self.shapes)
 
 
+def furniture_lines(lines: list[str], furniture: Furniture) -> set[int]:
+    """Indexes of the lines to remove. A bare number right under a table row (no blank line between) is the
+    row's value, not a page number: Merck's total "704" under "... attributable to noncontrolling interests | 3",
+    whose label cell is empty (measured; every page number in the corpus follows a blank line or text)."""
+    out = set()
+    for i, line in enumerate(lines):
+        if line not in furniture:
+            continue
+        if PAGE_NUMBER_LINE.fullmatch(line.strip()) and i > 0 and "|" in lines[i - 1]:
+            continue
+        out.add(i)
+    return out
+
+
 def _running_line_patterns(names: tuple[str, ...]) -> tuple[re.Pattern, re.Pattern]:
     """(footer, header) patterns for a company. Footer: one page reference before or after text naming the
-    company or the report, with no other number but a year. Header: the company's name followed by "and
-    Subsidiaries" (or "and Subsidiary Companies"); the name alone is not enough, as it also labels table rows
-    and chart legends ("Bank of America Corporation" above its senior notes, measured). Only full names and
-    aliases of more than one word count: "Chase | 12" may be a table row."""
+    company or the report, with no other number but a year (and a quarter, masked first). Header: the company's
+    name followed by "and Subsidiaries" (or "and Subsidiary Companies"); the name alone is not enough, as it also
+    labels table rows and chart legends ("Bank of America Corporation" above its senior notes, measured). Only
+    full names and aliases of more than one word count: "Chase | 12" may be a table row."""
     body = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) or r"(?!)"
     core = (rf"(?=.*(?:{body}|{REPORT_NAME}))[^|\d]*(?:\d{{4}}[^|\d]*)?"
             r"(?:\|[^|\d]*(?:\d{4}[^|\d]*)?)*")
@@ -390,8 +408,10 @@ def find_furniture(texts: list[str], names: tuple[str, ...]) -> Furniture:
     for text in texts:
         for line in text.split("\n"):
             s = line.strip()
-            if s and len(s) <= FURNITURE_MAX_CHARS and (footer.fullmatch(FORM_TOKEN.sub(r"X-\1", s))
-                                                         or header.fullmatch(s)):
+            if not s or len(s) > FURNITURE_MAX_CHARS:
+                continue
+            masked = QUARTER_TOKEN.sub(r"QX", FORM_TOKEN.sub(r"X-\1", s))
+            if footer.fullmatch(masked) or header.fullmatch(s):
                 key = DIGIT.sub("#", s)
                 counts[key] = counts.get(key, 0) + 1
     return Furniture(frozenset(k for k, n in counts.items() if n >= MIN_FURNITURE_REPEATS))
@@ -399,32 +419,38 @@ def find_furniture(texts: list[str], names: tuple[str, ...]) -> Furniture:
 
 def strip_furniture(text: str, furniture: Furniture) -> tuple[str, int]:
     """(text without its furniture lines, lines removed). A sentence the page break cut ("... For example," |
-    "31" | "Table of Contents" | "protect our ...") is joined again: when the kept line before the removed run
-    does not end a sentence and is no table row, and the line after it starts in lower case."""
+    "31" | "Table of Contents" | "protect our ...") is joined again when the kept line before the removed run
+    does not end a sentence, is no table row and does not itself follow removed furniture (a running section
+    title between a footer and a header, Pfizer's "Notes to Consolidated Financial Statements", measured), and
+    the line after the run starts in lower case. A word hyphenated across the break is joined without a space."""
+    lines = text.split("\n")
+    drop = furniture_lines(lines, furniture)
+    if not drop:
+        return text, 0
     out: list[str] = []
-    removed = 0
-    cut = False                          # furniture removed since the last kept line
-    for line in text.split("\n"):
-        if line in furniture:
-            removed += 1
+    after_furniture: set[int] = set()        # indexes in `out` of kept lines that directly follow furniture
+    cut = False                              # furniture removed since the last kept non-blank line
+    for i, line in enumerate(lines):
+        if i in drop:
             cut = True
             continue
         if not line.strip():
             out.append(line)
             continue
         if cut:
-            prev = next((i for i in range(len(out) - 1, -1, -1) if out[i].strip()), None)
-            if (prev is not None and out[prev].rstrip()[-1] not in SENTENCE_END_CHARS and "|" not in out[prev]
-                    and line.lstrip()[:1].islower()):
+            prev = next((j for j in range(len(out) - 1, -1, -1) if out[j].strip()), None)
+            target = out[prev].rstrip() if prev is not None else ""
+            if (target and prev not in after_furniture and target[-1] not in SENTENCE_END_CHARS
+                    and "|" not in target and line.lstrip()[:1].islower()):
                 del out[prev + 1:]
-                out[prev] = out[prev].rstrip() + " " + line.lstrip()
+                glue = "" if target.endswith("-") and target[-2:-1].isalpha() else " "
+                out[prev] = target + glue + line.lstrip()
                 cut = False
                 continue
+            after_furniture.add(len(out))
         cut = False
         out.append(line)
-    if not removed:
-        return text, 0
-    return BLANK_LINE_RUN.sub("\n\n", "\n".join(out)).strip(), removed
+    return BLANK_LINE_RUN.sub("\n\n", "\n".join(out)).strip(), len(drop)
 
 
 def toc_row_page(line: str) -> int | None:
@@ -674,8 +700,8 @@ def corpus_problems(docs: list[dict], expected_10k: int) -> list[str]:
     toc_like = sorted(d["doc_id"] for d in docs if "text" in d and toc_blocks(d["text"].split("\n")))
     if toc_like:
         out.append(f"documents containing a table-of-contents block: {toc_like}")
-    furnished = sorted(d["doc_id"] for d in docs if "text" in d and any(line in Furniture()
-                                                                         for line in d["text"].split("\n")))
+    furnished = sorted(d["doc_id"] for d in docs if "text" in d
+                       and furniture_lines(d["text"].split("\n"), Furniture()))
     if furnished:
         out.append(f"documents still holding 'Table of Contents' lines or page numbers: {furnished[:10]}"
                    f"{' ...' if len(furnished) > 10 else ''} ({len(furnished)})")
