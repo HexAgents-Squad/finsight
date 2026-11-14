@@ -87,7 +87,8 @@ class Endpoint:
             return completion(tool_calls=[("calculate", '{"operation": "growth", "inputs": [383285, 391035], '
                                                         '"unit": "USD millions"}')], finish="tool_calls", prompt=540)
         if choice in ("auto", "required"):
-            args = '{"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024}' if choice == "auto"                 else '{"company": "AAPL"}'                                  # required: a wrong argument name
+            args = ('{"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024}' if choice == "auto"
+                    else '{"company": "AAPL"}')                                 # required: a wrong argument name
             return completion(tool_calls=[("get_financial_fact", args)], finish="tool_calls", prompt=540)
         fmt = r.get("response_format")
         if fmt and fmt["type"] == "json_schema" and self.schema:
@@ -112,8 +113,9 @@ def test_tool_probe_checks_calls_against_the_registry_and_runs_the_round_trip():
     result, ep = probe("tools")
     f = result["findings"]
     assert f["auto"] == {"tool_call": True, "name": "get_financial_fact", "finish_reason": "tool_calls",
-                         "arguments_valid": True, "expected_tool": True}
+                         "arguments_valid": True, "expected_tool": True, "tool_accepts": True}
     assert f["required"]["arguments_valid"] is False and f["required"]["why"].startswith(("company:", "ticker:"))
+    assert f["required"]["tool_accepts"] is False and f["named"]["tool_accepts"] is True
     assert f["named"]["arguments_valid"] is True and f["named"]["expected_tool"] is True
     assert f["schema_prompt_tokens"] == 500
     assert f["loop"] == {"rounds": [
@@ -171,7 +173,8 @@ def test_limits_probe_reports_refused_max_tokens():
 def test_determinism_probe_groups_repeats():
     f = probe("determinism")[0]["findings"]
     assert f["temperature_0"] == {"identical": True, "distinct_replies": 1}
-    assert set(f) == {"temperature_0", "temperature_0.9_seed_1234", "temperature_0.9_no_seed"}
+    assert set(f) == {"temperature_0", "temperature_0.9_seed_1234", "temperature_0.9_no_seed",
+                      "temperature_0.9_seeds_1_2_3"}
 
 
 def test_concurrency_probe_records_the_429_and_retry_after():
@@ -252,5 +255,88 @@ def test_the_loop_stops_after_max_rounds_and_flags_a_wrong_answer():
 
     outs, loop = asyncio.run(pe.tool_loop(pe.Session(Looping(), settings()), [{"role": "user", "content": "q"}]))
     assert len(outs) == pe.MAX_TOOL_ROUNDS and loop["answered"] is False and loop["rounds"][0]["result"] == 98.0
-    assert pe.GROWTH_ANSWER.search("grew 2.02%") and pe.GROWTH_ANSWER.search("2.0%")
-    assert not pe.GROWTH_ANSWER.search("12.0%") and not pe.GROWTH_ANSWER.search("98.0%")
+    for right in ("grew 2.02%", "2.0%", "about 2%", "2.0 percent", "2.024%"):
+        assert pe.GROWTH_ANSWER.search(right), right
+    for wrong in ("12.0%", "98.0%", "2.09%", "2.05%", "grew 2.5%"):
+        assert not pe.GROWTH_ANSWER.search(wrong), wrong
+
+
+# --- added after the review of W1-03 -----------------------------------------------------------------------------
+
+def fake_main(monkeypatch, endpoint):
+    monkeypatch.setattr(pe, "get_settings", lambda: settings())
+
+    class Ctx:
+        def __init__(self, s):
+            self.client = endpoint
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(pe, "LLMClient", Ctx)
+
+
+def test_a_crashing_probe_keeps_the_others(tmp_path, monkeypatch, capsys):
+    fake_main(monkeypatch, Endpoint())
+
+    async def boom(s):
+        raise RuntimeError(f"failed at https://{SECRET_HOST}/v1")
+
+    monkeypatch.setitem(pe.PROBES, "json", boom)
+    assert pe.main(["--out-dir", str(tmp_path)]) == 0
+    report = json.loads((tmp_path / "endpoint_probe.json").read_text(encoding="utf-8"))
+    assert report["probes"]["json"] == {"outcomes": [], "findings": {"crashed": "RuntimeError: failed at "
+                                                                                  "https://<endpoint>/v1"}}
+    assert report["probes"]["tools"]["outcomes"] and SECRET_HOST not in capsys.readouterr().out
+
+
+def test_a_bad_key_writes_nothing(tmp_path, monkeypatch, capsys):
+    class Unauthorised(Endpoint):
+        async def create(self, **request):
+            raise status_error(openai.AuthenticationError, 401)
+
+    fake_main(monkeypatch, Unauthorised())
+    assert pe.main(["--out-dir", str(tmp_path / "out")]) == 1
+    assert "nothing written" in capsys.readouterr().err and not (tmp_path / "out").exists()
+
+
+def test_a_subset_never_overwrites_the_committed_report(monkeypatch, capsys):
+    fake_main(monkeypatch, Endpoint())
+    assert pe.main(["--only", "thinking"]) == 1
+    assert "must not overwrite the full report" in capsys.readouterr().err
+
+
+def test_the_loop_runs_tools_through_the_async_registry_and_redacts_results(monkeypatch):
+    seen = []
+
+    async def fake_tool(name, arguments):
+        seen.append(name)
+        return {"error": {"type": "internal_error", "message": f"index missing at https://{SECRET_HOST}/x"}}
+
+    monkeypatch.setattr(pe, "call_tool_async", fake_tool)
+    _, loop = asyncio.run(pe.tool_loop(pe.Session(Endpoint(), settings()), [{"role": "user", "content": "grow"}]))
+    assert seen and loop["rounds"][0]["result"] == "index missing at https://<endpoint>/x"
+
+
+def test_the_over_context_prompt_is_sized_by_counting_the_prompt(monkeypatch):
+    import core.tokens
+    monkeypatch.setattr(core.tokens, "count_tokens", lambda text: len(text) // 5)   # merges repeats like Qwen
+    result, ep = probe("limits", LLM_CONTEXT_TOKENS=4096)
+    f = result["findings"]["over_context"]
+    assert f["prompt_tokens_counted"] >= f["target"] == 4096 - 1024 + pe.CONTEXT_OVERSHOOT
+    assert len(ep.sent[-1]["messages"][0]["content"]) // 5 >= f["target"]
+
+
+def test_a_schema_valid_call_the_tool_rejects_is_flagged(monkeypatch):
+    # measured: Qwen asked get_financial_fact for metric "net_sales", which passes the schema but not the tool
+    async def tool(name, arguments):
+        return {"error": {"type": "invalid_input", "message": "unknown metric 'net_sales'"}}
+
+    monkeypatch.setattr(pe, "call_tool_async", tool)
+    outcome = pe.Outcome("x", True, 1.0, tool_calls=[{"name": "get_financial_fact", "arguments": "{}"}])
+    assert asyncio.run(pe.tool_verdict(pe.Session(Endpoint(), settings()), outcome)) == {
+        "tool_accepts": False, "tool_error": "unknown metric 'net_sales'"}
+    assert asyncio.run(pe.tool_verdict(pe.Session(Endpoint(), settings()), pe.Outcome("x", True, 1.0))) == {}

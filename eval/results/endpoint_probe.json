@@ -1,7 +1,7 @@
 {
  "meta": {
   "probe_version": "p-v1",
-  "date": "2026-11-14T05:24:26+00:00",
+  "date": "2026-11-14T05:36:32+00:00",
   "model": "Qwen/Qwen3-8B",
   "endpoint": "hosted",
   "thinking_setting": false,
@@ -9,7 +9,7 @@
   "context_setting": 8192,
   "min_gap_s": 1.1,
   "timeout_s": 120.0,
-  "git_commit": "e491067c898d205cc4a60ae1e020002c922b5a92"
+  "git_commit": "9d3b66763e60f3f634ae76da22b69f126d481d7d"
  },
  "probes": {
   "tools": {
@@ -17,22 +17,22 @@
     {
      "label": "no tools (baseline for prompt tokens)",
      "ok": true,
-     "seconds": 11.971,
+     "seconds": 0.303,
      "status": 200,
      "error_type": null,
      "error": null,
      "retry_after": null,
-     "finish_reason": "stop",
+     "finish_reason": "length",
      "prompt_tokens": 31,
-     "completion_tokens": 542,
-     "text": "As of my knowledge cutoff in July 2024, I don't have real-time data access, but I can guide you on how to find Apple's total net sales for fiscal 2024 using the tools and resources available.\n\n### Steps to Find Apple's Total Net Sales for Fiscal 2024:\n\n1. **Visit Apple's Investor Relations Website**:\n   - Go to [Apple Investor Relations](https://investor.apple.com).\n   - Navigate to the **Financia",
+     "completion_tokens": 1,
+     "text": "As",
      "reasoning_chars": null,
      "tool_calls": []
     },
     {
      "label": "tools, tool_choice=auto",
      "ok": true,
-     "seconds": 1.127,
+     "seconds": 1.302,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -52,7 +52,7 @@
     {
      "label": "tools, tool_choice=required",
      "ok": true,
-     "seconds": 1.397,
+     "seconds": 1.407,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -72,7 +72,7 @@
     {
      "label": "tools, tool_choice=calculate (named)",
      "ok": true,
-     "seconds": 1.181,
+     "seconds": 0.896,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -92,7 +92,7 @@
     {
      "label": "agent loop, reply 1",
      "ok": true,
-     "seconds": 1.048,
+     "seconds": 1.109,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -112,7 +112,7 @@
     {
      "label": "agent loop, reply 2",
      "ok": true,
-     "seconds": 0.911,
+     "seconds": 0.971,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -132,7 +132,7 @@
     {
      "label": "agent loop, reply 3",
      "ok": true,
-     "seconds": 0.803,
+     "seconds": 0.795,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -151,20 +151,26 @@
      "name": "get_financial_fact",
      "finish_reason": "tool_calls",
      "arguments_valid": true,
-     "expected_tool": true
+     "expected_tool": true,
+     "tool_accepts": false,
+     "tool_error": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
     },
     "required": {
      "tool_call": true,
      "name": "get_financial_fact",
      "finish_reason": "tool_calls",
-     "arguments_valid": true
+     "arguments_valid": true,
+     "tool_accepts": false,
+     "tool_error": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
     },
     "named": {
      "tool_call": true,
      "name": "calculate",
      "finish_reason": "stop",
      "arguments_valid": true,
-     "expected_tool": true
+     "expected_tool": true,
+     "tool_accepts": false,
+     "tool_error": "unit is only for difference and sum; percent returns '%'"
     },
     "schema_prompt_tokens": 1646,
     "loop": {
@@ -190,7 +196,7 @@
     {
      "label": "prompt only (no response_format)",
      "ok": true,
-     "seconds": 2.049,
+     "seconds": 2.039,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -205,7 +211,7 @@
     {
      "label": "response_format=json_object",
      "ok": true,
-     "seconds": 2.035,
+     "seconds": 2.038,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -220,7 +226,7 @@
     {
      "label": "response_format=json_schema (B0Answer, strict)",
      "ok": true,
-     "seconds": 2.1,
+     "seconds": 2.101,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -235,7 +241,7 @@
     {
      "label": "json_schema against a prose instruction",
      "ok": true,
-     "seconds": 1.911,
+     "seconds": 1.923,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -274,7 +280,7 @@
     {
      "label": "enable_thinking=true",
      "ok": true,
-     "seconds": 0.301,
+     "seconds": 0.439,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -304,7 +310,7 @@
     {
      "label": "switch not sent",
      "ok": true,
-     "seconds": 0.311,
+     "seconds": 0.306,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -323,7 +329,7 @@
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.301
+     "seconds": 0.439
     },
     "off": {
      "ok": true,
@@ -337,7 +343,7 @@
      "think_block": false,
      "reasoning_field_chars": null,
      "completion_tokens": 12,
-     "seconds": 0.311
+     "seconds": 0.306
     },
     "identical_replies": true,
     "switch_honoured": false
@@ -348,7 +354,7 @@
     {
      "label": "max_tokens=16",
      "ok": true,
-     "seconds": 0.393,
+     "seconds": 0.4,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -363,7 +369,7 @@
     {
      "label": "max_tokens=128",
      "ok": true,
-     "seconds": 2.811,
+     "seconds": 2.816,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -378,7 +384,7 @@
     {
      "label": "max_tokens=512",
      "ok": true,
-     "seconds": 11.116,
+     "seconds": 11.115,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -393,7 +399,7 @@
     {
      "label": "max_tokens=1024",
      "ok": true,
-     "seconds": 22.253,
+     "seconds": 22.247,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -410,23 +416,23 @@
     "points": [
      {
       "completion_tokens": 16,
-      "seconds": 0.393
+      "seconds": 0.4
      },
      {
       "completion_tokens": 128,
-      "seconds": 2.811
+      "seconds": 2.816
      },
      {
       "completion_tokens": 512,
-      "seconds": 11.116
+      "seconds": 11.115
      },
      {
       "completion_tokens": 1024,
-      "seconds": 22.253
+      "seconds": 22.247
      }
     ],
     "fit": {
-     "overhead_s": 0.03,
+     "overhead_s": 0.04,
      "tokens_per_s": 46.1
     }
    }
@@ -436,7 +442,7 @@
     {
      "label": "max_tokens=1025",
      "ok": false,
-     "seconds": 0.026,
+     "seconds": 0.028,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400",
@@ -451,7 +457,7 @@
     {
      "label": "max_tokens=2048",
      "ok": false,
-     "seconds": 0.026,
+     "seconds": 0.033,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400",
@@ -464,9 +470,9 @@
      "tool_calls": []
     },
     {
-     "label": "prompt of ~7221 tokens + max_tokens 1024 (over 8192)",
+     "label": "prompt of 7581 tokens + max_tokens 1024 (over 8192)",
      "ok": false,
-     "seconds": 0.07,
+     "seconds": 0.088,
      "status": 400,
      "error_type": "BadRequestError",
      "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)",
@@ -491,7 +497,8 @@
      "error": "Error code: 400"
     },
     "over_context": {
-     "prompt_tokens_counted": 7221,
+     "prompt_tokens_counted": 7581,
+     "target": 7568,
      "accepted": false,
      "status": 400,
      "error": "Error code: 400 - This model's maximum context length is 8192 tokens. However, you requested 1024 output tokens and your prompt contains at least 7169 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=7169)"
@@ -503,7 +510,7 @@
     {
      "label": "temperature_0 #1",
      "ok": true,
-     "seconds": 0.607,
+     "seconds": 0.613,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -518,7 +525,7 @@
     {
      "label": "temperature_0 #2",
      "ok": true,
-     "seconds": 0.606,
+     "seconds": 0.614,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -548,7 +555,7 @@
     {
      "label": "temperature_0.9_seed_1234 #1",
      "ok": true,
-     "seconds": 0.675,
+     "seconds": 0.68,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -563,7 +570,7 @@
     {
      "label": "temperature_0.9_seed_1234 #2",
      "ok": true,
-     "seconds": 0.681,
+     "seconds": 0.678,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -578,7 +585,22 @@
     {
      "label": "temperature_0.9_no_seed #1",
      "ok": true,
-     "seconds": 0.611,
+     "seconds": 0.74,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 32,
+     "text": "A bank's balance sheet shows the total assets it holds, the liabilities it owes to others, and the equity that represents the net worth of the institution.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_no_seed #2",
+     "ok": true,
+     "seconds": 0.631,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -591,9 +613,9 @@
      "tool_calls": []
     },
     {
-     "label": "temperature_0.9_no_seed #2",
+     "label": "temperature_0.9_seeds_1_2_3 #1",
      "ok": true,
-     "seconds": 0.607,
+     "seconds": 0.61,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -601,7 +623,37 @@
      "finish_reason": "stop",
      "prompt_tokens": 23,
      "completion_tokens": 26,
-     "text": "A bank's balance sheet shows its financial position at a specific point in time, listing its assets, liabilities, and equity.",
+     "text": "A bank's balance sheet reflects its financial position at a specific point in time, showing its assets, liabilities, and equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seeds_1_2_3 #2",
+     "ok": true,
+     "seconds": 0.875,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 38,
+     "text": "A bank's balance sheet shows the total assets it holds, such as loans and investments, compared to its liabilities, like customer deposits and borrowings, along with its shareholders' equity.",
+     "reasoning_chars": null,
+     "tool_calls": []
+    },
+    {
+     "label": "temperature_0.9_seeds_1_2_3 #3",
+     "ok": true,
+     "seconds": 0.677,
+     "status": 200,
+     "error_type": null,
+     "error": null,
+     "retry_after": null,
+     "finish_reason": "stop",
+     "prompt_tokens": 23,
+     "completion_tokens": 29,
+     "text": "A bank's balance sheet is a snapshot of its financial health, showing its assets, liabilities, and equity at a specific point in time.",
      "reasoning_chars": null,
      "tool_calls": []
     }
@@ -618,6 +670,10 @@
     "temperature_0.9_no_seed": {
      "identical": false,
      "distinct_replies": 2
+    },
+    "temperature_0.9_seeds_1_2_3": {
+     "identical": false,
+     "distinct_replies": 3
     }
    }
   },
@@ -626,7 +682,7 @@
     {
      "label": "concurrent request A",
      "ok": true,
-     "seconds": 5.585,
+     "seconds": 5.593,
      "status": 200,
      "error_type": null,
      "error": null,
@@ -641,7 +697,7 @@
     {
      "label": "concurrent request B",
      "ok": false,
-     "seconds": 0.077,
+     "seconds": 0.089,
      "status": 429,
      "error_type": "RateLimitError",
      "error": "Error code: 429",

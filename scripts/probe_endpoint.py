@@ -1,10 +1,11 @@
 """W1-03: probe what the LLM endpoint in .env supports, and write the evidence for ADR-016 "Endpoint usage".
 
-Run (about 30 requests, ~2 minutes; one at a time, at least MIN_GAP_S apart, except the deliberate concurrent
+Run (about 33 requests, ~2 minutes; one at a time, at least MIN_GAP_S apart, except the deliberate concurrent
 pair; use it outside the key freeze, as it competes with anyone else on the team key):
     python scripts/probe_endpoint.py                      # all probes -> eval/results/endpoint_probe.{json,md}
-    python scripts/probe_endpoint.py --only tools json    # a subset (names: see PROBES)
-    python scripts/probe_endpoint.py --skip concurrency   # never provoke a 429
+    python scripts/probe_endpoint.py --only tools json --out-dir /tmp/probe   # a subset, written elsewhere
+    python scripts/probe_endpoint.py --skip concurrency --out-dir /tmp/probe  # never provoke a 429
+A subset never overwrites the committed full report: --only/--skip need an --out-dir other than eval/results.
 
 Probes: native tool calling with the four tools.registry schemas (tool_choice auto / required / named, and a
 short agent loop that runs every call through the real registry until the model answers), response_format (none / json_object / json_schema with eval's B0Answer,
@@ -14,9 +15,11 @@ and seed determinism, and two concurrent requests (the second should get 429 on 
 
 Requests go through core.llm's configured client (the group CA, the timeout below), never through its retries
 or cache: a failure is measured as it happens. The output never contains the API key, and a remote host is shown
-as <endpoint> (scripts/smoke_llm.py's redaction), so the report can be committed and pasted.
-Exit codes: 0 = written (a probe that finds a feature missing still counts), 1 = settings missing or the
-endpoint unreachable (nothing written).
+as <endpoint> (scripts/smoke_llm.py's redaction) in everything written: replies, errors and tool results, so the
+report can be committed and pasted. Tool calls in the agent loop run through tools.registry.call_tool_async, as
+the Week 2 agent will. A probe that crashes is recorded as crashed and the others still run.
+Exit codes: 0 = written (a probe that finds a feature missing still counts), 1 = settings missing, a subset aimed
+at the committed report, or no request answered successfully (bad key, network, TLS: nothing written).
 """
 from __future__ import annotations
 
@@ -45,13 +48,13 @@ from core.llm import LLMClient, extract_json, strip_thinking  # noqa: E402
 from core.settings import HTTPS, Settings, get_settings  # noqa: E402
 from eval.runs_schema import B0Answer  # noqa: E402
 from scripts.smoke_llm import RedactHost, redact  # noqa: E402
-from tools.registry import SCHEMAS, TOOLS, call_tool  # noqa: E402
+from tools.registry import SCHEMAS, TOOLS, call_tool_async  # noqa: E402
 
 PROBE_VERSION = "p-v1"
 OUT_DIR = ROOT / "eval" / "results"
 OUT_NAME = "endpoint_probe"
 MIN_GAP_S = 1.1                 # 60 requests/min on the key: never start two requests closer than this
-PROBE_TIMEOUT_S = 120.0         # a 1,024-token reply must not time out (the .env default of 30 s can)
+PROBE_TIMEOUT_S = 120.0         # a 1,024-token reply took 22 s; room for long prompts and a busy server
 TEXT_KEEP = 400                 # characters of each reply kept in the report
 LATENCY_MAX_TOKENS = (16, 128, 512, 1024)
 LIMIT_MAX_TOKENS = (1025, 2048)
@@ -60,7 +63,9 @@ FILLER = "The company reported its results for the fiscal year in the annual rep
 TOOLS_SPEC = [{"type": "function", "function": schema} for schema in SCHEMAS]
 FACT_QUESTION = "What were Apple's total net sales in fiscal 2024? Use the tools."
 GROWTH_QUESTION = "By what percent did net sales grow from 383,285 to 391,035 (USD millions)? Use the tools."
-GROWTH_ANSWER = re.compile(r"(?<![\d.])2\.0\d?(?!\d)")     # (391,035 - 383,285) / 383,285 = 2.02%: "2.0" or "2.02"
+# (391,035 - 383,285) / 383,285 = 2.02%: "2%", "2.0%" or "2.02%" is right; "12%", "2.09%" or "98.0%" is not
+GROWTH_ANSWER = re.compile(r"(?<![\d.])2(?:\.0(?:[0-4]\d*)?)?\s*(?:%|percent)")
+SEEDS = (1, 2, 3)               # different seeds at temperature 0.9: do they give different replies?
 MAX_TOOL_ROUNDS = 4             # replies in the agent-loop probe: a call, a corrected call after an error, an answer
 PASSAGE = "[P1] Apple's total net sales were $391,035 million in fiscal 2024 (year ended September 28, 2024)."
 JSON_INSTRUCTION = ("Answer with one JSON object with the fields answer (string), value (number or null), unit, "
@@ -119,7 +124,12 @@ class Session:
         except openai.APIError as err:                               # connection, timeout
             return Outcome(label, False, round(time.perf_counter() - start, 3), error_type=type(err).__name__,
                            error=self.clean(str(err))), None
-        return outcome_of(label, response, time.perf_counter() - start), response
+        outcome = outcome_of(label, response, time.perf_counter() - start)
+        if outcome.text:
+            outcome.text = self.clean(outcome.text)
+        for call in outcome.tool_calls:
+            call["arguments"] = self.clean(call["arguments"])
+        return outcome, response
 
     def clean(self, text: str) -> str:
         """An error message fit for the report: no host, no key, not too long."""
@@ -206,7 +216,7 @@ def same_text(outcomes: list[Outcome]) -> bool | None:
 # --------------------------------------------------------------------------------------------- probes
 async def probe_tools(s: Session) -> dict[str, Any]:
     user = [{"role": "user", "content": FACT_QUESTION}]
-    plain, _ = await s.send("no tools (baseline for prompt tokens)", s.base(user))
+    plain, _ = await s.send("no tools (baseline for prompt tokens)", s.base(user, max_tokens=1))
     auto, _ = await s.send("tools, tool_choice=auto", s.base(user, tools=TOOLS_SPEC, tool_choice="auto"))
     required, _ = await s.send("tools, tool_choice=required", s.base(user, tools=TOOLS_SPEC, tool_choice="required"))
     growth = [{"role": "user", "content": GROWTH_QUESTION}]
@@ -217,8 +227,22 @@ async def probe_tools(s: Session) -> dict[str, Any]:
         "named": tool_call_check(named, "calculate"),
         "schema_prompt_tokens": (auto.prompt_tokens - plain.prompt_tokens)
         if auto.ok and plain.ok and auto.prompt_tokens and plain.prompt_tokens else None}
+    for key, outcome in (("auto", auto), ("required", required), ("named", named)):
+        findings[key].update(await tool_verdict(s, outcome))
     loop_outcomes, findings["loop"] = await tool_loop(s, growth)
     return {"outcomes": outcomes + loop_outcomes, "findings": findings}
+
+
+async def tool_verdict(s: Session, outcome: Outcome) -> dict[str, Any]:
+    """Whether the tool itself accepts the call: "arguments_valid" is the argument schema only, while a tool also
+    checks values (e.g. get_financial_fact rejects metric "net_sales"; its metric is "revenue")."""
+    if not outcome.tool_calls or outcome.tool_calls[0]["name"] not in TOOLS:
+        return {}
+    call = outcome.tool_calls[0]
+    result = await call_tool_async(call["name"], call["arguments"])
+    error = result.get("error") if isinstance(result, dict) else None
+    rejected = isinstance(error, dict) and error.get("type") == "invalid_input"
+    return {"tool_accepts": not rejected, **({"tool_error": s.clean(str(error.get("message")))} if rejected else {})}
 
 
 async def tool_loop(s: Session, messages: list[dict[str, Any]]) -> tuple[list[Outcome], dict[str, Any]]:
@@ -238,11 +262,13 @@ async def tool_loop(s: Session, messages: list[dict[str, Any]]) -> tuple[list[Ou
             {"id": c.id, "type": "function", "function": {"name": c.function.name, "arguments": c.function.arguments}}
             for c in calls]})
         for c in calls:
-            result = call_tool(c.function.name, c.function.arguments)    # the real tool, as the agent will call it
-            working.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(result)})
-            rounds.append({"call": f"{c.function.name}({c.function.arguments})",
-                           "result": result.get("error", {}).get("message") if isinstance(result, dict)
-                           and "error" in result else (result.get("result") if isinstance(result, dict) else result)})
+            # the real tool, as the async Week 2 agent will call it (search_filings needs its own thread)
+            result = await call_tool_async(c.function.name, c.function.arguments)
+            working.append({"role": "tool", "tool_call_id": c.id, "content": json.dumps(result, default=str)})
+            shown = result.get("error", {}).get("message") if isinstance(result, dict) and "error" in result \
+                else (result.get("result") if isinstance(result, dict) else result)
+            rounds.append({"call": s.clean(f"{c.function.name}({c.function.arguments})"),
+                           "result": shown if isinstance(shown, int | float) or shown is None else s.clean(str(shown))})
     return outcomes, {"rounds": rounds, "replies": MAX_TOOL_ROUNDS, "answered": False, "answer": "",
                       "correct": False}
 
@@ -293,17 +319,21 @@ async def probe_limits(s: Session) -> dict[str, Any]:
     if context:
         try:
             from core.tokens import count_tokens
-            per = count_tokens(FILLER)
+            count_tokens(FILLER)
         except Exception as err:            # noqa: BLE001 - no tokenizer: say so in the report, do not stop
             findings["over_context"] = {"skipped": f"Qwen tokenizer unavailable ({type(err).__name__})"}
         else:
+            # Count the prompt itself: repeats tokenize differently from one FILLER, and a prompt that ends up
+            # under the limit would make the endpoint generate max_tokens on the shared key
             target = context - s.settings.LLM_MAX_COMPLETION_TOKENS + CONTEXT_OVERSHOOT
-            prompt = FILLER * (target // per + 1)
-            o, _ = await s.send(f"prompt of ~{count_tokens(prompt)} tokens + max_tokens "
-                                f"{s.settings.LLM_MAX_COMPLETION_TOKENS} (over {context})",
+            prompt = FILLER
+            while (counted := count_tokens(prompt)) < target:
+                prompt += FILLER * max(1, (target - counted) // 20)
+            o, _ = await s.send(f"prompt of {counted} tokens + max_tokens {s.settings.LLM_MAX_COMPLETION_TOKENS} "
+                                f"(over {context})",
                                 s.base([{"role": "user", "content": prompt + "Summarise in one line."}]))
             outcomes.append(o)
-            findings["over_context"] = {"prompt_tokens_counted": count_tokens(prompt), "accepted": o.ok,
+            findings["over_context"] = {"prompt_tokens_counted": counted, "target": target, "accepted": o.ok,
                                         "status": o.status, "error": o.error}
     return {"outcomes": outcomes, "findings": findings}
 
@@ -312,7 +342,8 @@ async def probe_determinism(s: Session) -> dict[str, Any]:
     user = [{"role": "user", "content": SENTENCE}]
     groups = {"temperature_0": [s.base(user)] * 3,
               "temperature_0.9_seed_1234": [s.base(user, temperature=0.9, seed=1234)] * 2,
-              "temperature_0.9_no_seed": [s.base(user, temperature=0.9)] * 2}
+              "temperature_0.9_no_seed": [s.base(user, temperature=0.9)] * 2,
+              "temperature_0.9_seeds_1_2_3": [s.base(user, temperature=0.9, seed=n) for n in SEEDS]}
     outcomes, findings = [], {}
     for name, requests in groups.items():
         got = [(await s.send(f"{name} #{i + 1}", r))[0] for i, r in enumerate(requests)]
@@ -396,7 +427,13 @@ async def run(client: Any, settings: Settings, names: list[str]) -> dict[str, An
     probes = {}
     for name in names:
         print(f"[{name}] ...", flush=True)
-        result = await PROBES[name](session)
+        try:
+            result = await PROBES[name](session)
+        except Exception as err:            # noqa: BLE001 - keep the other probes' evidence (a live run is costly)
+            message = session.clean(f"{type(err).__name__}: {err}")
+            print(f"[{name}] crashed: {message}", flush=True)
+            probes[name] = {"outcomes": [], "findings": {"crashed": message}}
+            continue
         probes[name] = {"outcomes": [asdict(o) for o in result["outcomes"]], "findings": result["findings"]}
         failed = sum(not o.ok for o in result["outcomes"])
         print(f"[{name}] {len(result['outcomes'])} requests, {failed} refused or failed", flush=True)
@@ -421,13 +458,16 @@ def main(argv: list[str] | None = None) -> int:
         handler.addFilter(RedactHost(settings.LLM_BASE_URL))
     settings = settings.model_copy(update={"LLM_CACHE_DIR": None, "LLM_TIMEOUT": PROBE_TIMEOUT_S})
     names = [n for n in (args.only or list(PROBES)) if n not in args.skip]
+    if names != list(PROBES) and args.out_dir.resolve() == OUT_DIR.resolve():
+        print("ERROR: a subset of the probes must not overwrite the full report: pass --out-dir", file=sys.stderr)
+        return 1
 
     async def go() -> dict[str, Any]:
         async with LLMClient(settings) as llm:            # its configured client: same TLS, no SDK retries
             return await run(llm.client, settings, names)
 
     report = asyncio.run(go())
-    reachable = any(o["ok"] or o["status"] for p in report["probes"].values() for o in p["outcomes"])
+    reachable = any(o["ok"] for p in report["probes"].values() for o in p["outcomes"])
     if not reachable:
         print("ERROR: the endpoint answered no request (network, TLS or key); nothing written", file=sys.stderr)
         return 1
