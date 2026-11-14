@@ -1,6 +1,6 @@
 """calculate: the only place a number in an answer is computed (spec §7.2). Whitelisted operations, no eval().
 
-    calculate(operation, inputs, years?, unit?) -> {operation, inputs, result, unit, expression, notes}
+    calculate(operation, inputs, years?, unit?) -> {operation, inputs, years, result, unit, expression, notes}
 
 Operations and input order (chronological where order matters: old first, new second):
     ratio       [a, b]          a / b                                       unit "ratio", 2 decimals
@@ -26,6 +26,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from core.spec import Unit
 from tools.base import (
     INVALID_INPUT,
     UNDEFINED,
@@ -37,9 +38,6 @@ from tools.base import (
 )
 
 Operation = Literal["ratio", "percent", "growth", "difference", "sum", "cagr"]
-# Units an answer may carry (spec §7, "Allowed unit values")
-Unit = Literal["USD", "USD thousands", "USD millions", "USD billions", "USD per share", "shares", "shares millions",
-               "%", "ratio", "count"]
 
 PAIR_OPERATIONS = frozenset({"ratio", "percent", "growth", "difference", "cagr"})   # exactly two inputs
 MIN_INPUTS = 2                          # every operation combines at least two numbers
@@ -163,8 +161,10 @@ def compute(operation: str, inputs: list[float], years: float | None = None, uni
         raise CalculationError(UNDEFINED, f"{op} result is not a finite number", inputs=xs)
     if op in UNIT_FROM_ARGUMENT and result_unit is None:
         notes.append(NO_UNIT_NOTE)
-    return {"operation": op, "inputs": xs, "result": result, "unit": result_unit, "expression": expression,
-            "notes": notes}
+    # years is returned (null except for cagr) so a calculation copied into the answer can be recomputed
+    # (agent/contract.py Calculation, spec §8 invariant 3)
+    return {"operation": op, "inputs": xs, "years": args.years, "result": result, "unit": result_unit,
+            "expression": expression, "notes": notes}
 
 
 @tool_boundary

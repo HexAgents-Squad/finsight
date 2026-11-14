@@ -65,6 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import yaml  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
+from core.figures import SCALE_WORDS, Figure, figures  # noqa: E402  (the figure reader, shared with the critic)
 from core.llm import strip_thinking  # noqa: E402
 from eval.context_pack import GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
 from eval.context_pack import REFUSAL_PATH as REFUSALS_FILE  # noqa: E402
@@ -111,9 +112,6 @@ D_WINNERS = {"D01": "AAPL", "D02": "GOOGL", "D03": "JPM", "D04": "C", "D05": "JN
              "D08": "PG", "D09": "AAPL", "D10": "GOOGL"}
 
 UNIT_SCALE = {"USD": 1.0, "USD thousands": 1e3, "USD millions": 1e6, "USD billions": 1e9}
-SCALE_WORDS = {"thousand": 1e3, "thousands": 1e3, "k": 1e3, "million": 1e6, "millions": 1e6, "mn": 1e6, "mm": 1e6,
-               "m": 1e6, "billion": 1e9, "billions": 1e9, "bn": 1e9, "b": 1e9, "trillion": 1e12, "trillions": 1e12,
-               "tn": 1e12}
 SHORT_SCALES = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}          # "$B", "USD M": only next to a currency
 CURRENCY_WORDS = frozenset({"usd", "dollars", "dollar", "us"})
 FRACTION_UNITS = frozenset({"", "ratio", "fraction", "decimal"})  # a margin given as 0.446 under one of these
@@ -121,20 +119,6 @@ REFERENCE_SCALES = (1.0, 1e3, 1e6, 1e9)            # a passage figure may be in 
 CONFUSION_FACTORS = (1e-9, 1e-6, 1e-3, 1e-2, 1e2, 1e3, 1e6, 1e9)
 ARITHMETIC_SLIP_PCT = 5.0                           # a derived value this close to gold is a slip, not an invention
 
-MONTHS = (r"(?:January|February|March|April|May|June|July|August|September|October|November|December"
-          r"|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b\.?")
-DAY = r"\d{1,2}(?:st|nd|rd|th)?(?!\d|[.,]\d|%)"    # "June 30," yes; never "44" of "44.6%" or "12" of "12,345"
-NOT_A_FIGURE = re.compile(
-    rf"\b{MONTHS}\s+{DAY}(?:,?\s+\d{{4}})?"          # September 28, 2024 / June 30
-    rf"|\b{DAY}\s+{MONTHS}(?:,?\s+\d{{4}})?"         # 28 September 2024
-    r"|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b"
-    r"|\b10-[KQ]s?\b|\b(?:Part\s+I{1,2}\s+)?Item\s+\d{1,2}[A-C]?\b|\bQ[1-4]\b|\b\d+Q\d{2,4}\b|\bFY\s?\d{2,4}\b"
-    r"|\b\d+(?:st|nd|rd|th)\b|\bS&P\s*500\b|\bCOVID-19\b|(?<=[A-Za-z)])\(\d{1,2}\)|\[P\d+\]|\bP\d+\b",
-    re.IGNORECASE)
-PERCENT_RANGE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%")       # "10-12%" -> "10% 12%"
-FIGURE = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?:\s*(%|percent|per cent|pp|percentage points?)"
-                    r"|\s*(thousands?|millions?|billions?|trillions?|bn|mn|mm|tn|k|m|b)\b)?(?![\w%])", re.IGNORECASE)
-YEAR_RANGE = range(1990, 2040)
 # One adverb may sit in between: Qwen wrote "not directly reported in the provided passages" (M1 B14)
 NOT_REPORTED_ADVERB = r"(?:(?:separately|directly|explicitly|specifically)\s+)?"
 NOT_REPORTED_RE = re.compile(rf"\bnot\s+{NOT_REPORTED_ADVERB}(?:reported|disclosed)\b"
@@ -149,30 +133,6 @@ GROUPED_FIGURE = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+)(?![\d,])")   # a do
 
 
 # --------------------------------------------------------------------------------------------- numbers
-@dataclass(frozen=True)
-class Figure:
-    value: float           # absolute value with its scale word applied ("$10.1 billion" -> 1.01e10)
-    tolerance: float       # half a unit of its last printed digit, scaled ("10.1 billion" -> 0.05e9)
-    percent: bool
-    text: str
-
-
-def figures(text: str) -> list[Figure]:
-    """The figures in `text`, without dates, bare years, ordinals, footnote markers, Item/form/quarter names and
-    passage ids; a percentage range counts as two percentages."""
-    clean = PERCENT_RANGE.sub(r"\1% \2%", NOT_A_FIGURE.sub(" ", text))
-    out = []
-    for m in FIGURE.finditer(clean):
-        whole, frac, pct, word = m.group(1), m.group(2) or "", m.group(3), m.group(4)
-        number = float(whole.replace(",", "") + frac)
-        if not frac and not pct and not word and "," not in whole and int(number) in YEAR_RANGE:
-            continue                                  # a bare year such as 2024
-        scale = SCALE_WORDS[word.lower()] if word else 1.0
-        decimals = len(frac) - 1 if frac else 0
-        out.append(Figure(number * scale, 0.5 * 10 ** -decimals * scale, bool(pct), m.group(0).strip()))
-    return out
-
-
 def supported(fig: Figure, references: list[Figure]) -> bool:
     """`fig` and a reference figure are the same number at the coarser of their two printed precisions, in any
     reference scale: "$391.0 billion" matches 391,035 (millions) and 44.65% matches a gold "44.6%"."""

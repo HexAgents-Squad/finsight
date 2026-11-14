@@ -57,8 +57,8 @@ def error_type(result):
 ])
 def test_calculator_operations_are_pinned(operation, inputs, extra, result, unit, expression):
     out = calculate(operation, inputs, **extra)
-    assert out == {"operation": operation, "inputs": [float(x) for x in inputs], "result": result, "unit": unit,
-                   "expression": expression, "notes": []}
+    assert out == {"operation": operation, "inputs": [float(x) for x in inputs], "years": extra.get("years"),
+                   "result": result, "unit": unit, "expression": expression, "notes": []}
 
 
 @pytest.mark.parametrize("value, decimals, rounded", [(0.125, 2, 0.13), (12.25, 1, 12.3), (-2.25, 1, -2.3),
