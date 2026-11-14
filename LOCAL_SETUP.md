@@ -111,6 +111,9 @@ removed from replies either way. The provided endpoint currently ignores the swi
 | `TLSError` ... `does not verify` / `not trusted` | Check `LLM_CA_CERT` points at your group's CA file and the URL is your group's |
 | `TLSError` ... `did not complete a TLS handshake` | The server is not speaking HTTPS there: check `http://` vs `https://` and the port |
 | `TLSConfigError` | `LLM_CA_CERT` is not a PEM certificate (e.g. the wrong download) |
+| `TLSError` for `bge-small-en-v1.5` ... `set EMBED_CA_CERT` / `check EMBED_CA_CERT` | The embedding endpoint is another server with its own CA: set `EMBED_CA_CERT=certs/vm02-ca.crt` (the embeddings CA, not the chat one) |
+| `TLSConfigError` naming `EMBED_CA_CERT` | `EMBED_CA_CERT` is not a PEM certificate |
+| `UnprocessableEntityError` from embeddings | More than 16 texts or a text over 512 tokens: set `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512` |
 | settings error `no certificate file at ...` | The path in `LLM_CA_CERT` is wrong (relative paths start at the repo root) |
 | `AuthenticationError` | TLS works; the key in `LLM_API_KEY` is wrong or missing |
 | `RateLimitError` | Still refused after 3 retries: someone else is using the team key (one active request per key); try again shortly |

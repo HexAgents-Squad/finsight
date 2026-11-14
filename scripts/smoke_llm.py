@@ -22,7 +22,7 @@ if ROOT not in sys.path:                    # run as a script from any folder; i
 from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
 from core.exceptions import FinSightError  # noqa: E402
-from core.llm import LLMClient  # noqa: E402
+from core.llm import LLMClient, embed_ca  # noqa: E402
 from core.settings import HTTPS, Settings, get_settings  # noqa: E402
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -69,13 +69,12 @@ class RedactHost(logging.Filter):
 
 
 def embed_tls_line(settings: Settings, embed_url: str) -> str:
-    """How the embeddings server is verified (core.llm: EMBED_CA_CERT, else LLM_CA_CERT on the same server)."""
-    if settings.EMBED_CA_CERT is not None:
-        return f"verified against {settings.EMBED_CA_CERT.name} (EMBED_CA_CERT)"
+    """How the embeddings server is verified: the client's own choice (core.llm.embed_ca)."""
+    ca_file, setting = embed_ca(settings)
+    if ca_file is not None:
+        return f"verified against {ca_file.name} ({setting}{', same server' if setting == 'LLM_CA_CERT' else ''})"
     if not embed_url.lower().startswith(HTTPS):
         return "none (plain HTTP)"
-    if settings.LLM_CA_CERT is not None and (embed_url == settings.LLM_BASE_URL or not settings.EMBED_BASE_URL):
-        return f"verified against {settings.LLM_CA_CERT.name} (LLM_CA_CERT, same server)"
     return "verified against the default trust store"
 
 

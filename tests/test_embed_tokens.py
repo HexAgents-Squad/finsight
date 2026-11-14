@@ -44,3 +44,32 @@ def test_the_pinned_revision_is_a_full_commit_hash():
 def test_text_without_spaces_is_cut_at_the_token_not_emptied():
     # table rows often have no spaces near the limit: the cut must follow the tokens, not fall back to a space
     assert tk.cut_to_embedding_tokens("Revenue|391,035|383,285", 5) == ("Revenue|391", True)   # 3 + [CLS] + [SEP]
+
+
+class SplitWordTokenizer(WordTokenizer):
+    """A prefix that ends in a number takes two more tokens, as a word cut mid-way re-tokenises into pieces."""
+
+    def encode(self, text):
+        enc = super().encode(text)
+        extra = 2 if text[-1:].isdigit() else 0
+        return SimpleNamespace(ids=enc.ids + [0] * extra, offsets=enc.offsets)
+
+
+@pytest.mark.parametrize("text, cut", [
+    ("Revenue 391 383 net income", "Revenue"),          # 3 content tokens, then 2, re-tokenise too long
+    ("Revenue|391|383|net", "Revenue|"),                # no space to fall back to: still not emptied
+])
+def test_a_cut_that_re_tokenises_longer_backs_off_a_token_at_a_time(monkeypatch, text, cut):
+    monkeypatch.setattr(tk, "embed_tokenizer", lambda: SplitWordTokenizer())
+    assert tk.cut_to_embedding_tokens(text, 5) == (cut, True)
+    assert len(SplitWordTokenizer().encode(cut).ids) <= 5
+
+
+def test_the_back_off_stops_at_one_token(monkeypatch):
+    class AlwaysLonger(WordTokenizer):
+        def encode(self, text):
+            enc = super().encode(text)
+            return SimpleNamespace(ids=enc.ids * 3, offsets=enc.offsets)
+
+    monkeypatch.setattr(tk, "embed_tokenizer", lambda: AlwaysLonger())
+    assert tk.cut_to_embedding_tokens("alpha beta gamma delta", 4) == ("alpha", True)

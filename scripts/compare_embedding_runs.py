@@ -29,6 +29,7 @@ RESULTS = ROOT / "eval" / "results"
 MODELS = {"all-MiniLM-L6-v2": RESULTS / "runs", "bge-small-en-v1.5": RESULTS / "embedding_comparison" / "runs_bge"}
 SETTINGS = [("C3", r, f) for r in ("dense", "hybrid") for f in ("none", "company_year")]
 PAIRED_K = 5
+OUT_DIR = RESULTS                       # where the report goes (the inputs stay under RESULTS)
 
 
 def load_run(path: Path) -> dict[str, list]:
@@ -83,9 +84,9 @@ def main() -> int:
         out.append(f"| {r['retriever']} | {r['filters']} | {cells[0]} | {cells[1]} | "
                    f"{p['better']} / {p['worse']} / {p['same']} | {p['sign_test_p']} |")
     out += ["", f"'better' / 'worse': questions where {names[1]} has a higher / lower recall@5 than {names[0]}."]
-    (RESULTS / "embedding_comparison.json").write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8",
+    (OUT_DIR / "embedding_comparison.json").write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8",
                                                        newline="\n")
-    (RESULTS / "embedding_comparison.md").write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
+    (OUT_DIR / "embedding_comparison.md").write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
     print("\n".join(out))
     return 0
 

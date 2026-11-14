@@ -118,8 +118,9 @@ request on the key is refused with 429.
   ticket queue, polled so the event loop never blocks; holds across threads and event loops; a caller cancelled
   while waiting gives up its ticket), starts at least LLM_MIN_INTERVAL_S (1 s) apart. Different servers run in
   parallel, so the local Ollama run (M2) does not wait for the hosted endpoint. Two processes on one key are NOT
-  coordinated: run one evaluation at a time (key freeze below). Embedding calls do not use the queue (the hosted
-  endpoint has no embeddings).
+  coordinated: run one evaluation at a time (key freeze below). Embedding calls do not use the queue: they go to
+  the course's separate embedding endpoint (W1-16; own CA, EMBED_CA_CERT), in batches of at most 16 texts, with
+  the same retries but no spacing.
 - Retries: 429, 500/502/503/504, timeouts and network errors after 2, 4, 8 s (LLM_HTTP_RETRIES=3,
   LLM_RETRY_BASE_S=2 doubling; a longer numeric Retry-After is honoured; no wait exceeds 30 s), then FinSightError with the
   error type; TLS, authentication and request errors are not retried. The openai SDK's own retries are off

@@ -43,6 +43,7 @@ from pydantic import ValidationError  # noqa: E402
 
 from core.llm import LLMClient  # noqa: E402
 from core.settings import HTTPS, Settings, get_settings  # noqa: E402
+from core.tokens import EMBED_TOKENIZER_REVISION  # noqa: E402
 from scripts.smoke_llm import RedactHost, redact  # noqa: E402
 
 PROBE_VERSION = "e-v1"
@@ -200,7 +201,8 @@ async def probe_parity(s: Session) -> dict[str, Any]:
         return {"requests": [row], "findings": {"skipped": "the hosted request failed"}}
     try:
         from sentence_transformers import SentenceTransformer
-        model = await asyncio.to_thread(SentenceTransformer, LOCAL_PARITY_MODEL)
+        # the same Hugging Face commit as the tokenizer: one repository, so one revision pins model and tokenizer
+        model = await asyncio.to_thread(SentenceTransformer, LOCAL_PARITY_MODEL, revision=EMBED_TOKENIZER_REVISION)
         local = (await asyncio.to_thread(model.encode, list(PARITY_TEXTS), normalize_embeddings=True)).tolist()
     except Exception as err:                    # noqa: BLE001 - no local model: say so, keep the other probes
         return {"requests": [row], "findings": {"skipped": f"local model unavailable ({type(err).__name__})"}}

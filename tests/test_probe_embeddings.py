@@ -103,8 +103,8 @@ def test_concurrency_records_both_statuses():
 
 def test_parity_compares_with_a_local_model(monkeypatch):
     class Local:
-        def __init__(self, name):
-            assert name == pe.LOCAL_PARITY_MODEL
+        def __init__(self, name, revision):
+            assert name == pe.LOCAL_PARITY_MODEL and revision == tk.EMBED_TOKENIZER_REVISION
 
         def encode(self, texts, normalize_embeddings):
             return np.array([[1.0, float(len(t) % 7), 0.5] for t in texts])
@@ -203,7 +203,10 @@ def test_paired_comparison_counts_questions_per_model():
     assert ce.compare(items, a, b) == {"better": 1, "worse": 1, "same": 1, "sign_test_p": 1.0}
 
 
-def test_the_committed_comparison_regenerates():
+def test_the_committed_comparison_regenerates(tmp_path, monkeypatch):
+    # regenerated from the committed runs into tmp_path: the test never rewrites the committed report
     import scripts.compare_embedding_runs as ce
-    committed = (ce.RESULTS / "embedding_comparison.md").read_text(encoding="utf-8")
-    assert ce.main() == 0 and (ce.RESULTS / "embedding_comparison.md").read_text(encoding="utf-8") == committed
+    monkeypatch.setattr(ce, "OUT_DIR", tmp_path)
+    assert ce.main() == 0
+    for name in ("embedding_comparison.md", "embedding_comparison.json"):
+        assert (tmp_path / name).read_text(encoding="utf-8") == (ce.RESULTS / name).read_text(encoding="utf-8")

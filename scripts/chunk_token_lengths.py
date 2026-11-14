@@ -42,7 +42,7 @@ def summary(counts: list[int]) -> dict[str, float | int]:
     ordered = sorted(counts)
     p95 = ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))]
     row: dict[str, float | int] = {"chunks": len(counts), "mean": round(statistics.fmean(counts), 1),
-                                   "median": statistics.median(counts), "p95": p95, "max": ordered[-1]}
+                                   "median": round(float(statistics.median(counts)), 1), "p95": p95, "max": ordered[-1]}
     for limit in LIMITS.values():
         over = sum(c > limit for c in counts)
         row[f"over_{limit}"], row[f"over_{limit}_pct"] = over, round(100 * over / len(counts), 1)

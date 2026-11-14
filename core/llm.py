@@ -186,32 +186,48 @@ def _tls_failure(err: BaseException) -> ssl.SSLError | None:
     return None
 
 
-def _tls_advice(tls: ssl.SSLError, ca_file: Path | None) -> str:
+def embed_ca(settings: Settings) -> tuple[Path | None, str]:
+    """The CA file the embeddings server is verified against and the setting to fix when it fails. The group CA
+    vouches for the LLM endpoint's server only: EMBED_CA_CERT (the course's embedding endpoint has its own CA,
+    W1-16), else LLM_CA_CERT when it is the same server (scheme, host, port), else the default trust store
+    (None), for which the setting to add is EMBED_CA_CERT. scripts/smoke_llm.py reports the same choice."""
+    if settings.EMBED_CA_CERT is not None:
+        return settings.EMBED_CA_CERT, "EMBED_CA_CERT"
+    embed_url = settings.EMBED_BASE_URL or settings.LLM_BASE_URL
+    if settings.LLM_CA_CERT is not None and _origin(embed_url) == _origin(settings.LLM_BASE_URL):
+        return settings.LLM_CA_CERT, "LLM_CA_CERT"
+    return None, "EMBED_CA_CERT"
+
+
+def _tls_advice(tls: ssl.SSLError, ca_file: Path | None, setting: str = "LLM_CA_CERT") -> str:
     """What to fix for a failed handshake. Only a certificate that did not verify is a CA question; any other
-    TLS error (e.g. WRONG_VERSION_NUMBER) means the server did not answer with TLS at all."""
+    TLS error (e.g. WRONG_VERSION_NUMBER) means the server did not answer with TLS at all. `setting` is the
+    one that chooses the CA for the failing server (LLM_CA_CERT for chat, embed_ca() for embeddings)."""
     if not isinstance(tls, ssl.SSLCertVerificationError):
         return "the server did not complete a TLS handshake: check http:// vs https:// and the port in the URL"
     if ca_file is None:
-        return "the certificate is not trusted: set LLM_CA_CERT to your group's CA file (LOCAL_SETUP.md)"
-    return (f"the certificate does not verify against {ca_file.name}: check LLM_CA_CERT is your group's CA file "
+        return f"the certificate is not trusted: set {setting} to the server's CA file (LOCAL_SETUP.md)"
+    return (f"the certificate does not verify against {ca_file.name}: check {setting} is that server's CA file "
             f"and the URL is your group's (LOCAL_SETUP.md)")
 
 
-def _api_error(err: openai.APIError, model: str, ca_file: Path | None = None) -> FinSightError:
-    """The error left after the retries (LLMClient._send for chat; the openai client for embeddings).
-    `ca_file` is the CA the failing client verified against (None = default trust store)."""
+def _api_error(err: openai.APIError, model: str, ca_file: Path | None = None, setting: str = "LLM_CA_CERT",
+               kind_of_request: str = "LLM") -> FinSightError:
+    """The error left after the retries (LLMClient._send for chat, LLMClient._embed_batch for embeddings).
+    `ca_file` is the CA the failing client verified against (None = default trust store), `setting` the one
+    that chooses it."""
     if isinstance(err, openai.APIConnectionError):          # includes timeouts
         tls = _tls_failure(err)
         if tls is not None:
             # A TLS failure looks like a network error to openai; name the actual fix instead
             logger.error("TLS handshake for %s failed: %s", model, tls)
-            return FinSightError(f"TLS handshake for {model} failed ({tls}); {_tls_advice(tls, ca_file)}.",
+            return FinSightError(f"TLS handshake for {model} failed ({tls}); {_tls_advice(tls, ca_file, setting)}.",
                                  error_type="TLSError")
         kind = "NetworkError"
     else:
         kind = type(err).__name__                           # e.g. AuthenticationError, RateLimitError
-    logger.error("LLM request to %s failed: %s", model, err)
-    return FinSightError(f"LLM request to {model} failed: {err}", error_type=kind)
+    logger.error("%s request to %s failed: %s", kind_of_request, model, err)
+    return FinSightError(f"{kind_of_request} request to {model} failed: {err}", error_type=kind)
 
 
 @dataclass(frozen=True)
@@ -360,18 +376,14 @@ class LLMClient(AbstractLLMClient):
             max_retries=0,                      # retries are ours (_send), so they never multiply with the SDK's
             http_client=_http_client(ssl_context),
         )
-        # The group CA vouches for the LLM endpoint's server only: the embeddings server uses EMBED_CA_CERT
-        # (the course's embedding endpoint has its own CA, W1-16), else LLM_CA_CERT when it is the same server,
-        # else the default trust store
         embed_url = settings.EMBED_BASE_URL or settings.LLM_BASE_URL
-        same_server = _origin(embed_url) == _origin(settings.LLM_BASE_URL)
-        self._embed_ca = settings.EMBED_CA_CERT or (settings.LLM_CA_CERT if same_server else None)
+        self._embed_ca, self._embed_ca_setting = embed_ca(settings)
         if self._embed_ca is None or embed_client is not None:
             embed_ssl = None
         elif self._embed_ca == settings.LLM_CA_CERT and ssl_context is not None:
             embed_ssl = ssl_context                             # one context for one CA file
         else:
-            embed_ssl = build_ssl_context(self._embed_ca, "EMBED_CA_CERT" if settings.EMBED_CA_CERT else "LLM_CA_CERT")
+            embed_ssl = build_ssl_context(self._embed_ca, self._embed_ca_setting)
         self.embed_client = embed_client or AsyncOpenAI(
             base_url=embed_url,
             api_key=(settings.EMBED_API_KEY or settings.LLM_API_KEY).get_secret_value(),
@@ -630,7 +642,8 @@ class LLMClient(AbstractLLMClient):
                 return await self.embed_client.embeddings.create(model=self.settings.EMBED_MODEL, input=batch)
             except openai.APIError as err:
                 if retries >= self.settings.LLM_HTTP_RETRIES or not _retryable(err):
-                    raise _api_error(err, self.settings.EMBED_MODEL, self._embed_ca) from err
+                    raise _api_error(err, self.settings.EMBED_MODEL, self._embed_ca, self._embed_ca_setting,
+                                     "Embeddings") from err
                 delay = min(max(self.settings.LLM_RETRY_BASE_S * 2 ** retries, _retry_after(err) or 0.0),
                             MAX_RETRY_DELAY_S)
                 retries += 1

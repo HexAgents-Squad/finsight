@@ -18,8 +18,9 @@ from core.exceptions import FinSightError
 
 QWEN_TOKENIZER = "Qwen/Qwen3-8B"
 QWEN_TOKENIZER_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"      # Hugging Face commit, 10 Nov 2026
-# The hosted embedding model's tokenizer (W1-16): measured to count exactly as the endpoint does (602 = 602,
-# [CLS] and [SEP] included). BERT uncased WordPiece, the same vocabulary all-MiniLM-L6-v2 uses.
+# The hosted embedding model's tokenizer (W1-16): it counts exactly as the endpoint does, [CLS] and [SEP]
+# included (eval/results/embedding_probe.md: a text of 512 tokens by this count is accepted and billed as 512
+# prompt tokens, 513 is refused). BERT uncased WordPiece, the same vocabulary all-MiniLM-L6-v2 uses.
 EMBED_TOKENIZER = "BAAI/bge-small-en-v1.5"
 EMBED_TOKENIZER_REVISION = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"    # Hugging Face commit, 14 Nov 2026
 
@@ -61,10 +62,11 @@ def cut_to_embedding_tokens(text: str, max_tokens: int) -> tuple[str, bool]:
     enc = embed_tokenizer().encode(text)
     if len(enc.ids) <= max_tokens:
         return text, False
-    keep = max_tokens - 2                           # content tokens; [CLS] and [SEP] take the other two
-    end = enc.offsets[keep][1] if keep > 0 else 0   # offsets[0] is [CLS]: content token n is offsets[n]
-    cut = text[:end]
-    while end > 0 and len(embed_tokenizer().encode(cut).ids) > max_tokens:   # a split word can re-tokenise longer
-        end = cut.rstrip().rfind(" ")
-        cut = text[:max(end, 0)]
-    return cut, True
+    keep = max_tokens - 2       # content tokens; [CLS] and [SEP] take the other two (EMBED_MAX_INPUT_TOKENS > 2)
+    while True:
+        cut = text[:enc.offsets[keep][1]]           # offsets[0] is [CLS]: content token n is offsets[n]
+        # A word split by the cut can re-tokenise into more pieces: back off one token at a time (never to an
+        # empty text; measured on every C2/C3 chunk over 512 tokens, the first cut always fits)
+        if keep == 1 or len(embed_tokenizer().encode(cut).ids) <= max_tokens:
+            return cut, True
+        keep -= 1
