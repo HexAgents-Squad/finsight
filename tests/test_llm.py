@@ -141,7 +141,7 @@ def test_api_errors_are_wrapped_after_the_retries_that_make_sense(error, kind, r
 def test_retries_are_ours_not_the_sdks():
     llm = LLMClient(settings(LLM_HTTP_RETRIES=4, LLM_JSON_RETRIES=1))
     assert llm.client.max_retries == 0                                          # never multiplied with ours
-    assert llm.embed_client.max_retries == 4                                    # embeddings keep the SDK's
+    assert llm.embed_client.max_retries == 0                                    # embeddings too (W1-16)
 
 
 # --- chat_json ------------------------------------------------------------------------------------------
@@ -1154,3 +1154,178 @@ def test_a_cache_cleanup_error_never_fails_the_reply(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "unlink", linux_unlink)
     llm = client(reply("OK"), LLM_CACHE_DIR=str(blocker))
     assert run(llm.chat(USER)) == "OK"
+
+
+# --- W1-16: the course's embedding endpoint (own CA, 16 texts, 512 tokens, retries) ------------------------------
+
+EMBED_HTTPS = {"EMBED_BACKEND": "openai", "EMBED_BASE_URL": "https://embed.test:1035/v1", "EMBED_API_KEY": "ek"}
+
+
+def test_embed_ca_cert_is_validated_like_the_llm_one(tmp_path):
+    assert settings().EMBED_CA_CERT is None and settings(EMBED_CA_CERT=" ").EMBED_CA_CERT is None
+    assert settings(**EMBED_HTTPS, EMBED_CA_CERT="README.md").EMBED_CA_CERT.is_absolute()
+    with pytest.raises(ValueError, match="no certificate file at .*missing.crt"):
+        settings(**EMBED_HTTPS, EMBED_CA_CERT=str(tmp_path / "missing.crt"))
+    with pytest.raises(ValueError, match="EMBED_CA_CERT is set but the embeddings URL is not an https:// URL"):
+        settings(EMBED_BASE_URL="http://embed.test/v1", EMBED_CA_CERT=ca_bundle())
+    with pytest.raises(ValueError, match="EMBED_CA_CERT is set but the embeddings URL"):
+        settings(EMBED_CA_CERT=ca_bundle())                    # no EMBED_BASE_URL: the chat URL is http://
+
+
+def test_the_embeddings_server_is_verified_with_its_own_ca(monkeypatch, tmp_path):
+    import shutil
+    embed_ca = tmp_path / "vm02-ca.crt"
+    shutil.copy(ca_bundle(), embed_ca)                                   # another CA file, as on the course setup
+    built = []
+    real_ssl = core.llm.build_ssl_context
+    monkeypatch.setattr(core.llm, "build_ssl_context", lambda path, setting="LLM_CA_CERT": built.append(
+        (Path(path).name, setting)) or real_ssl(path, setting))
+    llm = LLMClient(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS, EMBED_CA_CERT=str(embed_ca)))
+    assert built == [("cacert.pem", "LLM_CA_CERT"), ("vm02-ca.crt", "EMBED_CA_CERT")]
+    assert llm.embed_client._client is not llm.client._client            # two clients, two trust stores
+    run(llm.aclose())
+
+
+def test_a_bad_embedding_certificate_names_its_own_setting(tmp_path):
+    bad = tmp_path / "vm02-ca.crt"
+    bad.write_text("not a certificate", encoding="utf-8")
+    with pytest.raises(FinSightError, match="EMBED_CA_CERT .*vm02-ca.crt is not a readable PEM CA certificate"):
+        LLMClient(settings(**EMBED_HTTPS, EMBED_CA_CERT=str(bad)))
+
+
+def test_embed_ca_selection():
+    # own CA wins; the chat CA only for the same server; otherwise the default store
+    s = settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS, EMBED_CA_CERT=ca_bundle())
+    assert LLMClient(s, chat_client=FakeChat(), embed_client=FakeEmbeddings())._embed_ca == s.EMBED_CA_CERT
+    other = settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS)
+    assert LLMClient(other, chat_client=FakeChat(), embed_client=FakeEmbeddings())._embed_ca is None
+    same = settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), EMBED_BACKEND="openai")
+    assert LLMClient(same, chat_client=FakeChat(), embed_client=FakeEmbeddings())._embed_ca == same.LLM_CA_CERT
+
+
+class FlakyEmbeddings(FakeEmbeddings):
+    """Raises the queued errors first, then answers."""
+
+    def __init__(self, *errors):
+        super().__init__()
+        self.errors = list(errors)
+
+    async def _create(self, model, input):
+        if self.errors:
+            self.batches.append(list(input))
+            raise self.errors.pop(0)
+        return await super()._create(model, input)
+
+
+def test_a_busy_embeddings_server_is_retried_with_our_back_off(slept):
+    llm = LLMClient(settings(EMBED_BACKEND="openai", LLM_RETRY_BASE_S=2.0), chat_client=FakeChat(),
+                    embed_client=FlakyEmbeddings(status_error(openai.RateLimitError, 429),
+                                                 status_error(openai.InternalServerError, 503)))
+    vectors = run(llm.embed(["a", "b"]))
+    assert len(vectors) == 2 and slept == [2.0, 4.0]
+    assert (llm.usage.embed_calls, llm.usage.embed_retries) == (3, 2)
+
+
+def test_a_refused_embeddings_request_fails_at_once(slept):
+    llm = LLMClient(settings(EMBED_BACKEND="openai"), chat_client=FakeChat(),
+                    embed_client=FlakyEmbeddings(status_error(openai.UnprocessableEntityError, 422)))
+    with pytest.raises(FinSightError) as err:
+        run(llm.embed(["a"]))
+    assert err.value.error_type == "UnprocessableEntityError" and slept == [] and llm.usage.embed_calls == 1
+
+
+def test_long_texts_are_cut_before_sending_and_counted(caplog):
+    cut_calls = []
+
+    def cutter(text, limit):
+        cut_calls.append(limit)
+        return (text[:3], True) if len(text) > 3 else (text, False)
+
+    llm = LLMClient(settings(EMBED_BACKEND="openai", EMBED_MAX_INPUT_TOKENS=512, EMBED_BATCH_SIZE=16),
+                    chat_client=FakeChat(), embed_client=FakeEmbeddings(), embed_cutter=cutter)
+    with caplog.at_level("WARNING", logger="core.llm"):
+        run(llm.embed(["abcdef", "ab", "xyzw"]))
+    assert llm.embed_client.batches == [["abc", "ab", "xyz"]] and cut_calls == [512, 512, 512]
+    assert llm.usage.embed_truncated == 2 and "2 of 3 texts cut to 512 embedding tokens" in caplog.text
+
+
+def test_no_limit_sends_texts_as_they_are():
+    def never(text, limit):
+        raise AssertionError("no cutting without EMBED_MAX_INPUT_TOKENS")
+
+    llm = LLMClient(settings(EMBED_BACKEND="openai"), chat_client=FakeChat(), embed_client=FakeEmbeddings(),
+                    embed_cutter=never)
+    run(llm.embed(["a long text"]))
+    assert llm.embed_client.batches == [["a long text"]] and settings(EMBED_MAX_INPUT_TOKENS="").EMBED_MAX_INPUT_TOKENS is None
+
+
+def test_the_hosted_endpoint_batch_limit_is_respected():
+    llm = client(EMBED_BATCH_SIZE=16)
+    run(llm.embed([str(i) for i in range(33)]))
+    assert [len(b) for b in llm.embed_client.batches] == [16, 16, 1]
+
+
+def test_embedding_retries_are_capped_and_run_out(slept):
+    busy = [with_retry_after(status_error(openai.RateLimitError, 429), 120) for _ in range(4)]
+    llm = LLMClient(settings(EMBED_BACKEND="openai", LLM_RETRY_BASE_S=2.0), chat_client=FakeChat(),
+                    embed_client=FlakyEmbeddings(*busy))
+    with pytest.raises(FinSightError) as err:
+        run(llm.embed(["a"]))
+    assert slept == [core.llm.MAX_RETRY_DELAY_S] * 3                  # a 120 s Retry-After waits 30 s at most
+    assert (llm.usage.embed_calls, llm.usage.embed_retries) == (4, 3)
+    assert err.value.error_type == "RateLimitError" and err.value.message.startswith("Embeddings request to")
+
+
+def test_a_dropped_embeddings_connection_is_retried(slept):
+    dropped = openai.APIConnectionError(request=httpx.Request("POST", "https://embed.test:1035/v1/embeddings"))
+    llm = LLMClient(settings(EMBED_BACKEND="openai", LLM_RETRY_BASE_S=2.0), chat_client=FakeChat(),
+                    embed_client=FlakyEmbeddings(dropped))
+    assert len(run(llm.embed(["a"]))) == 1 and slept == [2.0]
+
+
+@pytest.mark.parametrize("extra, advice", [
+    ({}, "the certificate is not trusted: set EMBED_CA_CERT"),          # another server, its CA forgotten
+    ({"EMBED_CA_CERT": "CA"}, "does not verify against cacert.pem: check EMBED_CA_CERT"),
+])
+def test_an_untrusted_embeddings_server_names_embed_ca_cert_and_is_not_retried(slept, extra, advice):
+    extra = {k: ca_bundle() for k in extra}
+    llm = LLMClient(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS, **extra), chat_client=FakeChat(),
+                    embed_client=FlakyEmbeddings(tls_error(ssl.SSLCertVerificationError("certificate verify failed"))))
+    with pytest.raises(FinSightError) as err:
+        run(llm.embed(["a"]))
+    assert err.value.error_type == "TLSError" and advice in err.value.message and "LLM_CA_CERT" not in err.value.message
+    assert slept == [] and llm.usage.embed_calls == 1
+
+
+def test_one_ca_file_for_both_servers_builds_one_ssl_context(monkeypatch):
+    built = []
+    real_ssl = core.llm.build_ssl_context
+    monkeypatch.setattr(core.llm, "build_ssl_context", lambda path, setting="LLM_CA_CERT": built.append(
+        setting) or real_ssl(path, setting))
+    llm = LLMClient(settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS, EMBED_CA_CERT=ca_bundle()))
+    assert built == ["LLM_CA_CERT"]
+    run(llm.aclose())
+
+
+def test_embed_max_input_tokens_must_leave_room_for_text():
+    with pytest.raises(ValueError, match="EMBED_MAX_INPUT_TOKENS"):
+        settings(EMBED_MAX_INPUT_TOKENS=2)                             # [CLS] and [SEP] alone
+    assert settings(EMBED_MAX_INPUT_TOKENS=3).EMBED_MAX_INPUT_TOKENS == 3
+
+
+def test_smoke_embed_tls_line_matches_the_client():
+    smoke = smoke_script()
+    cases = [
+        (settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS, EMBED_CA_CERT=ca_bundle()),
+         "verified against cacert.pem (EMBED_CA_CERT)"),
+        (settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), **EMBED_HTTPS), "verified against the default trust store"),
+        # the same server spelled with a trailing slash: the client uses LLM_CA_CERT, and so does the line
+        (settings(**HTTPS_URL, LLM_CA_CERT=ca_bundle(), EMBED_BACKEND="openai",
+                  EMBED_BASE_URL=HTTPS_URL["LLM_BASE_URL"] + "/"), "verified against cacert.pem (LLM_CA_CERT, same server)"),
+        (settings(EMBED_BACKEND="openai"), "none (plain HTTP)"),
+    ]
+    for s, line in cases:
+        embed_url = s.EMBED_BASE_URL or s.LLM_BASE_URL
+        assert smoke.embed_tls_line(s, embed_url) == line
+        llm = LLMClient(s, chat_client=FakeChat(), embed_client=FakeEmbeddings())
+        assert (llm._embed_ca is not None) == ("cacert.pem" in line)

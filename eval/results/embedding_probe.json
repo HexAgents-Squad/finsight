@@ -1,0 +1,1057 @@
+{
+ "meta": {
+  "probe_version": "e-v1",
+  "date": "2026-11-14T09:26:05+00:00",
+  "model": "bge-small-en-v1.5",
+  "endpoint": "hosted",
+  "ca": "vm02-ca.crt",
+  "min_gap_s": 0.5,
+  "git_commit": "3194798b2033801acaeb57bda828096cb2397adc",
+  "code_changed_since_commit": false
+ },
+ "probes": {
+  "basic": {
+   "requests": [
+    {
+     "label": "2 texts",
+     "texts": 2,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.413,
+     "vectors": 2,
+     "dimensions": 384,
+     "prompt_tokens": 10
+    }
+   ],
+   "findings": {
+    "ok": true,
+    "dimensions": 384,
+    "norms": [
+     1.0,
+     1.0
+    ],
+    "prompt_tokens": 10
+   }
+  },
+  "batch_limit": {
+   "requests": [
+    {
+     "label": "16 texts",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.096,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 64
+    },
+    {
+     "label": "17 texts",
+     "texts": 17,
+     "ok": false,
+     "status": 422,
+     "error_type": "UnprocessableEntityError",
+     "error": "Error code: 422 - batch size 17 > maximum allowed batch size 16",
+     "seconds": 0.037
+    }
+   ],
+   "findings": {
+    "16_texts": {
+     "accepted": true,
+     "status": 200,
+     "error": null
+    },
+    "17_texts": {
+     "accepted": false,
+     "status": 422,
+     "error": "Error code: 422 - batch size 17 > maximum allowed batch size 16"
+    }
+   }
+  },
+  "token_limit": {
+   "requests": [
+    {
+     "label": "512 tokens",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.124,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 512
+    },
+    {
+     "label": "513 tokens",
+     "texts": 1,
+     "ok": false,
+     "status": 422,
+     "error_type": "UnprocessableEntityError",
+     "error": "Error code: 422 - Input validation error: `inputs` must have less than 512 tokens. Given: 513",
+     "seconds": 0.035
+    }
+   ],
+   "findings": {
+    "512_tokens": {
+     "accepted": true,
+     "status": 200,
+     "error": null
+    },
+    "513_tokens": {
+     "accepted": false,
+     "status": 422,
+     "error": "Error code: 422 - Input validation error: `inputs` must have less than 512 tokens. Given: 513"
+    }
+   }
+  },
+  "determinism": {
+   "requests": [
+    {
+     "label": "same text #1",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.034,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 9
+    },
+    {
+     "label": "same text #2",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.035,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 9
+    }
+   ],
+   "findings": {
+    "identical": true,
+    "cosine": 1.0
+   }
+  },
+  "throughput": {
+   "requests": [
+    {
+     "label": "batch 1 #1",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.05,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 61
+    },
+    {
+     "label": "batch 1 #2",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.061,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 25
+    },
+    {
+     "label": "batch 1 #3",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.083,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 261
+    },
+    {
+     "label": "batch 1 #4",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.144,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 243
+    },
+    {
+     "label": "batch 1 #5",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.072,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 171
+    },
+    {
+     "label": "batch 1 #6",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.081,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 218
+    },
+    {
+     "label": "batch 1 #7",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.083,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 202
+    },
+    {
+     "label": "batch 1 #8",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.096,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 373
+    },
+    {
+     "label": "batch 1 #9",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.079,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 203
+    },
+    {
+     "label": "batch 1 #10",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.052,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 94
+    },
+    {
+     "label": "batch 1 #11",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.034,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 3
+    },
+    {
+     "label": "batch 1 #12",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.079,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 247
+    },
+    {
+     "label": "batch 1 #13",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.071,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 200
+    },
+    {
+     "label": "batch 1 #14",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.065,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 111
+    },
+    {
+     "label": "batch 1 #15",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.034,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 3
+    },
+    {
+     "label": "batch 1 #16",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.081,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 183
+    },
+    {
+     "label": "batch 1 #17",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.078,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 257
+    },
+    {
+     "label": "batch 1 #18",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.068,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 174
+    },
+    {
+     "label": "batch 1 #19",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.057,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 119
+    },
+    {
+     "label": "batch 1 #20",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.126,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 178
+    },
+    {
+     "label": "batch 1 #21",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.077,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 236
+    },
+    {
+     "label": "batch 1 #22",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.07,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 243
+    },
+    {
+     "label": "batch 1 #23",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.08,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 220
+    },
+    {
+     "label": "batch 1 #24",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.072,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 236
+    },
+    {
+     "label": "batch 1 #25",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.109,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 175
+    },
+    {
+     "label": "batch 1 #26",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.08,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 203
+    },
+    {
+     "label": "batch 1 #27",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.073,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 180
+    },
+    {
+     "label": "batch 1 #28",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.084,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 220
+    },
+    {
+     "label": "batch 1 #29",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.079,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 242
+    },
+    {
+     "label": "batch 1 #30",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.038,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 3
+    },
+    {
+     "label": "batch 1 #31",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.075,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 234
+    },
+    {
+     "label": "batch 1 #32",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.082,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 200
+    },
+    {
+     "label": "batch 1 #33",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.096,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 196
+    },
+    {
+     "label": "batch 1 #34",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.081,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 224
+    },
+    {
+     "label": "batch 1 #35",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.097,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 218
+    },
+    {
+     "label": "batch 1 #36",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.076,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 184
+    },
+    {
+     "label": "batch 1 #37",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.081,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 62
+    },
+    {
+     "label": "batch 1 #38",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.081,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 196
+    },
+    {
+     "label": "batch 1 #39",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.076,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 163
+    },
+    {
+     "label": "batch 1 #40",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.069,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 164
+    },
+    {
+     "label": "batch 1 #41",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.054,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 101
+    },
+    {
+     "label": "batch 1 #42",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.075,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 191
+    },
+    {
+     "label": "batch 1 #43",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.074,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 209
+    },
+    {
+     "label": "batch 1 #44",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.061,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 106
+    },
+    {
+     "label": "batch 1 #45",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.065,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 159
+    },
+    {
+     "label": "batch 1 #46",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.074,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 235
+    },
+    {
+     "label": "batch 1 #47",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.08,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 264
+    },
+    {
+     "label": "batch 1 #48",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.086,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 216
+    },
+    {
+     "label": "batch 1 #49",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.08,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 236
+    },
+    {
+     "label": "batch 1 #50",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.14,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 198
+    },
+    {
+     "label": "batch 1 #51",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.081,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 195
+    },
+    {
+     "label": "batch 1 #52",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.07,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 108
+    },
+    {
+     "label": "batch 1 #53",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.065,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 139
+    },
+    {
+     "label": "batch 1 #54",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.077,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 268
+    },
+    {
+     "label": "batch 1 #55",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.064,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 147
+    },
+    {
+     "label": "batch 1 #56",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.059,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 112
+    },
+    {
+     "label": "batch 1 #57",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.073,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 231
+    },
+    {
+     "label": "batch 1 #58",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.068,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 160
+    },
+    {
+     "label": "batch 1 #59",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.075,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 170
+    },
+    {
+     "label": "batch 1 #60",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.038,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 24
+    },
+    {
+     "label": "batch 1 #61",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.08,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 250
+    },
+    {
+     "label": "batch 1 #62",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.05,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 74
+    },
+    {
+     "label": "batch 1 #63",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.079,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 232
+    },
+    {
+     "label": "batch 1 #64",
+     "texts": 1,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.078,
+     "vectors": 1,
+     "dimensions": 384,
+     "prompt_tokens": 175
+    },
+    {
+     "label": "batch 4 #1",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.129,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 590
+    },
+    {
+     "label": "batch 4 #2",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.202,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 964
+    },
+    {
+     "label": "batch 4 #3",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.13,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 547
+    },
+    {
+     "label": "batch 4 #4",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.11,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 497
+    },
+    {
+     "label": "batch 4 #5",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.149,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 728
+    },
+    {
+     "label": "batch 4 #6",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.159,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 935
+    },
+    {
+     "label": "batch 4 #7",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.159,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 778
+    },
+    {
+     "label": "batch 4 #8",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.149,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 679
+    },
+    {
+     "label": "batch 4 #9",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.155,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 822
+    },
+    {
+     "label": "batch 4 #10",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.128,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 585
+    },
+    {
+     "label": "batch 4 #11",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.14,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 607
+    },
+    {
+     "label": "batch 4 #12",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.148,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 874
+    },
+    {
+     "label": "batch 4 #13",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.135,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 737
+    },
+    {
+     "label": "batch 4 #14",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.148,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 666
+    },
+    {
+     "label": "batch 4 #15",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.114,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 585
+    },
+    {
+     "label": "batch 4 #16",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.138,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 731
+    },
+    {
+     "label": "batch 16 #1",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.517,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 2598
+    },
+    {
+     "label": "batch 16 #2",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.438,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 3120
+    },
+    {
+     "label": "batch 16 #3",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.394,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 2888
+    },
+    {
+     "label": "batch 16 #4",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.453,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 2719
+    }
+   ],
+   "findings": {
+    "batch_1": {
+     "texts": 64,
+     "seconds": 4.82,
+     "texts_per_s": 13.3,
+     "failed": 0
+    },
+    "batch_4": {
+     "texts": 64,
+     "seconds": 2.29,
+     "texts_per_s": 27.9,
+     "failed": 0
+    },
+    "batch_16": {
+     "texts": 64,
+     "seconds": 1.8,
+     "texts_per_s": 35.5,
+     "failed": 0
+    },
+    "c3_chunks": 59668,
+    "c3_minutes_at_batch_16": 28.0,
+    "sample_tokens_mean": 177.0
+   }
+  },
+  "concurrency": {
+   "requests": [
+    {
+     "label": "concurrent A",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.097,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 80
+    },
+    {
+     "label": "concurrent B",
+     "texts": 16,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.155,
+     "vectors": 16,
+     "dimensions": 384,
+     "prompt_tokens": 80
+    }
+   ],
+   "findings": {
+    "statuses": [
+     200,
+     200
+    ],
+    "both_ok": true
+   }
+  },
+  "parity": {
+   "requests": [
+    {
+     "label": "parity texts",
+     "texts": 4,
+     "ok": true,
+     "status": 200,
+     "seconds": 0.066,
+     "vectors": 4,
+     "dimensions": 384,
+     "prompt_tokens": 63
+    }
+   ],
+   "findings": {
+    "local_model": "BAAI/bge-small-en-v1.5",
+    "cosines": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "same_model": true
+   }
+  }
+ }
+}

@@ -84,7 +84,13 @@ file; verification is never switched off.
 4. **Run the smoke test**: `python scripts/smoke_llm.py`. It shows `TLS: verified against <group>-ca.crt` and
    `Thinking: off`, hides the endpoint's address, and ends with `OK: ...`. Post that output (never the key) in
    the team chat as your smoke-test check.
-5. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
+5. **Embedding endpoint (W1-16)**: put the course's `vm02-ca.crt` in `certs/` (git-ignored) and add to `.env`
+   `EMBED_BASE_URL`, `EMBED_API_KEY` (the shared embedding key), `EMBED_CA_CERT=certs/vm02-ca.crt`,
+   `EMBED_MODEL=bge-small-en-v1.5`, `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512`. Keep
+   `EMBED_BACKEND=sentence-transformers` and `EMBED_LOCAL_MODEL_NAME=all-MiniLM-L6-v2` until the index is rebuilt
+   with bge-small (ADR-021, with W1-04): search refuses an index built with another model. To try the endpoint
+   before then, override for one command, e.g. `EMBED_BACKEND=openai python scripts/smoke_llm.py`.
+6. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
    thinking switch, latency, limits and determinism (~33 requests, about 2 minutes) and writes
    `eval/results/endpoint_probe.md`. It deliberately sends two requests at once to confirm the 429, so run it only
    when nobody else is using the key (a subset such as `--skip concurrency` needs `--out-dir` elsewhere).
@@ -105,6 +111,9 @@ removed from replies either way. The provided endpoint currently ignores the swi
 | `TLSError` ... `does not verify` / `not trusted` | Check `LLM_CA_CERT` points at your group's CA file and the URL is your group's |
 | `TLSError` ... `did not complete a TLS handshake` | The server is not speaking HTTPS there: check `http://` vs `https://` and the port |
 | `TLSConfigError` | `LLM_CA_CERT` is not a PEM certificate (e.g. the wrong download) |
+| `TLSError` for `bge-small-en-v1.5` ... `set EMBED_CA_CERT` / `check EMBED_CA_CERT` | The embedding endpoint is another server with its own CA: set `EMBED_CA_CERT=certs/vm02-ca.crt` (the embeddings CA, not the chat one) |
+| `TLSConfigError` naming `EMBED_CA_CERT` | `EMBED_CA_CERT` is not a PEM certificate |
+| `UnprocessableEntityError` from embeddings | More than 16 texts or a text over 512 tokens: set `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512` |
 | settings error `no certificate file at ...` | The path in `LLM_CA_CERT` is wrong (relative paths start at the repo root) |
 | `AuthenticationError` | TLS works; the key in `LLM_API_KEY` is wrong or missing |
 | `RateLimitError` | Still refused after 3 retries: someone else is using the team key (one active request per key); try again shortly |
