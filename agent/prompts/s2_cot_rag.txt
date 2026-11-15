@@ -1,0 +1,8 @@
+
+Reasoning: before the answer fields, think step by step in a "reasoning" field (at most about 150 words):
+1. Does a refusal rule apply (rule 5)? If so, say which one and stop.
+2. Name the company, the fiscal year, the period (fiscal year, or which quarter and whether three months or year to date) and the exact line item asked for.
+3. Find each figure you need in the passages and copy it exactly as printed, with its passage id, its column and its unit. Use only the line item asked for, not a figure that merely mentions it.
+4. If a computation is needed, write it out with the figures and the result: a percentage change is (new - old) / old x 100. Round as rule 7 says.
+5. If a needed figure is not in the passages, say so: the answer is "not reported". That is not a refusal: "refused" stays false and "refusal_rule" null.
+Then fill in the other fields from your reasoning. Give "value" in the unit the passage prints it in, with that unit in "unit"; never convert it yourself. For "$12.34 billion" write "value": 12.34, "unit": "USD billions" (not 12340000000); for "12,345" in a table in millions write "value": 12345, "unit": "USD millions". The reply is ONE JSON object whose first field is "reasoning", followed by the fields above.

@@ -1,0 +1,61 @@
+[
+  {
+    "dev_id": "dev-A03",
+    "teaches": "a quarter is the three-month column of its own 10-Q",
+    "passages": [
+      {"pid": "P1", "citation": "[META 10-Q FY2025 Q2 · Part I Item 1]", "chunk_id": "META_10-Q_2025Q2_PartIItem1_C3_0002",
+       "lines": ["CONDENSED CONSOLIDATED STATEMENTS OF INCOME", "(In millions, except per share amounts)",
+                 "Three Months Ended June 30, | Six Months Ended June 30,", "2025 | 2024 | 2025 | 2024",
+                 "Revenue | 47,516 | 39,071 | 89,830 | 75,527", "Net income | 18,337 | 13,465 | 34,981 | 25,834"]}
+    ],
+    "question": "What was Meta's revenue in the second quarter of fiscal 2025?",
+    "answer": {"answer": "Meta's revenue for the second quarter of fiscal 2025 (the three months ended June 30, 2025) was $47,516 million.",
+               "value": 47516, "unit": "USD millions", "company": "Meta", "fiscal_year": 2025, "citations": ["P1"],
+               "refused": false, "refusal_rule": null}
+  },
+  {
+    "dev_id": "dev-C01",
+    "teaches": "a change is computed only from the two reported figures, signed and rounded to 1 decimal",
+    "passages": [
+      {"pid": "P1", "citation": "[GS 10-K FY2024 · Item 8]", "chunk_id": "GS_10-K_2024_Item8_C3_0020",
+       "lines": ["Consolidated Statements of Earnings", "Year Ended December",
+                 "in millions, except per share amounts | 2024 | 2023 | 2022",
+                 "Net earnings | 14,276 | 8,516 | 11,261",
+                 "Net earnings applicable to common shareholders | 13,525 | 7,907 | 10,764"]}
+    ],
+    "question": "By what percentage did Goldman Sachs' net earnings change from fiscal 2023 to fiscal 2024?",
+    "answer": {"answer": "Goldman Sachs' net earnings rose 67.6%, from $8,516 million in fiscal 2023 to $14,276 million in fiscal 2024.",
+               "value": 67.6, "unit": "%", "company": "Goldman Sachs", "fiscal_year": 2024, "citations": ["P1"],
+               "refused": false, "refusal_rule": null}
+  },
+  {
+    "dev_id": "dev-G02",
+    "teaches": "a line item the statement does not show is not reported, never substituted",
+    "passages": [
+      {"pid": "P1", "citation": "[WFC 10-K FY2023 · Item 8]", "chunk_id": "WFC_10-K_2023_Item8_C3_0016",
+       "lines": ["Consolidated Statement of Cash Flows", "Year ended December 31,", "(in millions) | 2023 | 2022 | 2021",
+                 "Cash flows from investing activities:",
+                 "Loans originated by banking subsidiaries, net of principal collected | 10,296 | ( 74,861 ) | ( 28,809 )",
+                 "Purchases of loans | ( 1,637 ) | ( 741 ) | ( 389 )", "Other, net | 391 | 805 | 3,782",
+                 "Net cash provided (used) by investing activities | 16,043 | ( 42,476 ) | ( 7,619 )"]}
+    ],
+    "question": "How much did Wells Fargo spend on capital expenditures in fiscal 2023?",
+    "answer": {"answer": "Not reported: Wells Fargo's fiscal 2023 statement of cash flows shows no capital expenditure line among its investing activities.",
+               "value": null, "unit": null, "company": "Wells Fargo", "fiscal_year": 2023, "citations": ["P1"],
+               "refused": false, "refusal_rule": null}
+  },
+  {
+    "dev_id": "dev-G01",
+    "teaches": "a forecast is refused under R2 even when the passages hold related figures",
+    "passages": [
+      {"pid": "P1", "citation": "[C 10-K FY2025 · Item 8]", "chunk_id": "C_10-K_2025_Item8_C3_0022",
+       "lines": ["CONSOLIDATED STATEMENT OF INCOME Citigroup Inc. and Subsidiaries", "Years ended December 31,",
+                 "In millions of dollars, except per share amounts | 2025 | 2024 | 2023",
+                 "Citigroup’s net income | 14,306 | 12,682 | 9,228"]}
+    ],
+    "question": "Do you expect Citigroup's net income to keep growing after fiscal 2025?",
+    "answer": {"answer": "I can't answer that: it asks for a forecast the filings do not state (R2). I can share reported figures instead, such as Citigroup's net income for fiscal 2025.",
+               "value": null, "unit": null, "company": "Citigroup", "fiscal_year": null, "citations": [],
+               "refused": true, "refusal_rule": "R2"}
+  }
+]

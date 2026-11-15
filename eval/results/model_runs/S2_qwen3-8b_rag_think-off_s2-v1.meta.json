@@ -1,0 +1,35 @@
+{
+  "run_id": "S2_qwen3-8b_rag_think-off_s2-v1",
+  "model": "Qwen/Qwen3-8B",
+  "endpoint": "hosted",
+  "context": "rag",
+  "thinking": false,
+  "temperature": 0.7,
+  "max_tokens": 1024,
+  "prompt_version": "s2-v1",
+  "context_pack": "results/context_pack_gold.jsonl + context_pack_refusal.jsonl (cp-v1)",
+  "context_pack_sha256": {
+    "context_pack_gold.jsonl": "028cd87c5721dc5bb4058112746dc9d455d706a8064416f4f07cf1f51c77bca9",
+    "context_pack_refusal.jsonl": "2ed6aa48a069ca4662556c5d118cd59fc5d404f909eaf9f99e4bb8ea39ac6aba"
+  },
+  "json_retries": 1,
+  "truncation_check": false,
+  "context_window": null,
+  "git_commit": "31a2f3c17746ac7e5acd1609f9e0179194457102",
+  "started": "2026-11-15T18:16:32+00:00",
+  "finished": "2026-11-15T18:16:33+00:00",
+  "prompt_sha256": "df7382e8f715d278c74212b43a4999ba53510096398f21666ef33ffd391d9c64",
+  "framing_sha256": "a1b659cdd867f27b4b8e8609e6a24e6431ea092fb75679641e0bc932f2f8b023",
+  "strategy": "s2",
+  "response_format": "json_schema (strict guided decoding)",
+  "repair": null,
+  "samples": 5,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "vote": "majority of valid samples on refused, rule, company and value (3 significant digits); ties to the first decision seen"
+}

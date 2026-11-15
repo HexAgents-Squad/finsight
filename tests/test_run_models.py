@@ -327,7 +327,7 @@ def test_a_run_where_everything_failed_is_not_written(monkeypatch, tmp_path, cap
     cli_env(monkeypatch, tmp_path)
     errors = [FinSightError("busy", error_type="RateLimitError")] * len(RECORDS)
     monkeypatch.setattr(rm, "LLMClient", FakeClientFactory(FakeLLM(*errors)))
-    monkeypatch.setattr(rm, "load_records", lambda pack_dir: list(RECORDS.values()))
+    monkeypatch.setattr(rm, "load_records", lambda pack_dir, questions="gold": list(RECORDS.values()))
     assert rm.main(["--run", "M1", "--label", "qwen3-8b", "--context", "rag", "--out-dir", str(tmp_path / "o")]) == 2
     assert "every answer failed; nothing written" in capsys.readouterr().err
 

@@ -80,7 +80,8 @@ def test_copies_are_the_untouched_sheet_with_assignments(sheet, tmp_path):
     for name in ("Chandra", "Amresh"):
         assert (out / f"grading_sheet_{name}.csv").read_bytes() == sheet.read_bytes()
     text = (out / "assignments.txt").read_text(encoding="utf-8")
-    assert text == "\n".join(lines) and "Grader 1 = Chandra" in text and "column grader_2 on all 32" in text
+    n = len(grade_numbers(sheet))                        # every grade row (32 for M1-M3, more with W1-09's runs)
+    assert text == "\n".join(lines) and "Grader 1 = Chandra" in text and f"column grader_2 on all {n}" in text
     split, labels = gr.split_row(rows_of(sheet)), label_rows(sheet)
     mine = [n for n in labels if n < split], [n for n in labels if n >= split]
     assert f"spreadsheet rows {mine[0][0]}-{mine[0][-1]}" in text
@@ -122,7 +123,8 @@ def test_merge_sets_final_where_grades_agree_and_lists_the_rest(sheet):
     g2 = fill(sheet, 2, lambda n: "1" if n == numbers[1] else "2", notes={numbers[0]: "fine"})
     merged, rep = gr.merge(sheet, g1, g2)
     by_row = dict(enumerate(merged, start=2))
-    assert (rep["pairs"], rep["agree"], rep["missing"], rep["warnings"]) == (32, 31, [], [])
+    n = len(numbers)
+    assert (rep["pairs"], rep["agree"], rep["missing"], rep["warnings"]) == (n, n - 1, [], [])
     assert by_row[numbers[0]]["final"] == "2" and by_row[numbers[1]]["final"] == ""
     assert rep["disagree"][0].startswith(f"row {numbers[1]}: grader 1 = 2, grader 2 = 1")
     assert by_row[numbers[0]]["note"] == "G1: overturn? the figure is right | G2: fine"
@@ -239,7 +241,8 @@ def test_cli_merge_checks_first_and_writes_only_when_asked(sheet, capsys):
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2)]) == 0
     assert sheet.read_bytes() == before and "check only" in capsys.readouterr().out
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2), "--write"]) == 0
-    assert "32 graded by both, 32 agree" in capsys.readouterr().out
+    n = len(grade_numbers(sheet))
+    assert f"{n} graded by both, {n} agree" in capsys.readouterr().out
     assert all(r["final"] == "2" for r in rows_of(sheet) if r["task"] == sa.GRADE)
     assert not list(sheet.parent.glob("*.part"))
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2)]) == 1
@@ -313,3 +316,54 @@ def test_when_both_graders_label_every_row_the_second_label_fills_gaps(sheet):
     assert rep["missing"] == [] and rep["label_pairs"] == len(labels) - 1 and rep["label_agree"] == 0
     assert f"row {mine1[0]}: the owner left the label empty; the other grader's wrong_line_item is used" \
         in rep["warnings"]
+
+
+# --- a later round on the ungraded rows only (--pending, W1-09) ---------------------------------------------------
+
+@pytest.fixture
+def graded_sheet(tmp_path):
+    """A sheet whose first grade row is already graded and some label rows labelled, the rest not: a later round
+    (like the W1-09 strategy rows next to the graded M1-M3 rows)."""
+    shutil.copy(sa.GRADING_DIR / sa.KEY_NAME, tmp_path / sa.KEY_NAME)
+    rows = rows_of(sa.GRADING_DIR / sa.SHEET_NAME)
+    for r in rows:
+        r.update({c: "" for c in gr.GRADER_COLUMNS + ("note",)})
+    first_grade = next(r for r in rows if r["task"] == sa.GRADE)
+    first_grade.update(grader_1="2", grader_2="2", final="2")
+    for r in [r for r in rows if r["task"] == sa.LABEL][:3]:
+        r["failure_label"] = "arithmetic_slip"
+    save(tmp_path / sa.SHEET_NAME, rows)
+    return tmp_path / sa.SHEET_NAME
+
+
+def test_pending_copies_hold_only_the_ungraded_rows(graded_sheet, tmp_path):
+    with pytest.raises(gr.GradingError, match="add --pending"):
+        gr.copies(graded_sheet, ["Chandra", "Amresh"], tmp_path / "plain")
+    lines = gr.copies(graded_sheet, ["Chandra", "Amresh"], tmp_path / "c", pending=True)
+    todo = gr.pending_rows(gr.load(graded_sheet))
+    copy = rows_of(tmp_path / "c" / "grading_sheet_Chandra.csv")
+    assert [r["key"] for r in copy] == [r["key"] for r in todo] and len(copy) == len(rows_of(graded_sheet)) - 4
+    assert not gr.has_grades(copy) and lines[0].startswith(f"ungraded rows of the sheet: {len(todo)} rows")
+
+
+def test_a_pending_merge_fills_those_rows_and_leaves_the_graded_ones(graded_sheet):
+    copy_dir = graded_sheet.parent / "c"
+    gr.copies(graded_sheet, ["Chandra", "Amresh"], copy_dir, pending=True)
+    base = copy_dir / "grading_sheet_Chandra.csv"
+    g1, g2 = fill(base, 1, lambda n: "2"), fill(base, 2, lambda n: "2")
+    assert gr.check(graded_sheet, g1, 1, pending=True)[0] == "grader 1: 0 missing"
+    merged, rep = gr.merge(graded_sheet, g1, g2, pending=True)
+    before = rows_of(graded_sheet)
+    assert [r["key"] for r in merged] == [r["key"] for r in before]
+    graded = [n for n, r in enumerate(before) if gr.has_grades([r])]
+    assert all(merged[n] == before[n] for n in graded)                          # untouched, not shown
+    assert all(r["final"] == "2" for n, r in enumerate(merged) if r["task"] == sa.GRADE and n not in graded)
+    assert rep["pairs"] == sum(r["task"] == sa.GRADE for r in gr.pending_rows(gr.load(graded_sheet)))
+    with pytest.raises(gr.GradingError, match="already holds grades"):
+        gr.merge(graded_sheet, g1, g2)                                       # without --pending: refused
+
+
+def test_the_committed_sheet_has_a_pending_round_for_the_strategy_runs():
+    todo = gr.pending_rows(gr.load(gr.SHEET))
+    key = {r["key"]: r["run_id"] for r in csv.DictReader((sa.GRADING_DIR / sa.KEY_NAME).open(encoding="utf-8"))}
+    assert todo and all(key[r["key"]].startswith("S") for r in todo)

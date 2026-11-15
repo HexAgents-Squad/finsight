@@ -408,6 +408,13 @@ W1-09 (Alok + sub-owners): same context pack, runner and scorer as Sprint A; B0 
   S1 few-shot structured output (examples from the dev set), S2 chain-of-thought + self-consistency (3–5
   samples, majority vote on the value), S3 decomposition. Prompts frozen and tagged before the gold runs (Fri
   night). ADR-018 records the baseline setup and results.
+  Done as in ADR-018 (15 Nov): each strategy keeps B0's rules and adds one thing; tuned on the dev set (three
+  passes), frozen (s1-v1/s2-v1/s3-v1, tag w1-09-prompts-v1), then 816 gold requests. Paired with B0: S1 fixes
+  refusals (6 better / 0 worse, p = 0.03) but copies example figures; S2 cuts unsupported numbers 20/74 -> 4/85
+  at 5 calls and ~23 s per question; S3 is best on numeric (21/48 vs 16/48) and multi-company (8/10) but
+  under-refuses. Where the gold figures are in the passages S2 and S3 get 17/18 (B0 12/18); where not, every
+  run fails, so retrieval (ADR-017) is the larger lever (eval/results/prompting_baselines.md). The 36 strategy
+  summaries and their wrong answers (162 sheet rows) wait for the W1-14 graders.
 W1-11 (Alok): one-page and detailed Week 1 notes generated from repo data; portal upload, mentor email; Week 2
   LangGraph design kick-off and Week 2 tickets.
 

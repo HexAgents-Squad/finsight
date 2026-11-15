@@ -6,6 +6,12 @@ Usage:
     python eval/grading.py check --grader 1 FILE                     # one returned copy, as soon as it arrives
     python eval/grading.py merge --g1 FILE --g2 FILE [--write]       # both copies -> the repo's sheet
     python eval/grading.py examples                                  # rows noted "example" -> failure_examples.md
+    python eval/grading.py copies --pending --names A B --out DIR    # a later round: only the rows nobody graded yet
+
+--pending (copies, handout, check, merge) is for a later round on a sheet that already holds grades, e.g. the W1-09
+strategy runs' rows next to the graded M1-M3 rows: the copies hold only the rows with no grade, label or `final`
+yet (in sheet order, the label rows split in half among them), and the merge writes the graders' entries back
+into exactly those rows of the repo's sheet; graded rows are never shown to the graders or changed.
 
 Roles: grader 1 fills `grader_1` on every "grade" row and `failure_label` on the first half of the "label" rows
 (in sheet order); grader 2 fills `grader_2` and the second half. Nobody fills `final` before the merge: the merge
@@ -98,10 +104,10 @@ def copy_problems(base: list[dict], rows: list[dict], grader: int) -> tuple[list
     return problems, warnings
 
 
-def check(base_path: Path, path: Path, grader: int) -> list[str]:
+def check(base_path: Path, path: Path, grader: int, pending: bool = False) -> list[str]:
     """One returned copy checked on its own, so a mistake is fixed while the grader is still around: its
     problems raise GradingError; the result lists what is missing and any warnings."""
-    base, rows = load(base_path), load(path)
+    base, rows = base_rows(base_path, pending), load(path)
     problems, warnings = copy_problems(base, rows, grader)
     if problems:
         raise GradingError(listed(problems))
@@ -127,6 +133,22 @@ def has_grades(rows: list[dict]) -> bool:
     return any(r[c].strip() for r in rows for c in GRADER_COLUMNS)
 
 
+def pending_rows(rows: list[dict]) -> list[dict]:
+    """The grade and label rows nobody has graded yet (no grade, label or final), in sheet order."""
+    return [r for r in rows if r["task"] in (GRADE, LABEL) and not has_grades([r])]
+
+
+def base_rows(sheet: Path, pending: bool) -> list[dict]:
+    """What the graders work on: the whole sheet, or (pending) only its rows nobody has graded yet."""
+    rows = load(sheet)
+    if not pending:
+        return rows
+    todo = pending_rows(rows)
+    if not todo:
+        raise GradingError(f"{sheet} has no ungraded grade or label rows")
+    return todo
+
+
 def csv_text(rows: list[dict]) -> str:
     """The rows as the scorer writes its sheet (same columns, LF line ends), so a merge changes only cells."""
     buf = io.StringIO()
@@ -137,24 +159,26 @@ def csv_text(rows: list[dict]) -> str:
 
 
 # --------------------------------------------------------------------------------------------- copies
-def copies(sheet: Path, names: list[str], out_dir: Path) -> list[str]:
-    """One untouched copy of the sheet per grader, plus assignments.txt saying who fills what. Refuses a sheet
-    that already holds grades (a copy would show them to the other grader)."""
+def copies(sheet: Path, names: list[str], out_dir: Path, pending: bool = False) -> list[str]:
+    """One untouched copy of the sheet per grader (pending: of its ungraded rows only), plus assignments.txt saying
+    who fills what. Refuses a sheet that already holds grades without --pending (a copy would show them)."""
     if len(names) != 2 or len(set(n.lower() for n in names)) != 2:
         raise GradingError("give exactly two different grader names (grader 1 first)")
     bad = [n for n in names if not SAFE_NAME.fullmatch(n)]
     if bad:
         raise GradingError(f"names become file names: letters, digits, - and _ only ({bad})")
-    rows = load(sheet)
+    rows = base_rows(sheet, pending)
     if has_grades(rows):
-        raise GradingError(f"{sheet} already holds grades or labels: copies would show them to the graders")
+        raise GradingError(f"{sheet} already holds grades or labels: copies would show them to the graders "
+                           f"(for a later round on the ungraded rows only, add --pending)")
     split = split_row(rows)
     grade_rows = sum(r["task"] == GRADE for r in rows)
     labels = [n for n, r in enumerate(rows, start=2) if r["task"] == LABEL]
     mine = {1: [n for n in labels if n < split], 2: [n for n in labels if n >= split]}
     out_dir.mkdir(parents=True, exist_ok=True)
-    text = sheet.read_bytes()
-    lines = [f"Grading sheet: {len(rows)} rows ({grade_rows} grade, {len(labels)} label). Guide: eval/GRADING.md", ""]
+    text = csv_text(rows).encode("utf-8") if pending else sheet.read_bytes()
+    kind = "ungraded rows of the sheet" if pending else "Grading sheet"
+    lines = [f"{kind}: {len(rows)} rows ({grade_rows} grade, {len(labels)} label). Guide: eval/GRADING.md", ""]
     for i, name in enumerate(names, start=1):
         (out_dir / f"grading_sheet_{name}.csv").write_bytes(text)
         rng = f"{mine[i][0]}-{mine[i][-1]}" if mine[i] else "none"
@@ -167,11 +191,11 @@ def copies(sheet: Path, names: list[str], out_dir: Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------------- handout
-def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path) -> str:
+def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: bool = False) -> str:
     """Markdown: for every question with a "grade" row, the question, the gold answer and the passages a RAG run
     saw, passages from the gold source first. It names no model: a question's passages are the same for every run
-    (the closed-book run saw none), and questions appear in sheet order."""
-    rows = load(sheet)
+    (the closed-book run saw none), and questions appear in sheet order. pending: only the ungraded rows'."""
+    rows = base_rows(sheet, pending)
     ids = {r["key"]: r["id"] for r in csv.DictReader(key.open(encoding="utf-8"))}
     gold = {i.id: i for i in validate_file(gold_file).items}
     packs = {p["id"]: p for p in (json.loads(x) for x in pack_file.read_text(encoding="utf-8").splitlines() if x)}
@@ -201,10 +225,12 @@ def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path) -> str:
 
 
 # --------------------------------------------------------------------------------------------- merge
-def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], dict]:
+def merge(base_path: Path, g1_path: Path, g2_path: Path, pending: bool = False) -> tuple[list[dict], dict]:
     """The repo sheet with grader 1's and grader 2's entries, `final` set where both grades agree. Returns the
-    merged rows and a report (pairs, disagreements, missing entries, overturn proposals, warnings)."""
-    base, g1, g2 = load(base_path), load(g1_path), load(g2_path)
+    merged rows (the whole sheet; with pending, the graded rows unchanged) and a report (pairs, disagreements,
+    missing entries, overturn proposals, warnings)."""
+    full = load(base_path)
+    base, g1, g2 = base_rows(base_path, pending), load(g1_path), load(g2_path)
     if has_grades(base):
         raise GradingError(f"{base_path} already holds grades. To merge corrected copies again, first restore the "
                            f"ungraded sheet: git checkout -- {SHEET.relative_to(REPO_ROOT).as_posix()}")
@@ -255,6 +281,9 @@ def merge(base_path: Path, g1_path: Path, g2_path: Path) -> tuple[list[dict], di
         if OVERTURN_MARK.search(row["note"]):
             overturn.append(f"row {n}: {row['note'][:100]}")
         merged.append(row)
+    if pending:                                       # back into the whole sheet, row by row (keys are unique)
+        done = {r["key"]: r for r in merged}
+        merged = [done.get(r["key"], r) for r in full]
     k = kappa(pairs)
     return merged, {"pairs": len(pairs), "agree": sum(x == y for x, y in pairs), "kappa": k,
                     "disagree": disagree, "missing": missing, "overturn": overturn, "warnings": warnings,
@@ -302,20 +331,23 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--out", type=Path, default=EXAMPLES_FILE)
     for p in (c, h, k, m, e):
         p.add_argument("--sheet", type=Path, default=SHEET)
+    for p in (c, h, k, m):
+        p.add_argument("--pending", action="store_true",
+                       help="a later round: only the sheet's rows nobody has graded yet (see the module docstring)")
     for p in (h, e):
         p.add_argument("--key", type=Path, default=KEY)
     args = ap.parse_args(argv)
     try:
         if args.cmd == "copies":
-            print("\n".join(copies(args.sheet, args.names, args.out)))
+            print("\n".join(copies(args.sheet, args.names, args.out, args.pending)))
         elif args.cmd == "handout":
             args.out.parent.mkdir(parents=True, exist_ok=True)
-            replace_file(args.out, handout(args.sheet, args.key, RESULTS_DIR / GOLD_PACK, GOLD_FILE))
+            replace_file(args.out, handout(args.sheet, args.key, RESULTS_DIR / GOLD_PACK, GOLD_FILE, args.pending))
             print(f"written: {args.out}")
         elif args.cmd == "check":
-            print("\n".join(check(args.sheet, args.file, args.grader)))
+            print("\n".join(check(args.sheet, args.file, args.grader, args.pending)))
         elif args.cmd == "merge":
-            merged, rep = merge(args.sheet, args.g1, args.g2)
+            merged, rep = merge(args.sheet, args.g1, args.g2, args.pending)
             k = f", Cohen's kappa {rep['kappa']:.2f}" if rep["kappa"] is not None else ""
             print(f"grade rows: {rep['pairs']} graded by both, {rep['agree']} agree{k}")
             if rep["label_pairs"]:

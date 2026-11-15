@@ -415,12 +415,20 @@ class LLMClient(AbstractLLMClient):
         return (await self.complete(messages, temperature=temperature, model=model, sample=sample)).text
 
     async def complete(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,
-                       sample: int = 0) -> Reply:
+                       sample: int = 0, seed: int | None = None,
+                       response_format: dict[str, Any] | None = None) -> Reply:
         """One completion with what a runner records. `sample` numbers repeated samples of the same request
-        (self-consistency at temperature > 0): each has its own cache entry, so a re-run replays every sample."""
+        (self-consistency at temperature > 0): each has its own cache entry, so a re-run replays every sample.
+        `seed` is sent to the server (the hosted endpoint honours it at temperature > 0, ADR-016) and
+        `response_format` too, e.g. {"type": "json_schema", ...} for guided decoding (ADR-016); both are part of
+        the cache key when set, and requests without them keep their old cache entries."""
         target_model = model or self.settings.LLM_MODEL
         request: dict[str, Any] = {"model": target_model, "messages": messages, "temperature": temperature,
                                    "max_tokens": self.settings.LLM_MAX_COMPLETION_TOKENS}
+        if seed is not None:
+            request["seed"] = seed
+        if response_format is not None:
+            request["response_format"] = response_format
         if self.settings.LLM_ENABLE_THINKING is not None:
             # Not a standard OpenAI parameter: vLLM passes it to the chat template (Qwen3), Ollama ignores it
             request["extra_body"] = {"chat_template_kwargs": {"enable_thinking": self.settings.LLM_ENABLE_THINKING}}
@@ -524,6 +532,7 @@ class LLMClient(AbstractLLMClient):
         key = {"v": CACHE_VERSION, "server": list(_origin(self.settings.LLM_BASE_URL)), "model": request["model"],
                "messages": request["messages"], "temperature": request["temperature"],
                "max_tokens": request["max_tokens"], "thinking": self.settings.LLM_ENABLE_THINKING, "sample": sample}
+        key |= {k: request[k] for k in ("seed", "response_format") if k in request}   # absent: the old keys
         # ensure_ascii: any text, even a lone surrogate, gives a key
         digest = hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         return self.settings.LLM_CACHE_DIR / digest[:2] / f"{digest}.json"

@@ -3,6 +3,7 @@
 Usage:
     python eval/score_answers.py                  # every eval/results/model_runs/*.jsonl
     python eval/score_answers.py --runs-dir DIR --out-dir DIR
+    python eval/score_answers.py --questions dev  # W1-09 tuning runs: eval/results/dev/model_runs -> eval/results/dev
 
 Inputs: the runs files (eval/runs_schema.py), the gold set, the refusal tests and the context packs (the
 passages a RAG run saw, and the conversation history every run saw; a run's meta must name the packs' sha256).
@@ -11,6 +12,11 @@ Outputs:
     eval/results/grading/grading_sheet.csv blind sheet for W1-14 (see "Grading sheet" below)
     eval/results/grading/grading_key.csv   key -> run_id, id (graders do not open it)
     eval/results/model_comparison.md       tables between GENERATED markers; the interpretation outside them stays
+                                           (the model runs M1, M2, ... only)
+    eval/results/prompting_baselines.md    the same tables for B0 (the M1 run) next to the W1-09 strategy runs
+                                           S1-S3, plus their calls per question and S2's agreement (W1-09)
+With --questions dev the development questions are scored instead (no refusal tests; the development pack) and
+everything goes to eval/results/dev/, report dev_baselines.md: tuning the W1-09 prompts never reads gold scores.
 Optional input: eval/results/grading/judge_<run_id>.jsonl ({"id", "score": 0|1|2, "reason"}), LLM-as-judge scores
 for summary answers, produced with the runner (W1-13); agreement with the human grades is reported.
 
@@ -67,7 +73,7 @@ from pydantic import ValidationError  # noqa: E402
 
 from core.figures import GROUPED_FIGURE, SCALE_WORDS, Figure, figures  # noqa: E402  (shared with the critic)
 from core.llm import strip_thinking  # noqa: E402
-from eval.context_pack import GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
+from eval.context_pack import DEV_PACK, GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
 from eval.context_pack import REFUSAL_PATH as REFUSALS_FILE  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 from eval.runs_schema import B0Answer, RunMeta, RunRecord  # noqa: E402
@@ -80,6 +86,12 @@ from eval.validate_test_sets import validate_set  # noqa: E402
 RUNS_DIR = RESULTS_DIR / "model_runs"
 SCORES_DIR, GRADING_DIR = RESULTS_DIR / "scores", RESULTS_DIR / "grading"
 REPORT_NAME = "model_comparison.md"
+BASELINE_REPORT, DEV_REPORT = "prompting_baselines.md", "dev_baselines.md"
+DEV_DIR = RESULTS_DIR / "dev"
+B0_REFERENCE = "M1_qwen3-8b_rag_think-off_b0-v1"     # the zero-shot run the W1-09 strategies are compared with
+REPORT_TITLES = {REPORT_NAME: "Model comparison (W1-08 scorer)",
+                 BASELINE_REPORT: "Prompting baselines B0 / S1 / S2 / S3 on Qwen3-8B (W1-09)",
+                 DEV_REPORT: "Prompting baselines on the development set (W1-09 tuning; not a result)"}
 SHEET_NAME, KEY_NAME = "grading_sheet.csv", "grading_key.csv"
 START, END = "<!-- GENERATED:START (eval/score_answers.py) -->", "<!-- GENERATED:END -->"
 
@@ -110,6 +122,8 @@ KEY_HEX = 10
 # D items have no gold_value: the company the gold answer names as having more (its last sentence)
 D_WINNERS = {"D01": "AAPL", "D02": "GOOGL", "D03": "JPM", "D04": "C", "D05": "JNJ", "D06": "ABBV", "D07": "WMT",
              "D08": "PG", "D09": "AAPL", "D10": "GOOGL"}
+DEV_D_WINNERS = {"dev-D01": "JNJ", "dev-D02": "MSFT"}       # the development set's, by the same rule
+WINNERS = D_WINNERS | DEV_D_WINNERS
 
 UNIT_SCALE = {"USD": 1.0, "USD thousands": 1e3, "USD millions": 1e6, "USD billions": 1e9}
 SHORT_SCALES = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}          # "$B", "USD M": only next to a currency
@@ -366,7 +380,7 @@ def refusal_outcome(q: Question, a: B0Answer, out: dict) -> dict:
 def entity_outcome(q: Question, a: B0Answer, in_field: set[str], in_answer: set[str], out: dict) -> dict:
     """The `company` field decides when it names one company; else the answer text when it names one; else a
     human decides (an answer naming both companies may still say clearly which had more)."""
-    winner = D_WINNERS[q.id]
+    winner = WINNERS[q.id]
     if len(in_field) == 1 and len(in_answer) == 1 and in_field != in_answer:
         # M2 D10: company "Alphabet Inc." while the answer says "Microsoft": neither can be trusted alone
         out.update(correct=None, reason=f"the company field names {next(iter(in_field))}, the answer "
@@ -461,6 +475,9 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
                  retries=rec.retries, prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
                  latency_s=rec.latency_s, cached=rec.cached, error=rec.error is not None,
                  sheet_key=sheet_key(meta.run_id, rec.id, answer), model_answer=answer)
+        if rec.steps is not None or rec.agreement is not None:      # W1-09 strategies only: B0 scores unchanged
+            s.update(calls=sum(1 + st.retries for st in rec.steps) if rec.steps else 1 + rec.retries,
+                     agreement=rec.agreement)
         scored.append(s)
     return scored
 
@@ -729,10 +746,65 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     return "\n".join(out)
 
 
+def strategy_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """W1-09: what each strategy costs per question, and how often S2's samples agreed."""
+    out = table("### 9. Cost per question and self-consistency", "Measure", [m.run_id for m, _ in runs])
+    rows: dict[str, list[str]] = {"model calls per question (mean, JSON retries included)": [],
+                                  "tokens per question (mean, prompt + completion)": [],
+                                  "seconds per question p50 / p95": [],
+                                  "S2: all valid samples agreed": [],
+                                  "S2: a majority short of all (e.g. 3/5, 4/5)": [],
+                                  "S2: no majority, the most common decision won (e.g. 2/5; ties to the first)": [],
+                                  "LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide)": []}
+    for _, sc in runs:
+        rows["model calls per question (mean, JSON retries included)"].append(
+            f"{statistics.fmean(s.get('calls', 1 + s['retries']) for s in sc):.1f}")
+        rows["tokens per question (mean, prompt + completion)"].append(
+            f"{statistics.fmean(s['prompt_tokens'] + s['completion_tokens'] for s in sc):.0f}")
+        lat = [s["latency_s"] for s in sc if not s["error"]]
+        rows["seconds per question p50 / p95"].append(
+            f"{percentile(lat, 50):.1f} / {percentile(lat, 95):.1f}" if lat else "–")
+        votes = [tuple(map(int, s["agreement"].split("/"))) for s in sc if s.get("agreement")]
+        rows["S2: all valid samples agreed"].append(
+            f"{sum(k == n and n > 0 for k, n in votes)}/{len(votes)}" if votes else "–")
+        rows["S2: a majority short of all (e.g. 3/5, 4/5)"].append(
+            f"{sum(n / 2 < k < n for k, n in votes)}/{len(votes)}" if votes else "–")
+        rows["S2: no majority, the most common decision won (e.g. 2/5; ties to the first)"].append(
+            f"{sum(0 < k <= n / 2 for k, n in votes)}/{len(votes)}" if votes else "–")
+        judged = Counter(s.get("judge_score") for s in sc if s["answer_type"] == "summary")
+        rows["LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide)"].append(
+            f"{judged[2]} / {judged[1]} / {judged[0]}" if sum(judged[g] for g in (0, 1, 2)) else "–")
+    out += [f"| {k} | " + " | ".join(v) + " |" for k, v in rows.items()]
+    return "\n".join(out) + "\n" + paired_table(runs)
+
+
+def paired_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """Each later run against the first (B0) on the same questions: right only with it / right only with B0,
+    among the questions both decided, and the two-sided sign test on those (eval/retrieval_eval.sign_test)."""
+    from eval.retrieval_eval import sign_test
+    if len(runs) < 2:
+        return ""
+    (ref_meta, ref), others = runs[0], runs[1:]
+    out = table(f"### 10. Paired with {ref_meta.run_id} (B0): questions right only with the strategy / only with "
+                f"B0, two-sided sign test", "Answers", [m.run_id for m, _ in others])
+    by_id = {s["id"]: s for s in ref}
+    for label, types in {**REPORT_TYPES, "All decided answers": ANSWER_TYPES}.items():
+        cells = []
+        for _, sc in others:
+            pairs = [(s["correct"], by_id[s["id"]]["correct"]) for s in sc if s["answer_type"] in types
+                     and s["correct"] is not None and by_id[s["id"]]["correct"] is not None]
+            win, loss = sum(a and not b for a, b in pairs), sum(b and not a for a, b in pairs)
+            cells.append(f"{win} / {loss} (p = {sign_test(win, loss):.2f}, n = {len(pairs)})" if pairs else "–")
+        out.append(f"| {label} | " + " | ".join(cells) + " |")
+    return "\n".join(out) + "\n"
+
+
 def write_report(text: str, path: Path) -> None:
     block = f"{START}\n{text}{END}"
+    title = REPORT_TITLES.get(path.name, REPORT_TITLES[REPORT_NAME])
+    placeholder = "(written for W1-15)" if title == REPORT_TITLES[REPORT_NAME] else "(written for W1-09)"
     old = path.read_text(encoding="utf-8") if path.exists() else \
-        f"# Model comparison (W1-08 scorer)\n\n{START}\n{END}\n\n## Interpretation\n\n(written for W1-15)\n"
+        f"# {title}\n\n{START}\n{END}\n\n## Interpretation\n\n{placeholder}\n"
     if START not in old or END not in old:
         raise ValueError(f"{path} lost its GENERATED markers; restore them before re-running")
     head, rest = old.split(START, 1)
@@ -740,14 +812,40 @@ def write_report(text: str, path: Path) -> None:
     path.write_text(head + block + rest.split(END, 1)[1], encoding="utf-8", newline="\n")
 
 
+def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]:
+    """Report name -> its generated text. The model comparison keeps the model runs (M1, M2, ...) it was written
+    for; the W1-09 baselines put B0 (M1) next to the strategy runs (S1-S3); a development-set scoring has one
+    report with every run."""
+    strategy_runs = [r for r in runs if r[0].run_id.startswith("S")]
+    if dev:
+        return {DEV_REPORT: report(runs) + strategy_table(runs)}
+    out = {}
+    model_runs = [r for r in runs if r[0].run_id.startswith("M")]
+    if model_runs:
+        out[REPORT_NAME] = report(model_runs)
+    if strategy_runs:
+        reference = [r for r in runs if r[0].run_id == B0_REFERENCE]
+        if not reference:                       # the paired table would silently compare with another run
+            raise ValueError(f"strategy runs need the B0 reference {B0_REFERENCE} in the same runs directory")
+        baseline = reference + strategy_runs
+        out[BASELINE_REPORT] = report(baseline) + strategy_table(baseline)
+    return out
+
+
 # --------------------------------------------------------------------------------------------- CLI
-def load_questions(gold_file: Path, refusal_file: Path) -> dict[str, Question]:
-    rep = validate_file(gold_file)
-    tests, errors = validate_set("refusal", refusal_file)
+def load_questions(gold_file: Path, refusal_file: Path | None) -> dict[str, Question]:
+    """Gold questions and refusal tests; with refusal_file None, the development set (gold_file) alone."""
+    if refusal_file is None:
+        from eval.validate_dev_set import DevItem
+        rep, tests, errors = validate_file(gold_file, model=DevItem), [], []
+    else:
+        rep = validate_file(gold_file)
+        tests, errors = validate_set("refusal", refusal_file)
     if not rep.ok or errors:
-        raise ValueError(f"invalid gold set or refusal tests ({gold_file.name}, {refusal_file.name})")
+        raise ValueError(f"invalid question set or refusal tests ({gold_file.name}"
+                         f"{', ' + refusal_file.name if refusal_file else ''})")
     questions = {i.id: gold_question(i) for i in rep.items} | {t.id: refusal_question(t) for t in tests}
-    missing = sorted(q.id for q in questions.values() if q.answer_type == "short_entity" and q.id not in D_WINNERS)
+    missing = sorted(q.id for q in questions.values() if q.answer_type == "short_entity" and q.id not in WINNERS)
     if missing:
         raise ValueError(f"no D_WINNERS entry for {missing}")
     return questions
@@ -756,20 +854,33 @@ def load_questions(gold_file: Path, refusal_file: Path) -> dict[str, Question]:
 def main(argv: list[str] | None = None) -> int:
     safe_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
-    ap.add_argument("--out-dir", type=Path, default=RESULTS_DIR, help="scores/, grading/ and the report go here")
+    ap.add_argument("--questions", choices=("gold", "dev"), default="gold",
+                    help="dev: the W1-09 tuning runs on the development set (defaults under eval/results/dev)")
+    ap.add_argument("--runs-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_DIR / 'model_runs'})")
+    ap.add_argument("--out-dir", type=Path, help=f"scores/, grading/ and the reports go here; default {RESULTS_DIR} "
+                                                f"(dev: {DEV_DIR})")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
     ap.add_argument("--gold", type=Path, default=GOLD_FILE)
     ap.add_argument("--refusal", type=Path, default=REFUSALS_FILE)
     args = ap.parse_args(argv)
+    dev = args.questions == "dev"
+    args.runs_dir = args.runs_dir or (DEV_DIR / "model_runs" if dev else RUNS_DIR)
+    args.out_dir = args.out_dir or (DEV_DIR if dev else RESULTS_DIR)
     run_files = sorted(p for p in args.runs_dir.glob("*.jsonl")) if args.runs_dir.exists() else []
     if not run_files:
         print(f"ERROR: no runs files in {args.runs_dir} (the runner, W1-13, writes them)", file=sys.stderr)
         return 2
     try:
-        questions = load_questions(args.gold, args.refusal)
-        pack_files = [args.pack_dir / GOLD_PACK, args.pack_dir / REFUSAL_PACK]
-        packs = load_pack(pack_files[0]) | load_pack(pack_files[1])
+        if dev:
+            from eval.validate_dev_set import DEV_FILE
+            questions = load_questions(DEV_FILE, None)
+            pack_files = [args.pack_dir / DEV_PACK]
+        else:
+            questions = load_questions(args.gold, args.refusal)
+            pack_files = [args.pack_dir / GOLD_PACK, args.pack_dir / REFUSAL_PACK]
+        packs = {}
+        for pack_file in pack_files:
+            packs |= load_pack(pack_file)
         matchers = company_matchers()
         runs = []
         for path in run_files:
@@ -784,7 +895,8 @@ def main(argv: list[str] | None = None) -> int:
             apply_grades(scored, entered, read_judge(grading / f"judge_{meta.run_id}.jsonl", set(questions)))
             (scores_dir / f"{meta.run_id}.jsonl").write_text(
                 "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in scored), encoding="utf-8", newline="\n")
-        write_report(report([(m, sc) for m, _, sc in runs]), args.out_dir / REPORT_NAME)
+        for name, chosen in reports(dev, [(m, sc) for m, _, sc in runs]).items():
+            write_report(chosen, args.out_dir / name)
     except (OSError, ValueError, ValidationError, KeyError) as err:
         hint = " (is the file open in Excel? close it and run again)" if isinstance(err, PermissionError) else ""
         print(f"ERROR: {type(err).__name__}: {err}{hint}", file=sys.stderr)
@@ -792,7 +904,8 @@ def main(argv: list[str] | None = None) -> int:
     for meta, _, scored in runs:
         print(f"{meta.run_id}: " + ", ".join(f"{label} {rate([s for s in scored if s['answer_type'] in types])}"
                                              for label, types in REPORT_TYPES.items()))
-    print(f"report: {args.out_dir / REPORT_NAME}; grading sheet: {grading / SHEET_NAME}")
+    names = ", ".join(str(args.out_dir / n) for n in reports(dev, [(m, sc) for m, _, sc in runs]))
+    print(f"reports: {names}; grading sheet: {grading / SHEET_NAME}")
     return 0
 
 
