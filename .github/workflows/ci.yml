@@ -44,8 +44,8 @@ jobs:
       - name: Validate gold set (freeze rules)
         run: python eval/validate_gold.py --final
 
-      - name: Validate refusal and prompt-injection test sets
-        run: python eval/validate_test_sets.py
+      - name: Validate refusal and prompt-injection test sets (final rules, every test verified by a second person)
+        run: python eval/validate_test_sets.py --final
 
       # Final rules, because every item is verified: format, the split, second-person verification and separation
       # from gold-v1 (no shared filing period or company-year, no reworded gold or test question)
