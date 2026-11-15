@@ -71,9 +71,12 @@ def embedder_from_settings() -> Embedder:
 
 
 def cached(embedder: Embedder, maxsize: int = 4_096) -> Embedder:
-    """The embedder with an in-memory cache of the last `maxsize` texts: an evaluation searches the same questions
-    once per variant, filter setting and filter (W1-05), and each search would otherwise embed the query again
-    through the shared endpoint. The vectors are the same ones (the embedder is deterministic, W1-16)."""
+    """The embedder with an in-memory cache of up to `maxsize` texts, the first added dropped first (a hit does not
+    renew an entry). An evaluation searches the same questions once per variant, filter setting and filter (W1-05),
+    and each search would otherwise embed the query again through the shared endpoint. The vectors are the same
+    ones (the embedder is deterministic, W1-16)."""
+    if not isinstance(maxsize, int) or isinstance(maxsize, bool) or maxsize < 1:
+        raise ValueError(f"maxsize must be a positive int, not {maxsize!r}")
     store: dict[str, list[float]] = {}
 
     def embed(texts: list[str]) -> list[list[float]]:

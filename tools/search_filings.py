@@ -137,15 +137,15 @@ def default_retriever() -> Retriever:
     )
     from retrieval.hybrid import HybridIndex
     try:
+        bm25 = BM25Index.load(index_path(DEFAULT_VARIANT))           # a missing index is reported first
+        client, name = open_client(), collection_name(DEFAULT_VARIANT)
+        if name not in collection_names(client):
+            raise FileNotFoundError(f"dense collection {name} not found; run ingest/04_index.py")
         from core.settings import get_settings
         reranker = None
         if get_settings().RETRIEVAL_RERANK:           # loaded before the embedder, so a failure leaks nothing
             from retrieval.rerank import cross_encoder
             reranker = cross_encoder()
-        bm25 = BM25Index.load(index_path(DEFAULT_VARIANT))
-        client, name = open_client(), collection_name(DEFAULT_VARIANT)
-        if name not in collection_names(client):
-            raise FileNotFoundError(f"dense collection {name} not found; run ingest/04_index.py")
         embedder = embedder_from_settings()
         try:
             dense = DenseIndex(client.get_collection(name), read_chunks(chunks_path(DEFAULT_VARIANT)), embedder)

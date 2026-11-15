@@ -410,7 +410,11 @@ def test_an_unavailable_index_is_a_data_missing_error(monkeypatch, error):
     def unavailable(path):
         raise error
 
+    def settings_not_read_yet():
+        raise AssertionError("the index is checked before the settings (no .env in CI)")
+
     monkeypatch.setattr(retrieval.bm25.BM25Index, "load", staticmethod(unavailable))
+    monkeypatch.setattr("core.settings.get_settings", settings_not_read_yet)
     search_filings.default_retriever.cache_clear()
     try:
         out = search_filings.search_filings("revenue")
@@ -647,11 +651,17 @@ def test_the_default_stack_puts_statements_first_and_reranks_only_when_asked():
 
 def test_a_missing_reranker_model_is_a_data_missing_error(monkeypatch):
     import core.settings
+    import retrieval.bm25
+    import retrieval.dense
     import retrieval.rerank
 
     def offline(*args, **kwargs):
         raise OSError("cross-encoder/ms-marco-MiniLM-L-6-v2 is not in the local cache")
 
+    # an index that is there, without chromadb or data/ (as in CI): the reranker is what is missing
+    monkeypatch.setattr(retrieval.bm25.BM25Index, "load", staticmethod(lambda path: object()))
+    monkeypatch.setattr(retrieval.dense, "open_client", lambda: object())
+    monkeypatch.setattr(retrieval.dense, "collection_names", lambda client: ["chunks_C3"])
     monkeypatch.setattr(core.settings, "get_settings", lambda: SimpleNamespace(RETRIEVAL_RERANK=True))
     monkeypatch.setattr(retrieval.rerank, "cross_encoder", offline)
     search_filings.default_retriever.cache_clear()

@@ -16,11 +16,12 @@ from retrieval.hybrid import Retriever, interleave
 
 FIGURE_WORDS = re.compile(
     r"\b(?:revenues?|net\s+sales|sales|income|earnings|profit|margin|eps|earnings\s+per\s+share|assets|"
-    r"liabilities|equity|cash|debt|expenditures?|capex|research\s+and\s+development|r&d|expenses?|dividends?)\b",
+    r"liabilities|equity|cash|debt|expenditures?|capex|research\s+and\s+development|r&d|expenses?|dividends?|"
+    r"deposits|loans|goodwill|inventor(?:y|ies)|repurchases?|buybacks?|shares\s+outstanding)\b",
     re.IGNORECASE)
 QUALITATIVE_WORDS = re.compile(
     r"\b(?:drove|drive|driven|drivers?|explains?|explained|why|describes?|discuss(?:es)?|risks?|factors?|"
-    r"strategy|outlook|say|says|said|mention|attribute[sd]?)\b", re.IGNORECASE)
+    r"strategy|outlook|mention|attribute[sd]?)\b", re.IGNORECASE)
 ANNUAL_STATEMENTS = "Item 8"
 QUARTERLY_STATEMENTS = "Part I Item 1"
 

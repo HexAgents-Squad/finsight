@@ -77,3 +77,14 @@ def test_the_query_cache_refuses_a_short_answer():
     e = cached(Embedder(lambda texts: [[0.0]], "m"))
     with pytest.raises(RuntimeError, match="1 vectors for 2 texts"):
         e.embed(["a", "b"])
+
+
+def test_more_new_texts_than_the_cache_holds_still_get_their_own_vectors():
+    e = cached(Embedder(lambda texts: [[float(len(t))] for t in texts], "m"), maxsize=2)
+    assert e.embed(["a", "bb", "ccc"]) == [[1.0], [2.0], [3.0]]
+
+
+@pytest.mark.parametrize("maxsize", [0, -1, True, 2.5])
+def test_the_query_cache_needs_a_positive_size(maxsize):
+    with pytest.raises(ValueError, match="maxsize"):
+        cached(Embedder(lambda texts: [], "m"), maxsize=maxsize)

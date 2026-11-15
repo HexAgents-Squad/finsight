@@ -2,16 +2,20 @@
 
 The rules are lexical and come from config/companies.yaml, so they need no model and no gold data:
 - a company is named by its full name or an alias, matched case-insensitively as whole words, or by its ticker
-  written in capitals (so the ticker "C" never matches the letter "c"; the config's documented planner rule);
+  written in capitals (so the ticker "C" never matches the letter "c"; the config's documented planner rule), and
+  not after "Class" or "Series" ("Class C shares");
 - a fiscal year is a four-digit year from 1993 on ("fiscal 2024", "FY2024", "2024") or "FY24"; "latest" or "most
   recent" fiscal year reads as the newest indexed 10-K year and "latest quarter" as the newest indexed quarter,
   the readings the context pack uses for the questions that list no companies (eval/context_pack.py);
-- a fiscal period is a quarter ("Q2", "second quarter", "six months" or "first half" = Q2, "nine months" = Q3). The fourth quarter
-  reads as the annual report (FY): the 10-Ks cover it and no 10-Q does (spec §4.2). A question that names no
-  quarter asks about a fiscal year, so its period is FY; "10-Q" or "quarterly report" without a quarter means
-  every indexed quarter.
+- a fiscal period is a quarter ("Q2", "second quarter", "2Q25", "Q2FY25"; "six months" or "first half" = Q2,
+  "nine months" = Q3). The fourth quarter reads as the annual report (FY): the 10-Ks cover it and no 10-Q does
+  (spec §4.2). A question that names no
+  quarter asks about a fiscal year, so its period is FY; "10-Q", "quarterly report" or "three months ended" (a
+  date, whose fiscal quarter depends on the company) without a quarter means every indexed quarter.
 A follow-up ("And in the third quarter?") names only what changes: `from_turns` takes what the last turn names
-and fills what it does not name from the earlier turns, the latest first.
+and fills what it does not name from the earlier turns, the latest first; a turn that names a year but no period
+keeps no earlier quarter. Known limit: a calendar date's year is read as the fiscal year ("quarter ended September
+30, 2024" is Microsoft's fiscal 2025).
 """
 from __future__ import annotations
 
@@ -25,13 +29,16 @@ from ingest.edgar import COMPANIES_FILE, load_scope
 from retrieval.common import MIN_FISCAL_YEAR, Filters
 
 YEAR = re.compile(r"(?<![\d.,$])(?:19|20)\d{2}(?!\d|[.,]\d)")      # "2024" and "2024,", not "$2,024", "2024.5"
-SHORT_YEAR = re.compile(r"\bFY\s?'?(\d{2})\b", re.IGNORECASE)              # "FY24"
+SHORT_YEAR = re.compile(r"(?<![A-Za-z])FY\s?'?(\d{2})\b", re.IGNORECASE)   # "FY24", "Q2FY25"
+QUARTER_FIRST = re.compile(r"\b([1-4])Q(\d{4}|\d{2})?\b", re.IGNORECASE)        # "1Q25", "1Q2025", "3Q"
 LATEST = re.compile(r"\b(?:latest|most\s+recent)\b", re.IGNORECASE)
 QUARTER_WORD = re.compile(r"\b(first|second|third|fourth|1st|2nd|3rd|4th)\s+(?:fiscal\s+)?quarter\b", re.IGNORECASE)
-QUARTER_TOKEN = re.compile(r"(?<![A-Za-z])Q([1-4])\b", re.IGNORECASE)      # "Q2", "2025Q2", "Q2 2025"
+QUARTER_TOKEN = re.compile(r"(?<![A-Za-z])Q([1-4])(?:\b|(?=FY))", re.IGNORECASE)   # "Q2", "2025Q2", "Q2FY25"
 YEAR_TO_DATE = {"six months": 2, "first half": 2, "nine months": 3}    # year to date: in that quarter's 10-Q
 YEAR_TO_DATE_WORDS = re.compile(r"\b(six\s+months|first\s+half|nine\s+months)\b", re.IGNORECASE)
-QUARTERLY_FORM = re.compile(r"\b(?:10-Q|quarterly\s+report)\b", re.IGNORECASE)
+# a quarter named by its end date ("three months ended March 31, 2025") is some quarter of a fiscal year the date
+# alone does not give (fiscal years differ by company): every indexed quarter, as for "10-Q"
+QUARTERLY_FORM = re.compile(r"\b(?:10-Q|quarterly\s+report|three\s+months\s+ended)\b", re.IGNORECASE)
 ANNUAL_FORM = re.compile(r"\b(?:10-K|annual\s+report)\b", re.IGNORECASE)
 QUARTER_NUMBER = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4, "4th": 4}
 ANNUAL = "FY"
@@ -78,7 +85,8 @@ def _names() -> _Names:
             by_name[name.casefold()] = c["ticker"]
     names = sorted(by_name, key=len, reverse=True)       # "JPMorgan Chase" before "JPMorgan" before "Chase"
     pattern = re.compile(r"(?<![\w&-])(?:" + "|".join(re.escape(n) for n in names) + r")(?![\w&-])", re.IGNORECASE)
-    tickers = re.compile(r"(?<![\w&.-])(?:" + "|".join(sorted((c["ticker"] for c in cfg["companies"]), key=len,
+    # a share class is not a ticker ("Class C shares" is not Citigroup)
+    tickers = re.compile(r"(?<![\w&.-])(?<![Cc]lass )(?<![Ss]eries )(?:" + "|".join(sorted((c["ticker"] for c in cfg["companies"]), key=len,
                                                               reverse=True)) + r")(?![\w&-])")
     quarter_year = max(scope.tenq_years)
     return _Names(pattern, tickers, by_name, max(scope.tenk_years), (quarter_year, max(scope.tenq_periods)),
@@ -103,6 +111,8 @@ def companies(text: str) -> tuple[str, ...]:
 def years(text: str) -> tuple[int, ...]:
     found = [(m.start(), int(m.group())) for m in YEAR.finditer(text)]
     found += [(m.start(), 2000 + int(m.group(1))) for m in SHORT_YEAR.finditer(text)]
+    found += [(m.start(), 2000 + int(m.group(2))) for m in QUARTER_FIRST.finditer(text)      # "1Q25" (YEAR reads
+              if m.group(2) and len(m.group(2)) == 2]                                       # "1Q2025")
     return tuple(dict.fromkeys(y for _, y in sorted(found) if y >= MIN_FISCAL_YEAR))
 
 
@@ -110,6 +120,7 @@ def periods(text: str) -> tuple[str, ...]:
     """The fiscal periods asked about; empty when the text names no quarter, form or 'latest quarter'."""
     found = [(m.start(), QUARTER_NUMBER[m.group(1).lower()]) for m in QUARTER_WORD.finditer(text)]
     found += [(m.start(), int(m.group(1))) for m in QUARTER_TOKEN.finditer(text)]
+    found += [(m.start(), int(m.group(1))) for m in QUARTER_FIRST.finditer(text)]
     found += [(m.start(), YEAR_TO_DATE[" ".join(m.group(1).lower().split())])
               for m in YEAR_TO_DATE_WORDS.finditer(text)]
     out = [ANNUAL if q == 4 else f"Q{q}" for _, q in sorted(found)]
@@ -135,12 +146,16 @@ def extract(question: str) -> Entities:
 
 def from_turns(questions: list[str]) -> Entities:
     """What the last question names, with each field it leaves out taken from the latest earlier turn that names
-    it ("And in the third quarter?" keeps the company and year of the turn before)."""
+    it ("And in the third quarter?" keeps the company and year of the turn before). A turn that names a year and
+    no period asks about that fiscal year, so it keeps no earlier quarter ("Apple's Q3 2025 revenue?", "And fiscal
+    2024?" asks about the 2024 10-K)."""
     if not questions:
         return Entities()
     out = extract(questions[-1])
+    keep_periods = not out.years
     for earlier in reversed(questions[:-1]):
         prev = extract(earlier)
-        out = Entities(out.tickers or prev.tickers, out.years or prev.years, out.periods or prev.periods)
+        out = Entities(out.tickers or prev.tickers, out.years or prev.years,
+                       out.periods or (prev.periods if keep_periods else ()))
     return out
 

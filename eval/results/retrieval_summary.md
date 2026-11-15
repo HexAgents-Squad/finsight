@@ -69,37 +69,38 @@ retrieval default ADR-017 (W1-05).
 - **Reproducibility:** BM25, the endpoint's vectors (identical bytes for the same text) and every filtered search
   reproduce exactly; the `company+year` run files are byte-identical to the W1-04 ones. Unfiltered dense top-50
   lists can differ by a few near-equal chunks between processes (Chroma's HNSW search is approximate; measured
-  with fixed query vectors), which moved 1 question in C1 hybrid `none` and 3 in C2 hybrid `none` against the
-  W1-04 run files (C2: recall@10 0.452 -> 0.459, MRR 0.207 -> 0.210).
+  with fixed query vectors). Against the W1-04 run files this changed the order of near-equal chunks for one
+  question each in C1 and C2 hybrid `none` (no score moved in this run); in another W1-05 run it moved C2 hybrid
+  `none` by 3 questions (recall@10 0.459 instead of 0.452, MRR 0.210 instead of 0.207).
 
 <!-- GENERATED:START (eval/run_retrieval.py) -->
 | Variant | Retriever | Filters | recall@1 | recall@5 | recall@10 | MRR | figure@5 | s/query |
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | C1 | bm25 | none | 0.103 | 0.322 | 0.445 | 0.240 | 9/59 | 0.66 |
-| C1 | bm25 | question | 0.342 | 0.692 | 0.822 | 0.539 | 17/59 | 0.02 |
-| C1 | bm25 | company+year | 0.342 | 0.692 | 0.822 | 0.539 | 17/59 | 0.04 |
-| C1 | dense | none | 0.123 | 0.295 | 0.500 | 0.235 | 16/59 | 0.08 |
+| C1 | bm25 | question | 0.342 | 0.692 | 0.822 | 0.539 | 17/59 | 0.03 |
+| C1 | bm25 | company+year | 0.342 | 0.692 | 0.822 | 0.539 | 17/59 | 0.03 |
+| C1 | dense | none | 0.123 | 0.295 | 0.500 | 0.235 | 16/59 | 0.06 |
 | C1 | dense | question | 0.281 | 0.671 | 0.829 | 0.488 | 29/59 | 0.38 |
-| C1 | dense | company+year | 0.281 | 0.671 | 0.829 | 0.488 | 29/59 | 0.37 |
-| C1 | hybrid | none | 0.144 | 0.342 | 0.493 | 0.268 | 17/59 | 0.68 |
-| C1 | hybrid | question | 0.295 | 0.685 | 0.842 | 0.519 | 24/59 | 0.35 |
-| C1 | hybrid | company+year | 0.295 | 0.685 | 0.842 | 0.519 | 24/59 | 0.35 |
-| C2 | bm25 | none | 0.116 | 0.274 | 0.452 | 0.223 | 9/59 | 0.51 |
-| C2 | bm25 | question | 0.295 | 0.664 | 0.842 | 0.513 | 21/59 | 0.02 |
-| C2 | bm25 | company+year | 0.295 | 0.664 | 0.842 | 0.513 | 21/59 | 0.02 |
+| C1 | dense | company+year | 0.281 | 0.671 | 0.829 | 0.488 | 29/59 | 0.33 |
+| C1 | hybrid | none | 0.144 | 0.342 | 0.493 | 0.268 | 17/59 | 0.70 |
+| C1 | hybrid | question | 0.295 | 0.685 | 0.842 | 0.519 | 24/59 | 0.34 |
+| C1 | hybrid | company+year | 0.295 | 0.685 | 0.842 | 0.519 | 24/59 | 0.34 |
+| C2 | bm25 | none | 0.116 | 0.274 | 0.452 | 0.223 | 9/59 | 0.63 |
+| C2 | bm25 | question | 0.295 | 0.664 | 0.842 | 0.513 | 21/59 | 0.03 |
+| C2 | bm25 | company+year | 0.295 | 0.664 | 0.842 | 0.513 | 21/59 | 0.03 |
 | C2 | dense | none | 0.089 | 0.288 | 0.514 | 0.219 | 15/59 | 0.00 |
-| C2 | dense | question | 0.240 | 0.658 | 0.808 | 0.456 | 27/59 | 0.30 |
-| C2 | dense | company+year | 0.240 | 0.658 | 0.808 | 0.456 | 27/59 | 0.24 |
-| C2 | hybrid | none | 0.103 | 0.308 | 0.459 | 0.210 | 17/59 | 0.50 |
-| C2 | hybrid | question | 0.301 | 0.719 | 0.829 | 0.529 | 24/59 | 0.26 |
-| C2 | hybrid | company+year | 0.301 | 0.719 | 0.829 | 0.529 | 24/59 | 0.27 |
-| C3 | bm25 | none | 0.137 | 0.301 | 0.418 | 0.227 | 3/59 | 0.52 |
+| C2 | dense | question | 0.240 | 0.658 | 0.808 | 0.456 | 27/59 | 0.32 |
+| C2 | dense | company+year | 0.240 | 0.658 | 0.808 | 0.456 | 27/59 | 0.30 |
+| C2 | hybrid | none | 0.103 | 0.308 | 0.452 | 0.207 | 17/59 | 0.55 |
+| C2 | hybrid | question | 0.301 | 0.719 | 0.829 | 0.529 | 24/59 | 0.31 |
+| C2 | hybrid | company+year | 0.301 | 0.719 | 0.829 | 0.529 | 24/59 | 0.29 |
+| C3 | bm25 | none | 0.137 | 0.301 | 0.418 | 0.227 | 3/59 | 0.49 |
 | C3 | bm25 | question | 0.308 | 0.685 | 0.842 | 0.527 | 9/59 | 0.02 |
 | C3 | bm25 | company+year | 0.308 | 0.685 | 0.842 | 0.527 | 9/59 | 0.02 |
 | C3 | dense | none | 0.110 | 0.425 | 0.589 | 0.264 | 19/59 | 0.00 |
 | C3 | dense | question | 0.322 | 0.740 | 0.836 | 0.546 | 30/59 | 0.24 |
-| C3 | dense | company+year | 0.322 | 0.740 | 0.836 | 0.546 | 30/59 | 0.24 |
-| C3 | hybrid | none | 0.103 | 0.336 | 0.548 | 0.230 | 12/59 | 0.52 |
+| C3 | dense | company+year | 0.322 | 0.740 | 0.836 | 0.546 | 30/59 | 0.29 |
+| C3 | hybrid | none | 0.103 | 0.336 | 0.548 | 0.230 | 12/59 | 0.53 |
 | C3 | hybrid | question | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
 | C3 | hybrid | company+year | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
 
@@ -109,16 +110,16 @@ Trials on C3 (period filter, statement Item first, cross-encoder reranking):
 |---|---|---:|---:|---:|---:|---:|---:|
 | hybrid | question | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
 | hybrid | company+year | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
-| hybrid | question+period | 0.377 | 0.890 | 0.959 | 0.633 | 25/59 | 0.46 |
-| hybrid | question+period+statement | 0.808 | 0.986 | 1.000 | 0.975 | 31/59 | 1.04 |
-| hybrid | company+year+period | 0.377 | 0.890 | 0.959 | 0.633 | 25/59 | 0.49 |
-| hybrid | company+year+period+statement | 0.808 | 0.986 | 1.000 | 0.975 | 31/59 | 0.98 |
-| hybrid+rerank | question | 0.281 | 0.726 | 0.836 | 0.493 | 29/59 | 6.06 |
-| hybrid+rerank | company+year | 0.281 | 0.726 | 0.836 | 0.493 | 29/59 | 6.02 |
-| hybrid+rerank | question+period | 0.397 | 0.856 | 0.932 | 0.609 | 37/59 | 6.53 |
-| hybrid+rerank | question+period+statement | 0.808 | 1.000 | 1.000 | 0.979 | 42/59 | 11.97 |
-| hybrid+rerank | company+year+period | 0.397 | 0.856 | 0.932 | 0.609 | 37/59 | 6.07 |
-| hybrid+rerank | company+year+period+statement | 0.808 | 1.000 | 1.000 | 0.979 | 42/59 | 10.84 |
+| hybrid | question+period | 0.377 | 0.890 | 0.959 | 0.633 | 25/59 | 0.55 |
+| hybrid | question+period+statement | 0.808 | 0.986 | 1.000 | 0.975 | 31/59 | 0.97 |
+| hybrid | company+year+period | 0.377 | 0.890 | 0.959 | 0.633 | 25/59 | 0.51 |
+| hybrid | company+year+period+statement | 0.808 | 0.986 | 1.000 | 0.975 | 31/59 | 0.95 |
+| hybrid+rerank | question | 0.281 | 0.726 | 0.836 | 0.493 | 29/59 | 6.39 |
+| hybrid+rerank | company+year | 0.281 | 0.726 | 0.836 | 0.493 | 29/59 | 5.87 |
+| hybrid+rerank | question+period | 0.397 | 0.856 | 0.932 | 0.609 | 37/59 | 6.00 |
+| hybrid+rerank | question+period+statement | 0.822 | 1.000 | 1.000 | 0.986 | 42/59 | 9.46 |
+| hybrid+rerank | company+year+period | 0.397 | 0.856 | 0.932 | 0.609 | 37/59 | 4.98 |
+| hybrid+rerank | company+year+period+statement | 0.822 | 1.000 | 1.000 | 0.986 | 42/59 | 9.93 |
 
 Paired on C3: questions better / worse with b than with a, by recall@5 (all questions with gold sources) and by the answer figure in the first 5 chunks (questions whose gold answer states one), with a two-sided sign test on the questions that differ:
 
@@ -136,7 +137,7 @@ By question category, best setting (C3 hybrid+rerank, filters question+period+st
 
 | Category | n | recall@1 | recall@5 | recall@10 | MRR |
 |---|---:|---:|---:|---:|---:|
-| fact | 15 | 0.933 | 1.000 | 1.000 | 0.967 |
+| fact | 15 | 1.000 | 1.000 | 1.000 | 1.000 |
 | ratio | 15 | 1.000 | 1.000 | 1.000 | 1.000 |
 | period_comparison | 12 | 0.500 | 1.000 | 1.000 | 1.000 |
 | multi_company | 10 | 0.500 | 1.000 | 1.000 | 1.000 |
@@ -243,9 +244,9 @@ Bank of America's net interest income), a qualitative question the statement tri
 **The reranker finds the answering chunk, not the Item.** By recall@5 the cross-encoder looks neutral or worse
 (question filters 0.774 -> 0.726, 6 better / 12 worse, p = 0.24), but by figure@5 it is better in every pair
 and significantly so with the trials: with the period filter 25 -> 37 (17 / 5, p = 0.017), with period +
-statements 31 -> 42 (14 / 3, p = 0.013), where recall@5 reaches 1.000 (E05 found). It reads the passage against
+statements 31 -> 42 (14 / 3, p = 0.013), where recall@5 reaches 1.000 (E05 found) and MRR 0.986. It reads the passage against
 the question, so it moves the chunk with the asked-for line up, often an MD&A chunk that repeats it, which costs
-Item-level recall. The price is time: ~6 s per question with one search, ~11-12 s with statements first
+Item-level recall. The price is time: ~5-6 s per question with one search, ~9-12 s with statements first
 (two reranked searches per filter), against ~0.3-1.0 s without, on a laptop CPU, while the spec allows 60 s for
 the whole question (§9) and an agent question makes several searches.
 

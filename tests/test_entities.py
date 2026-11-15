@@ -43,6 +43,8 @@ def test_fiscal_years(text, found):
     ("in the second quarter of fiscal 2025", ("Q2",)), ("Q3 2025", ("Q3",)), ("2025Q1 revenue", ("Q1",)),
     ("the six months ended March 2025", ("Q2",)), ("nine months", ("Q3",)),
     ("in the first half of fiscal 2025", ("Q2",)), ("the first  nine months", ("Q3",)),
+    ("NVIDIA revenue 1Q25", ("Q1",)), ("Apple Q2FY25 revenue", ("Q2",)), ("3Q2025", ("Q3",)),
+    ("the three months ended March 29, 2025", ("Q1", "Q2", "Q3")),     # which quarter depends on the fiscal year
     ("the fourth quarter of fiscal 2024", ("FY",)),                    # Q4 is in the annual report
     ("in its fiscal 2024 10-K", ("FY",)), ("in its latest 10-Q", ("Q1", "Q2", "Q3")),
     ("in fiscal 2024", ()),                                            # no period named: FY when filtering
@@ -102,3 +104,20 @@ def test_a_longer_name_wins_over_another_companys_shorter_one(tmp_path, monkeypa
         assert companies("Bank's net income") == ("BK",)
     finally:
         entities._names.cache_clear()
+
+
+@pytest.mark.parametrize("text, found", [("NVIDIA revenue 1Q25", (2025,)), ("Apple Q2FY25 revenue", (2025,)),
+                                         ("3Q2025", (2025,))])
+def test_years_in_quarter_tokens(text, found):
+    assert years(text) == found
+
+
+def test_a_share_class_is_not_a_ticker():
+    assert companies("Alphabet Class C shares repurchased in fiscal 2024") == ("GOOGL",)
+    assert companies("Series C preferred stock of C") == ("C",)
+
+
+def test_a_follow_up_naming_only_a_year_asks_about_that_fiscal_year():
+    read = from_turns(["What was Apple's revenue in Q3 2025?", "What about fiscal 2024?"])
+    assert (read.tickers, read.years, read.periods) == (("AAPL",), (2024,), ())
+    assert read.filters(period=True) == [Filters.of(ticker="AAPL", fiscal_year=2024, fiscal_period="FY")]
