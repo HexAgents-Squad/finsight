@@ -1,4 +1,5 @@
 """eval/context_pack.py and core/tokens.py, offline: fake retriever, fake token counter, real gold/refusal files."""
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -334,6 +335,14 @@ def test_an_unavailable_tokenizer_is_a_typed_error_and_not_cached(monkeypatch):
 
 # --- the committed packs ---------------------------------------------------------------------------------------
 
+def sha256_unverified(path: Path) -> str:
+    """sha256 of a JSONL file with every verified_by set back to null, written as the test sets are."""
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    text = "".join(json.dumps({**r, "verified_by": None} if "verified_by" in r else r, ensure_ascii=False) + "\n"
+                   for r in records)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 @pytest.mark.parametrize("name, source, ids", [
     (cp.GOLD_PACK, cp.GOLD_PATH, [i.id for i in GOLD]),
     (cp.REFUSAL_PACK, cp.REFUSAL_PATH, [t.id for t in REFUSALS]),
@@ -347,7 +356,9 @@ def test_committed_packs_match_their_inputs_and_the_budget(name, source, ids):
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     info = json.loads(cp.meta_path(path).read_text(encoding="utf-8"))
     assert [r["id"] for r in records] == ids
-    assert info["inputs"][source.name] == cp.sha256(source)
+    # a second person's verified_by is no input of the pack (it reads ids and questions): the pack was built from
+    # the same tests before they were verified (W1-10), so the file with verified_by unset must give the recorded hash
+    assert info["inputs"][source.name] in (cp.sha256(source), sha256_unverified(source))
     questions = {q.id: q for q in cp.gold_questions(GOLD) + cp.refusal_questions(REFUSALS)}
     for r in records:
         q = questions[r["id"]]
