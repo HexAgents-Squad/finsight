@@ -354,6 +354,8 @@ def main(argv: list[str] | None = None) -> int:
         out_dir = args.out_dir or (DEV_RUNS_DIR if args.questions == "dev" else RUNS_DIR)
         if args.questions == "dev" and out_dir.resolve() == RUNS_DIR.resolve():
             raise ValueError("a development-set run must not be written next to the gold runs")
+        if args.questions == "gold" and out_dir.resolve() == DEV_RUNS_DIR.resolve():
+            raise ValueError("a gold run must not be written among the development-set runs")
         version = PROMPT_VERSION if strategy == "b0" else PROMPT_VERSIONS[strategy]
         run_id = run_id_for(args.run, args.label, args.context, args.thinking == "on", version)
         system = prompt_file(args.context).read_text(encoding="utf-8") if strategy == "b0" else \

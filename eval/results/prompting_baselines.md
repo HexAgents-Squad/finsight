@@ -65,7 +65,7 @@ development questions only (three passes, `eval/results/dev/`), frozen and pinne
 | prompt tokens (mean) | 3448 | 4465 | 18912 | 7073 |
 | completion tokens (mean) | 88 | 81 | 972 | 324 |
 | latency p50 / p95 (s, answered calls) | 2.4 / 3.6 | 2.1 / 3.1 | 22.9 / 31.7 | 8.2 / 16.1 |
-| cached replies | 102/102 | 0/102 | 0/102 | 0/102 |
+| cached replies | 102/102 | 0/102 | 101/102 | 0/102 |
 | automatic verdicts overturned by graders | 0 | 0 | 0 | 0 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
@@ -100,6 +100,7 @@ development questions only (three passes, `eval/results/dev/`), frozen and pinne
 |---|---|---|---|---|
 | all in the passages | 12/18 = 67% [44%–84%] | 13/18 = 72% [49%–88%] | 17/18 = 94% [74%–99%] | 17/18 = 94% [74%–99%] |
 | not all in the passages | 3/28 = 11% [4%–27%] | 3/28 = 11% [4%–27%] | 1/28 = 4% [1%–18%] | 2/28 = 7% [2%–23%] |
+
 ### 9. Cost per question and self-consistency
 
 | Measure | M1_qwen3-8b_rag_think-off_b0-v1 | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 |
@@ -107,11 +108,12 @@ development questions only (three passes, `eval/results/dev/`), frozen and pinne
 | model calls per question (mean, JSON retries included) | 1.0 | 1.0 | 5.0 | 2.0 |
 | tokens per question (mean, prompt + completion) | 3536 | 4546 | 19883 | 7397 |
 | seconds per question p50 / p95 | 2.4 / 3.6 | 2.1 / 3.1 | 22.9 / 31.7 | 8.2 / 16.1 |
-| S2: all valid samples agreed | – | – | 58/102 | – |
-| S2: a bare majority decided (3/5 or less) | – | – | 25/102 | – |
+| S2: all valid samples agreed | – | – | 62/102 | – |
+| S2: a majority short of all (e.g. 3/5, 4/5) | – | – | 33/102 | – |
+| S2: no majority, the most common decision won (e.g. 2/5; ties to the first) | – | – | 7/102 | – |
 | LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide) | 8 / 4 / 0 | 8 / 4 / 0 | 8 / 3 / 1 | 9 / 3 / 0 |
 
-### 10. Paired with M1_qwen3-8b_rag_think-off_b0-v1: questions right only with the strategy / only with it, two-sided sign test
+### 10. Paired with M1_qwen3-8b_rag_think-off_b0-v1 (B0): questions right only with the strategy / only with B0, two-sided sign test
 
 | Answers | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 |
 |---|---|---|---|
@@ -140,8 +142,8 @@ cannot be mistaken for real ones, or none.
 
 **S2 (chain of thought + self-consistency) grounds its numbers.** Unsupported numbers fall from 20 of 74
 answers (B0) to 4 of 85, the clearest effect in the tables, and period comparisons go from 0/12 to 4/12; numeric
-answers 20/48 (6 better, 2 worse than B0, p = 0.29). The vote was unanimous on 58 of 102 questions and a bare
-3/5 or less decided 25. The cost is five calls per question: ~20k tokens and 23 s (p50; p95 32 s) per question,
+answers 20/48 (6 better, 2 worse than B0, p = 0.29). The vote was unanimous on 62 of 102 questions, a majority
+short of unanimity decided 33, and on 7 no decision had a majority (the most common one, 2 of 5, won). The cost is five calls per question: ~20k tokens and 23 s (p50; p95 32 s) per question,
 against 2.4 s for B0, which leaves little of the 60 s per question (spec §9) for an agent's own steps. It
 refuses less: 7 under-refusals (B0 3), 2 wrong rules among 14 correct refusals.
 
@@ -174,4 +176,7 @@ hit the 1,024-token reply cap: one S2 sample, D07, decided on the other 4, and t
 and G02, whose answer steps were told the research step had failed); the failure labels
 are the scorer's suggestions until W1-14 confirms them (an honest "not reported" for a question whose figure was
 not retrieved is suggested as malformed_output or wrong_line_item); the summary row and every "pending" cell
-fill in when the graders' grades are entered and the scorer is re-run.
+fill in when the graders' grades are entered and the scorer is re-run (`eval/GRADING.md`, "A later round");
+a call that fails (the three capped calls) adds no tokens or seconds, so S2's and S3's cost rows are slightly
+low; after the PR review the S2 file was re-written from the reply cache with the vote no longer splitting
+refusals over the company they mention (0 requests; no answer changed, 4 refusals became unanimous).

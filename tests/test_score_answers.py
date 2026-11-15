@@ -810,7 +810,16 @@ def test_the_strategy_table_counts_calls_tokens_and_votes():
     assert "| model calls per question (mean, JSON retries included) | 5.5 | 1.0 |" in text
     assert "| tokens per question (mean, prompt + completion) | 1500 | 1000 |" in text
     assert "| S2: all valid samples agreed | 1/2 | – |" in text
-    assert "| S2: a bare majority decided (3/5 or less) | 1/2 | – |" in text
+    assert "| S2: a majority short of all (e.g. 3/5, 4/5) | 1/2 | – |" in text
+    assert "| S2: no majority, the most common decision won (e.g. 2/5; ties to the first) | 0/2 | – |" in text
+    assert text.startswith("\n### 9.")                                      # a blank line after table 8
+
+
+def test_strategy_runs_without_the_b0_reference_are_refused():
+    def scored(run_id):
+        return (meta(run_id), sa.score_run(meta(run_id), perfect_run(run_id), QUESTIONS, PACKS, MATCHERS))
+    with pytest.raises(ValueError, match="need the B0 reference"):
+        sa.reports(False, [scored("M2_llama3.2-3b_rag_think-off_b0-v1"), scored(S2)])
 
 
 def test_the_development_set_is_scored_on_its_own():

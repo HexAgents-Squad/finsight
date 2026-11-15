@@ -748,11 +748,13 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
 
 def strategy_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     """W1-09: what each strategy costs per question, and how often S2's samples agreed."""
-    out = table("### 9. Cost per question and self-consistency", "Measure", [m.run_id for m, _ in runs])[1:]
+    out = table("### 9. Cost per question and self-consistency", "Measure", [m.run_id for m, _ in runs])
     rows: dict[str, list[str]] = {"model calls per question (mean, JSON retries included)": [],
                                   "tokens per question (mean, prompt + completion)": [],
                                   "seconds per question p50 / p95": [],
-                                  "S2: all valid samples agreed": [], "S2: a bare majority decided (3/5 or less)": [],
+                                  "S2: all valid samples agreed": [],
+                                  "S2: a majority short of all (e.g. 3/5, 4/5)": [],
+                                  "S2: no majority, the most common decision won (e.g. 2/5; ties to the first)": [],
                                   "LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide)": []}
     for _, sc in runs:
         rows["model calls per question (mean, JSON retries included)"].append(
@@ -765,8 +767,10 @@ def strategy_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
         votes = [tuple(map(int, s["agreement"].split("/"))) for s in sc if s.get("agreement")]
         rows["S2: all valid samples agreed"].append(
             f"{sum(k == n and n > 0 for k, n in votes)}/{len(votes)}" if votes else "–")
-        rows["S2: a bare majority decided (3/5 or less)"].append(
-            f"{sum(0 < n and k / n <= 0.6 for k, n in votes)}/{len(votes)}" if votes else "–")
+        rows["S2: a majority short of all (e.g. 3/5, 4/5)"].append(
+            f"{sum(n / 2 < k < n for k, n in votes)}/{len(votes)}" if votes else "–")
+        rows["S2: no majority, the most common decision won (e.g. 2/5; ties to the first)"].append(
+            f"{sum(0 < k <= n / 2 for k, n in votes)}/{len(votes)}" if votes else "–")
         judged = Counter(s.get("judge_score") for s in sc if s["answer_type"] == "summary")
         rows["LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide)"].append(
             f"{judged[2]} / {judged[1]} / {judged[0]}" if sum(judged[g] for g in (0, 1, 2)) else "–")
@@ -781,8 +785,8 @@ def paired_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     if len(runs) < 2:
         return ""
     (ref_meta, ref), others = runs[0], runs[1:]
-    out = table(f"### 10. Paired with {ref_meta.run_id}: questions right only with the strategy / only with it, "
-                f"two-sided sign test", "Answers", [m.run_id for m, _ in others])
+    out = table(f"### 10. Paired with {ref_meta.run_id} (B0): questions right only with the strategy / only with "
+                f"B0, two-sided sign test", "Answers", [m.run_id for m, _ in others])
     by_id = {s["id"]: s for s in ref}
     for label, types in {**REPORT_TYPES, "All decided answers": ANSWER_TYPES}.items():
         cells = []
@@ -820,7 +824,10 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]
     if model_runs:
         out[REPORT_NAME] = report(model_runs)
     if strategy_runs:
-        baseline = [r for r in runs if r[0].run_id == B0_REFERENCE] + strategy_runs
+        reference = [r for r in runs if r[0].run_id == B0_REFERENCE]
+        if not reference:                       # the paired table would silently compare with another run
+            raise ValueError(f"strategy runs need the B0 reference {B0_REFERENCE} in the same runs directory")
+        baseline = reference + strategy_runs
         out[BASELINE_REPORT] = report(baseline) + strategy_table(baseline)
     return out
 

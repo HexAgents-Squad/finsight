@@ -118,3 +118,17 @@ python eval/score_answers.py                             # summary row, overturn
 python eval/grading.py examples                          # rows noted "example" -> eval/results/failure_examples.md
 ```
 Commit the sheet, the regenerated results and `failure_examples.md` in one PR for W1-14.
+
+## A later round: the W1-09 strategy runs
+The prompting baselines (W1-09) added 162 rows for the runs S1, S2 and S3 (38 to grade: 36 summaries and 2
+company answers the scorer left open; 124 wrong answers to label) to the same sheet, next to the M1-M3 rows you
+already graded. Grade them the same way, with `--pending` on every command: the copies then hold only the rows
+nobody has graded yet (the label rows split in half among them), so your earlier grades are neither shown nor
+changed, and the merge writes your entries back into exactly those rows.
+```bash
+python eval/grading.py copies --pending --names Chandra Amresh --out ../W1-09_grading
+python eval/grading.py handout --pending --out ../W1-09_grading/handout.md
+python eval/grading.py check --pending --grader 1 ../W1-09_grading/grading_sheet_Chandra.csv
+python eval/grading.py merge --pending --g1 ../W1-09_grading/grading_sheet_Chandra.csv --g2 ../W1-09_grading/grading_sheet_Amresh.csv --write
+python eval/score_answers.py                             # fills the summary row of eval/results/prompting_baselines.md
+```

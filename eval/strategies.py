@@ -5,7 +5,8 @@ so a difference from B0 is the strategy's:
     S1 few-shot    four worked examples from the development set (agent/prompts/s1_examples.json) as earlier
                    user/assistant turns: a quarter's three-month column, a computed change, a line item the
                    statement does not show ("not reported"), a forecast refused under R2. The examples' questions
-                   (dev-A03, dev-C01, dev-G02, dev-G01) are left out when S1 is tuned on the development set.
+                   (dev-A03, dev-C01, dev-G02, dev-G01) are development questions, so S1's development
+                   score includes its own examples: judge it on the other 11 (ADR-018).
     S2 chain of    a "reasoning" field before the answer fields (agent/prompts/s2_cot_rag.txt), SAMPLES samples at
        thought +   SAMPLE_TEMPERATURE with seed = sample index (ADR-016: the endpoint honours the seed), and a
        self-     majority vote over the valid samples on what the answer decides (vote_key); the first sample with
@@ -235,18 +236,22 @@ async def ask(llm: LLMClient, messages: list[dict[str, str]], schema: type[BaseM
 
 
 def to_record(record_id: str, run_id: str, attempts: list[tuple[str, Attempt]], chosen: Attempt | None,
-              answer: B0Answer | None, agreement: str | None = None, steps: bool = True) -> RunRecord:
+              answer: B0Answer | None, agreement: str | None = None, steps: bool = True,
+              answering: list[Attempt] | None = None) -> RunRecord:
     """A RunRecord whose tokens, seconds and retries add up over every call; the chosen call's reply is the
-    answer (None: no call gave a valid one)."""
+    answer (None: no call gave a valid one). As in B0, `error` means no reply at all: it is set only when every
+    call that could give the answer (`answering`: S2's samples, S3's answer step; default every call) failed, and
+    then it is that call's error, never an earlier step's (a failed S3 research step is in `steps` only)."""
     calls = [a for _, a in attempts]
-    errors = [a.error for a in calls if a.error]
-    last = chosen or calls[-1]
+    answering = answering or calls
+    errors = [a.error for a in answering if a.error]
+    last = chosen or answering[-1]
     return RunRecord(id=record_id, run_id=run_id, raw_reply=last.raw, parsed=answer,
                      json_valid=chosen is not None and chosen.json_valid, retries=sum(a.retries for a in calls),
                      prompt_tokens=sum(a.prompt_tokens for a in calls),
                      completion_tokens=sum(a.completion_tokens for a in calls),
                      latency_s=round(sum(a.seconds for a in calls), 3), cached=all(a.cached for a in calls),
-                     error=None if answer is not None else (errors[0] if errors else None),
+                     error=None if answer is not None or len(errors) < len(answering) else errors[0],
                      steps=[a.step(name) for name, a in attempts] if steps else None, agreement=agreement)
 
 
@@ -258,14 +263,18 @@ def _matchers() -> dict:
 
 
 def vote_key(a: B0Answer) -> tuple:
-    """What an answer decides: refused and the rule, the company it names (as tickers), and the value in one
-    scale to VOTE_DIGITS significant digits (None when it gives none: not reported, a summary, a refusal)."""
+    """What an answer decides: a refusal and its rule alone (the company it mentions decides nothing); otherwise
+    the partial-refusal rule, the company it names (as tickers) and the value in one scale to VOTE_DIGITS
+    significant digits (None when it gives none: not reported, a summary). Known limits, kept as frozen: values
+    that round apart (85.55 / 85.56), a sign difference and a percent written as a fraction count as different."""
     from eval.score_answers import companies_named, unit_scale
+    if a.refused:
+        return (True, a.refusal_rule, frozenset(), None)
     value = None
-    if a.value is not None and not a.refused:
+    if a.value is not None:
         scaled = float(a.value) * (unit_scale(a.unit) or 1.0)
         value = 0.0 if scaled == 0 else round(scaled, VOTE_DIGITS - 1 - math.floor(math.log10(abs(scaled))))
-    return (a.refused, a.refusal_rule, frozenset(companies_named(a.company, _matchers())), value)
+    return (False, a.refusal_rule, frozenset(companies_named(a.company, _matchers())), value)
 
 
 def vote(answers: list[B0Answer]) -> tuple[int, int]:
@@ -301,7 +310,7 @@ async def run_s3(llm: LLMClient, run_id: str, record: dict) -> RunRecord:
         json.dumps({"failed": research.error or "the research step gave no valid JSON"})
     answer = await ask(llm, answer_messages(record, note), B0Answer)
     return to_record(record["id"], run_id, [("extract", research), ("answer", answer)],
-                     answer if answer.parsed else None, answer.parsed)
+                     answer if answer.parsed else None, answer.parsed, answering=[answer])
 
 
 RUNNERS: dict[str, Callable[[LLMClient, str, dict], Awaitable[RunRecord]]] = {"s1": run_s1, "s2": run_s2,

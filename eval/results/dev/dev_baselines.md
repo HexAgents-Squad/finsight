@@ -55,7 +55,7 @@
 | prompt tokens (mean) | 3973 | 4990 | 21586 | 8185 |
 | completion tokens (mean) | 86 | 80 | 929 | 329 |
 | latency p50 / p95 (s, answered calls) | 2.2 / 2.6 | 2.1 / 2.6 | 21.3 / 26.5 | 6.7 / 12.5 |
-| cached replies | 0/15 | 0/15 | 0/15 | 0/15 |
+| cached replies | 0/15 | 0/15 | 15/15 | 0/15 |
 | automatic verdicts overturned by graders | 0 | 0 | 0 | 0 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
@@ -84,6 +84,7 @@
 |---|---|---|---|---|
 | all in the passages | 4/5 = 80% [38%–96%] | 5/5 = 100% [57%–100%] | 4/5 = 80% [38%–96%] | 4/5 = 80% [38%–96%] |
 | not all in the passages | 1/4 = 25% [5%–70%] | 2/4 = 50% [15%–85%] | 2/4 = 50% [15%–85%] | 1/4 = 25% [5%–70%] |
+
 ### 9. Cost per question and self-consistency
 
 | Measure | M1_qwen3-8b_rag_think-off_b0-v1 | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 |
@@ -92,9 +93,28 @@
 | tokens per question (mean, prompt + completion) | 4060 | 5071 | 22515 | 8514 |
 | seconds per question p50 / p95 | 2.2 / 2.6 | 2.1 / 2.6 | 21.3 / 26.5 | 6.7 / 12.5 |
 | S2: all valid samples agreed | – | – | 9/15 | – |
-| S2: a bare majority decided (3/5 or less) | – | – | 5/15 | – |
+| S2: a majority short of all (e.g. 3/5, 4/5) | – | – | 5/15 | – |
+| S2: no majority, the most common decision won (e.g. 2/5; ties to the first) | – | – | 1/15 | – |
+| LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide) | – | – | – | – |
+
+### 10. Paired with M1_qwen3-8b_rag_think-off_b0-v1 (B0): questions right only with the strategy / only with B0, two-sided sign test
+
+| Answers | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 |
+|---|---|---|---|
+| Short: numeric | 2 / 0 (p = 0.50, n = 9) | 1 / 0 (p = 1.00, n = 9) | 0 / 0 (p = 1.00, n = 9) |
+| Short: entity | 0 / 0 (p = 1.00, n = 2) | 0 / 0 (p = 1.00, n = 2) | 0 / 0 (p = 1.00, n = 2) |
+| Summary | – | – | – |
+| Refusal & not reported | 1 / 0 (p = 1.00, n = 2) | 1 / 0 (p = 1.00, n = 2) | 1 / 0 (p = 1.00, n = 2) |
+| All decided answers | 3 / 0 (p = 0.25, n = 13) | 2 / 0 (p = 0.50, n = 13) | 1 / 0 (p = 1.00, n = 13) |
 <!-- GENERATED:END -->
 
 ## Interpretation
 
-(written for W1-09)
+Tuning runs for the W1-09 prompts on the 15 development questions (`eval/dev_set.jsonl`, development pack
+`eval/results/context_pack_dev.jsonl`), not a result: 13 answers are decided automatically (the two summaries
+are not graded), so one question is 8 points. These are the runs of the third and last tuning pass, with the
+prompts as frozen (s1-v1, s2-v1, s3-v1); M1 is B0 on the same questions. S1's four examples are development
+questions (dev-A03, dev-C01, dev-G02, dev-G01), so its score includes its own examples: 9 of 9 on the other 11.
+The tuning history (pass 1: B0 8, S1 11, S2 9, S3 9 of 13; pass 2: S2 8, S3 9; pass 3: S2 10, S3 9) and why
+each change was made are in ADR-018. Two development questions (dev-A03, dev-C01) lack their gold figure in the
+pack, so "not reported" is the honest answer there although it scores as wrong.

@@ -145,7 +145,9 @@ def test_s2_without_a_valid_sample_has_no_answer():
 @pytest.mark.parametrize("a, b, same", [
     (answer(value=47516), answer(value=47.516, unit="USD billions"), True),
     (answer(value=47516), answer(value=47600), False),
-    (answer(value=None, refused=True, rule="R2"), answer(value=None, refused=True, rule="R2", company="Citi"), False),
+    (answer(value=None, refused=True, rule="R2"), answer(value=None, refused=True, rule="R2", company="Citi"), True),
+    (answer(value=None, refused=True, rule="R2"), answer(value=None, refused=True, rule="R1"), False),
+    (answer(value=None, rule="R2"), answer(value=None, rule="R2", company="Citi"), False),   # a partial refusal
     (answer(value=None, company="Johnson & Johnson"), answer(value=None, company="J&J"), True),
     (answer(value=67.6, unit="%"), answer(value=67.64, unit="%"), True),
 ])
@@ -242,3 +244,29 @@ def test_no_strategy_prompt_quotes_a_development_answer_outside_the_s1_examples(
         text = st.system_prompt(strategy) + (st.EXTRACT_FILE.read_text(encoding="utf-8") if strategy == "s3" else "")
         text = text.replace(st.b0_rules(), "")
         assert not {f for f in figures if f in text or f.replace(",", "") in text}, strategy
+
+
+def test_a_failed_research_step_is_not_reported_as_the_answers_error():
+    """S3: research step fails, answer step replies twice with invalid JSON: a reply was obtained, so as in B0
+    the record has no error (the scorer would count it as no reply); the research failure stays in steps."""
+    capped = FinSightError("cap", error_type="TruncatedResponseError")
+    r = run(st.run_s3(FakeLLM(capped, "nope", "nope"), "S3_qwen3-8b_rag_think-off_s3-v1", RECORDS["A01"]))
+    assert r.parsed is None and r.error is None and r.raw_reply == "nope"
+    assert r.steps[0].error.startswith("TruncatedResponseError")
+    busy = FinSightError("busy", error_type="RateLimitError")
+    r = run(st.run_s3(FakeLLM(busy, capped), "S3_qwen3-8b_rag_think-off_s3-v1", RECORDS["A01"]))
+    assert r.error.startswith("TruncatedResponseError")                     # the answer step's error, not busy
+    r = run(st.run_s3(FakeLLM(EXTRACTION, capped), "S3_qwen3-8b_rag_think-off_s3-v1", RECORDS["A01"]))
+    assert r.error.startswith("TruncatedResponseError")                     # research fine, no answer: an error
+
+
+def test_s2_with_replies_but_no_valid_sample_has_no_error():
+    r = run(st.run_s2(FakeLLM(*["bad"] * 10), "S2_qwen3-8b_rag_think-off_s2-v1", RECORDS["A01"]))
+    assert r.parsed is None and r.error is None and r.agreement == "0/5"
+
+
+def test_a_gold_run_is_never_written_among_the_dev_runs(monkeypatch, tmp_path, capsys):
+    from tests.test_run_models import cli_env
+    cli_env(monkeypatch, tmp_path)
+    assert rm.main(["--run", "S1", "--label", "qwen3-8b", "--context", "rag", "--out-dir", str(rm.DEV_RUNS_DIR)]) == 1
+    assert "must not be written among the development-set runs" in capsys.readouterr().err
