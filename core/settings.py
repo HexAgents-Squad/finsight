@@ -89,6 +89,10 @@ class Settings(SecSettings):
     # pinned tokenizer (core/tokens.py) before sending; empty = sent as they are (the local backend truncates
     # itself at the model's max_seq_length).
     EMBED_MAX_INPUT_TOKENS: int | None = Field(None, gt=2, description="cut texts to this many embedding tokens")
+    # Cross-encoder reranking of the hybrid top 30 in search_filings (ADR-017): more searches return the chunk that
+    # holds the answer figure, but it adds ~4-6 s per search on a CPU against the 60 s per question (spec §9), so
+    # it is off until the agent's end-to-end latency is measured (W2). The model (~91 MB) downloads on first use.
+    RETRIEVAL_RERANK: bool = Field(False, description="rerank search_filings results with the cross-encoder")
 
     # Agent limits (CLAUDE.md "Agent robustness")
     MAX_AGENT_STEPS: int = Field(10, gt=0)

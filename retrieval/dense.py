@@ -70,6 +70,28 @@ def embedder_from_settings() -> Embedder:
     return Embedder(lambda texts: loop.run_until_complete(client.embed(texts)), model_name(model), close)
 
 
+def cached(embedder: Embedder, maxsize: int = 4_096) -> Embedder:
+    """The embedder with an in-memory cache of the last `maxsize` texts: an evaluation searches the same questions
+    once per variant, filter setting and filter (W1-05), and each search would otherwise embed the query again
+    through the shared endpoint. The vectors are the same ones (the embedder is deterministic, W1-16)."""
+    store: dict[str, list[float]] = {}
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        missing = list(dict.fromkeys(t for t in texts if t not in store))
+        if missing:
+            vectors = embedder.embed(missing)
+            if len(vectors) != len(missing):
+                raise RuntimeError(f"embedder returned {len(vectors)} vectors for {len(missing)} texts")
+            for text, vector in zip(missing, vectors, strict=True):
+                if len(store) >= maxsize:
+                    store.pop(next(iter(store)))           # drop the oldest entry
+                store[text] = vector
+        # a text dropped again within this call (more texts than maxsize) is embedded once more
+        return [store[t] if t in store else embedder.embed([t])[0] for t in texts]
+
+    return Embedder(embed, embedder.model_id, embedder.close)
+
+
 def collection_name(variant: str) -> str:
     return f"chunks_{variant}"
 

@@ -9,6 +9,7 @@ import asyncio
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -632,3 +633,35 @@ def test_the_calculator_units_are_the_spec_units_the_gold_schema_checks():
     from eval.schema import ALLOWED_UNITS
     from tools.calculator import Unit
     assert set(get_args(Unit)) == ALLOWED_UNITS                    # one list in spec §7, defined twice in code
+
+
+def test_the_default_stack_puts_statements_first_and_reranks_only_when_asked():
+    from retrieval.rerank import RerankedIndex
+    from retrieval.statement import StatementFirstIndex
+    hybrid = object()
+    plain = search_filings.compose(hybrid)
+    assert isinstance(plain, StatementFirstIndex) and plain.base is hybrid
+    reranked = search_filings.compose(hybrid, reranker=lambda q, ps: [])
+    assert isinstance(reranked.base, RerankedIndex) and reranked.base.base is hybrid
+
+
+def test_a_missing_reranker_model_is_a_data_missing_error(monkeypatch):
+    import core.settings
+    import retrieval.rerank
+
+    def offline(*args, **kwargs):
+        raise OSError("cross-encoder/ms-marco-MiniLM-L-6-v2 is not in the local cache")
+
+    monkeypatch.setattr(core.settings, "get_settings", lambda: SimpleNamespace(RETRIEVAL_RERANK=True))
+    monkeypatch.setattr(retrieval.rerank, "cross_encoder", offline)
+    search_filings.default_retriever.cache_clear()
+    try:
+        out = search_filings.search_filings("revenue")
+    finally:
+        search_filings.default_retriever.cache_clear()
+    assert error_type(out) == "data_missing" and "not in the local cache" in out["error"]["message"]
+
+
+def test_reranking_is_off_by_default():
+    from core.settings import Settings
+    assert Settings.model_fields["RETRIEVAL_RERANK"].default is False

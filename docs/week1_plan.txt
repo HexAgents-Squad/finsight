@@ -398,6 +398,11 @@ W1-05 (Anirudh): retrieval/rerank.py (cross-encoder/ms-marco-MiniLM-L-6-v2 on th
   retrieval/entities.py (company, fiscal year and quarter from the question); filter settings none /
   question-derived / company+year / +form-period; Item 8 preference trial; run_retrieval.py --rerank.
   ADR-017 sets the retrieval default.
+  Done as in ADR-017 (15 Nov): question-derived filters equal the gold ones (73/73 gold, 14/14 dev); on C3
+  hybrid the period filter lifts recall@5 0.774 -> 0.890 (p = 0.006) and statements first (the Item 8
+  preference) to 0.986 (p = 0.001); the reranker adds the most answer-bearing chunks (figure@5 31 -> 42 of 59,
+  p = 0.013) but ~4-6 s per search, so the default is filters + statements first and RETRIEVAL_RERANK is opt-in
+  (eval/results/retrieval_summary.md). The planner should pass the company, year and period the question names.
 W1-09 (Alok + sub-owners): same context pack, runner and scorer as Sprint A; B0 is the zero-shot reference.
   S1 few-shot structured output (examples from the dev set), S2 chain-of-thought + self-consistency (3–5
   samples, majority vote on the value), S3 decomposition. Prompts frozen and tagged before the gold runs (Fri

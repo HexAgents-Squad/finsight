@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eval.score_answers import GROUPED_FIGURE  # noqa: E402
+from core.figures import GROUPED_FIGURE  # noqa: E402
 from eval.validate_dev_set import DEV_FILE  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_FILE  # noqa: E402
 from ingest.edgar import company_names  # noqa: E402
