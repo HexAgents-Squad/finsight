@@ -4,10 +4,11 @@ Team HexAgents_Squad (Track B · API-side) · Mentor: Dr. Gunjan Balde · Prepar
 representative), 16 Nov 2026. The tables are generated from the committed results by `scripts/week1_notes.py`;
 the detailed companion is `docs/report/week1_detailed_results.md`.
 
-**Week 1 exit gate met:** the model comparison you asked for (delivered Wed 11 Nov), the prompting-baseline
-table (B0 zero-shot and S1/S2/S3 on Qwen3-8B, with failure modes) and the retrieval table (chunking × retriever
-× rerank × filters). All 16 Week 1 tickets are delivered: 15 in 16 reviewed, merged pull requests (#17–#32, CI green)
-and this note, the last; every number below traces back to a committed run file.
+**Week 1 exit gate met:** the model comparison you asked for (due Wed 11 Nov, sent Fri 13 Nov), the
+prompting-baseline table (B0 zero-shot and S1/S2/S3 on Qwen3-8B, with failure modes) and the retrieval table
+(chunking × retriever × rerank × filters). 15 of the 16 Week 1 tickets are merged in 16 reviewed pull requests
+(#17–#32, CI green; W1-10's last items are carried into Week 2) and this note is the 16th; every number below
+traces back to a committed run file.
 
 <!-- GENERATED:START (scripts/week1_notes.py) -->
 **Model comparison** (all 80 gold questions + 22 refusal tests, the same retrieved passages for every model; `eval/results/model_comparison.md`)
@@ -54,8 +55,9 @@ and this note, the last; every number below traces back to a committed run file.
   significant gain, 6 better / 0 worse, p = 0.03) but copied an example's figure into three answers;
   self-consistency cuts ungrounded numbers from 20 of 74 answers to 4 of 85 at 5 calls and ~23 s per question;
   decomposition is best on numbers and multi-company questions but under-refuses (ADR-018).
-- **Cleaner text and a better embedding model** (W1-04, W1-16): 16,817 page-furniture lines removed and the
-  index rebuilt with bge-small-en-v1.5; dense recall@5 with filters 0.630 → 0.788 (p = 0.011).
+- **Cleaner text and a better embedding model** (W1-04, W1-16): bge-small-en-v1.5 raised dense recall@5 with
+  filters from 0.630 to 0.788 (p = 0.011, measured before the re-index); then 16,817 page-furniture lines were
+  removed and the index rebuilt with it (company + year hybrid recall@5 0.747 → 0.774).
 
 **Also delivered in Week 1:** the hosted Qwen3-8B endpoint behind one request queue, retries and a reply cache
 (W1-01/02); an endpoint probe deciding JSON-schema output, tool calling and the latency budget (W1-03, ADR-016);
@@ -72,4 +74,5 @@ written rubric revision expected? (3) Langfuse tracing: cloud free tier or self-
 
 **Week 2 (16 – 21 Nov), agentic layer:** a LangGraph planner → executor → critic agent on the four tools, with
 memory across turns, JSON-schema outputs, step and token caps, Langfuse traces, a FastAPI service and a Streamlit
-UI; exit gate: an end-to-end demo on 10 queries with a trace dashboard (`docs/week2_plan.txt`).
+UI; exit gate: an end-to-end demo on 10 queries with a trace dashboard and the agent's first scored run on the
+gold set next to B0 (`docs/week2_plan.txt`).

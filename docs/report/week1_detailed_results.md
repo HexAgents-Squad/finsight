@@ -96,12 +96,12 @@ from the committed results by `scripts/week1_notes.py`; the full reports they co
 | W1-07 | Answer contract and the critic's seven checks | ADR-022, `agent/contract.py`, PR #28 |
 | W1-08 | Scorer: short / summary / refusal answers, hallucination checks, failure taxonomy | `eval/score_answers.py`, PR #19 |
 | W1-09 | Prompting baselines S1/S2/S3 against B0 | ADR-018, `prompting_baselines.md`, PR #32 |
-| W1-10 | Week 0 carry-overs: safety tests verified, spot check, smoke tests | `docs/smoke_tests.md`, PR #30 |
+| W1-10 | Week 0 carry-overs: safety tests verified, spot check (independent review pending), smoke tests 1 of 5 (rest in W2-12) | `docs/smoke_tests.md`, PR #30 |
 | W1-11 | Week 1 notes (this), Week 2 plan and tickets | `docs/week2_plan.txt` |
 | W1-12 | Context pack: the same passages for every model | `eval/context_pack.py`, PR #18 |
 | W1-13 | Comparison runner and the frozen zero-shot prompt B0 | `eval/run_models.py`, PR #21 |
 | W1-14 | Blind two-grader grading and failure labels | `eval/grading.py`, PRs #22, #23 |
-| W1-15 | Model comparison report to the mentor (Wed 11 Nov) | ADR-019, `model_comparison.md`, PR #24 |
+| W1-15 | Model comparison report to the mentor (due Wed 11 Nov, sent Fri 13 Nov) | ADR-019, `model_comparison.md`, PR #24 |
 | W1-16 | Course embedding endpoint (bge-small) measured against MiniLM | ADR-021, `embedding_comparison.md`, PR #27 |
 
 ## Failure modes seen in Week 1 (labels from the graders and the scorer)
@@ -117,8 +117,9 @@ from the committed results by `scripts/week1_notes.py`; the full reports they co
   calculator and the critic must own units.
 
 ## Limits stated with the numbers
-- 73-80 questions per table: one question moves a rate by 1-2 points; differences are judged question by
-  question with a sign test, and only differences with p < 0.05 are called significant.
+- Small cells: the answer tables split 102 questions into cells of 8-48, so one question moves a cell by 2 to 12
+  points (retrieval: 73 questions, about 1.4 points); differences are judged question by question with a sign
+  test, and only differences with p < 0.05 are called significant.
 - The comparison and baselines used oracle company and year filters; W1-05 showed question-derived filters
   equal them on the gold set, but real questions are phrased more freely.
 - Summary grades: two graders agreed on 7 of 12 Qwen summaries (kappa 0.17); the strategy summaries are not graded

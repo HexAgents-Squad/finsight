@@ -77,7 +77,7 @@ Evaluation (W2-11): eval/run_agent.py writes a RunRecord per question (with its 
 +====+=======+=========================================================+=================+=================+========+==================+
 | 1  | W2-01 | Agent state, message schemas and graph skeleton         | Alok            | Amresh          | Mon 16 | –                |
 | 2  | W2-02 | Planner: refusal first, entities, a JSON plan           | Amresh          | Alok            | Tue 17 | W2-01            |
-| 3  | W2-03 | Tool schemas for native tool calling                    | Giridharan      | Amresh          | Tue 17 | W2-01            |
+| 3  | W2-03 | Tool schemas for native tool calling                    | Giridharan      | Anirudh         | Tue 17 | W2-01            |
 | 4  | W2-04 | Executor: research/data/analyst steps, guards           | Giridharan      | Anirudh         | Wed 18 | W2-02, W2-03     |
 | 5  | W2-05 | Critic: contract checks, recomputation, citations       | Amresh          | Alok            | Wed 18 | W2-01            |
 | 6  | W2-06 | Answer composer and memory across turns                 | Chandra Shekhar | Alok            | Thu 19 | W2-01            |
@@ -86,7 +86,7 @@ Evaluation (W2-11): eval/run_agent.py writes a RunRecord per question (with its 
 | 9  | W2-09 | FastAPI service: /ask, /health, cache, rate limit       | Giridharan      | Chandra Shekhar | Fri 20 | W2-07            |
 | 10 | W2-10 | Streamlit UI                                            | Chandra Shekhar | Anirudh         | Fri 20 | W2-09            |
 | 11 | W2-11 | Agent run on the gold set, scored next to B0            | Alok            | Amresh          | Sat 21 | W2-07            |
-| 12 | W2-12 | Week 1 carry-overs (grading round 2, smoke, WP2)        | Chandra Shekhar | Amresh          | Wed 18 | –                |
+| 12 | W2-12 | Week 1 carry-overs (grading round 2, smoke, WP2)        | Chandra Shekhar | Anirudh         | Wed 18 | –                |
 | 13 | W2-13 | Prompt-injection and PII defences in the agent          | Amresh          | Chandra Shekhar | Fri 20 | W2-07            |
 | 14 | W2-14 | Week 2 results note, mentor demo, Week 3 kick-off       | Alok            | Amresh          | Sat 21 | W2-07, 08, 11    |
 +----+-------+---------------------------------------------------------+-----------------+-----------------+--------+------------------+

@@ -11,7 +11,6 @@ reports. Every number in the tables is read from a committed file, so a fresh cl
     eval/results/prompting_baselines.md  W1-08 scorer, B0 = M1 against S1-S3 (W1-09)
     eval/results/retrieval_summary.md    eval/run_retrieval.py (W1-04, W1-05)
     eval/results/embedding_comparison.md scripts/compare_embedding_runs.py (W1-16)
-    eval/results/endpoint_probe.md       scripts/probe_endpoint.py (W1-03)
     eval/gold_set.jsonl, eval/dev_set.jsonl, eval/refusal_tests.jsonl, eval/injection_tests.jsonl
     docs/decisions.md                    the ADRs dated in Week 1
 A source table that is missing or changed shape is an error naming the file, never a silently empty cell.
@@ -36,7 +35,7 @@ START, END = "<!-- GENERATED:START (scripts/week1_notes.py) -->", "<!-- GENERATE
 WEEK1_FIRST_DAY = (11, 8)                          # ADRs dated 8 Nov 2026 or later are Week 1's
 MONTHS = {"Oct": 10, "Nov": 11, "Dec": 12}
 
-# Short, model-blind-free names for the run ids (the reports use the full ids)
+# Short, readable names for the run ids (the reports use the full ids)
 RUN_NAMES = {"M1_qwen3-8b_rag_think-off_b0-v1": "Qwen3-8B, passages (B0)",
              "M2_llama3.2-3b_rag_think-off_b0-v1": "Llama-3.2-3B, passages",
              "M3_qwen3-8b_closed_think-off_b0-v1": "Qwen3-8B, closed book",
@@ -209,6 +208,8 @@ def week1_adrs() -> list[list[str]]:
         if not line.startswith("| ADR-") or line.startswith("| ADR-0xx"):
             continue
         c = cells(line)
+        if len(c) != 7:                                 # a '|' inside a cell would shift the Status column
+            raise SourceError(f"docs/decisions.md: {c[0]} has {len(c)} cells, not 7")
         m = re.match(r"(\d+) (\w{3})", c[1])
         if not m or (MONTHS.get(m.group(2), 0), int(m.group(1))) < WEEK1_FIRST_DAY:
             continue
@@ -253,7 +254,7 @@ def detailed_block() -> str:
 def fill(path: Path, block: str, title: str) -> str:
     """The note with its generated block replaced (a new note gets a title and empty hand-written parts)."""
     old = path.read_text(encoding="utf-8") if path.exists() else f"# {title}\n\n{START}\n{END}\n\n(written by hand)\n"
-    if START not in old or END not in old:
+    if START not in old or END not in old or old.index(END) < old.index(START):
         raise SourceError(f"{shown(path)} lost its GENERATED markers; restore them")
     head, rest = old.split(START, 1)
     return head + f"{START}\n{block}{END}" + rest.split(END, 1)[1]
