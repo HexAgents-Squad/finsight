@@ -766,3 +766,57 @@ def test_the_report_splits_numeric_accuracy_by_figures_in_the_passages():
     closed = sa.score_run(meta(CLOSED, "closed"), perfect_run(CLOSED), QUESTIONS, PACKS, MATCHERS)
     assert {s["gold_figures_in_pack"] for s in closed} == {None}
     assert "– (closed-book)" in sa.report([(meta(CLOSED, "closed"), closed)])
+
+
+# --- W1-09: strategy runs, the baselines report and the development set ----------------------------------------------
+
+S2 = "S2_qwen3-8b_rag_think-off_s2-v1"
+
+
+def test_a_strategy_record_adds_its_calls_and_agreement_and_a_b0_record_adds_nothing():
+    from eval.runs_schema import Step
+    step = Step(name="sample 0", raw_reply="{}", json_valid=True, retries=1, prompt_tokens=1, completion_tokens=1,
+                latency_s=0.1, cached=False)
+    s2 = record("A01", ideal(QUESTIONS["A01"]), S2, steps=[step, step.model_copy(update={"retries": 0})],
+                agreement="2/2")
+    [scored] = sa.score_run(meta(S2), [s2], {"A01": QUESTIONS["A01"]}, PACKS, MATCHERS)
+    assert (scored["calls"], scored["agreement"]) == (3, "2/2")
+    [b0] = sa.score_run(meta(), [record("A01", ideal(QUESTIONS["A01"]))], {"A01": QUESTIONS["A01"]}, PACKS, MATCHERS)
+    assert "calls" not in b0 and "agreement" not in b0
+
+
+def test_the_model_comparison_keeps_the_model_runs_and_the_baselines_compare_b0_with_the_strategies():
+    def scored(run_id):
+        return (meta(run_id), sa.score_run(meta(run_id), perfect_run(run_id), QUESTIONS, PACKS, MATCHERS))
+
+    runs = [scored(RAG), scored("M2_llama3.2-3b_rag_think-off_b0-v1"), scored(S2)]
+    out = sa.reports(False, runs)
+    assert set(out) == {sa.REPORT_NAME, sa.BASELINE_REPORT}
+    assert S2 not in out[sa.REPORT_NAME] and "M2_llama" in out[sa.REPORT_NAME]
+    assert f"| Measure | {RAG} | {S2} |" in out[sa.BASELINE_REPORT] and "M2_llama" not in out[sa.BASELINE_REPORT]
+    assert "### 9. Cost per question and self-consistency" in out[sa.BASELINE_REPORT]
+    assert set(sa.reports(False, runs[:2])) == {sa.REPORT_NAME}                 # no strategy run: no baselines
+    assert set(sa.reports(True, runs)) == {sa.DEV_REPORT}
+
+
+def test_the_strategy_table_counts_calls_tokens_and_votes():
+    rows = [{"calls": 5, "retries": 0, "prompt_tokens": 900, "completion_tokens": 100, "latency_s": 5.0,
+             "error": False, "agreement": "5/5"},
+            {"calls": 6, "retries": 1, "prompt_tokens": 1900, "completion_tokens": 100, "latency_s": 7.0,
+             "error": False, "agreement": "3/5"}]
+    b0 = [{"retries": 0, "prompt_tokens": 950, "completion_tokens": 50, "latency_s": 1.0, "error": False}]
+    text = sa.strategy_table([(meta(S2), rows), (meta(), b0)])
+    assert "| model calls per question (mean, JSON retries included) | 5.5 | 1.0 |" in text
+    assert "| tokens per question (mean, prompt + completion) | 1500 | 1000 |" in text
+    assert "| S2: all valid samples agreed | 1/2 | – |" in text
+    assert "| S2: a bare majority decided (3/5 or less) | 1/2 | – |" in text
+
+
+def test_the_development_set_is_scored_on_its_own():
+    from eval.validate_dev_set import DEV_FILE
+    dev = sa.load_questions(DEV_FILE, None)
+    assert len(dev) == 15 and all(q.startswith("dev-") for q in dev)
+    assert {q for q, x in dev.items() if x.answer_type == "short_entity"} == set(sa.DEV_D_WINNERS)
+    for qid, ticker in sa.DEV_D_WINNERS.items():           # the company the gold answer names last, as for gold
+        last = re.split(r"(?<=\.)\s+", dev[qid].gold_answer.strip())[-1]
+        assert sa.companies_named(last, MATCHERS) == {ticker}, qid

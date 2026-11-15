@@ -1,0 +1,25 @@
+{
+  "run_id": "S3_qwen3-8b_rag_think-off_s3-v1",
+  "model": "Qwen/Qwen3-8B",
+  "endpoint": "hosted",
+  "context": "rag",
+  "thinking": false,
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "prompt_version": "s3-v1",
+  "context_pack": "results/context_pack_dev.jsonl (cp-v1)",
+  "context_pack_sha256": {
+    "context_pack_dev.jsonl": "e88b336f99a4830261d8a72305380a763fb90f669430e8db306a57f1ae62591d"
+  },
+  "json_retries": 1,
+  "truncation_check": false,
+  "context_window": null,
+  "git_commit": "156d2f5bfc9fa6766614c87ed133259b0e73046a",
+  "started": "2026-11-15T16:54:23+00:00",
+  "finished": "2026-11-15T16:56:23+00:00",
+  "prompt_sha256": "ea129236ce2a404534cbd9520d9cc26004f262f1beb62e85c500476097257959",
+  "framing_sha256": "5ddbfb524943ade6b885d8cc19a5e33d050f8d07c03f6817166909ac8b5979ef",
+  "strategy": "s3",
+  "response_format": "json_schema (strict guided decoding)",
+  "repair": null
+}

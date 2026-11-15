@@ -3,6 +3,7 @@
 Usage:
     python eval/context_pack.py                                   # writes both packs to eval/results/
     python eval/context_pack.py --out-dir /tmp/packs --index-dir /tmp/idx --chunks-dir /tmp/chunks
+    python eval/context_pack.py --dev                             # the development-set pack (W1-09 tuning)
 
 Every model in the comparison (docs/week1_plan.txt §3) answers from exactly the passages in these files, so a
 difference between models is a difference in the models, not in retrieval, and a run needs no index on the
@@ -10,6 +11,8 @@ machine that makes it. Output (docs/week1_plan.txt §2.3):
     eval/results/context_pack_gold.jsonl       80 gold questions (gold-v1)
     eval/results/context_pack_refusal.jsonl    22 refusal tests
     <pack>.meta.json                           settings, tokenizer and input fingerprints (sha256)
+With --dev: eval/results/context_pack_dev.jsonl, the 15 development questions (eval/dev_set.jsonl) only, built
+the same way, for tuning the W1-09 prompts without touching the gold set or the refusal tests.
 One line per question:
     {"id", "question", "history": [{"question", "answer"}], "filters": [{"ticker", "fiscal_year", ...}],
      "out_of_corpus": [...], "passages": [{"pid", "chunk_id", "citation", "ticker", "form", "fiscal_year",
@@ -55,7 +58,8 @@ from core.exceptions import FinSightError  # noqa: E402
 from eval.retrieval_eval import build_query, hit_key  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR, load_retrievers  # noqa: E402
 from eval.safety_tests import RefusalTest  # noqa: E402
-from eval.schema import CorpusScope, GoldItem, corpus_scope  # noqa: E402
+from eval.schema import CorpusScope, DevItem, GoldItem, corpus_scope  # noqa: E402
+from eval.validate_dev_set import DEV_FILE  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_PATH  # noqa: E402
 from eval.validate_gold import safe_console, validate_file  # noqa: E402
 from eval.validate_test_sets import SETS, validate_set  # noqa: E402
@@ -72,7 +76,7 @@ HITS_PER_FILTER = 10                                # candidates per search befo
 # prompt, chat template, question and history (today's longest question + history: under 400 characters)
 TOKEN_BUDGET = 4_000
 PASSAGE_SEPARATOR = "\n\n"
-GOLD_PACK, REFUSAL_PACK = "context_pack_gold.jsonl", "context_pack_refusal.jsonl"
+GOLD_PACK, REFUSAL_PACK, DEV_PACK = "context_pack_gold.jsonl", "context_pack_refusal.jsonl", "context_pack_dev.jsonl"
 META_SUFFIX = ".meta.json"
 QUARTERS = frozenset({"Q1", "Q2", "Q3"})
 ANNUAL = "FY"
@@ -118,6 +122,10 @@ ANNOTATION_READINGS: dict[str, str] = {
     "RF21": "'fiscal 2024 Q4': Q4 is not derived (spec §4.2), so the fiscal 2024 annual report is searched",
     "RF22": "'latest fiscal year' = FY2025, the latest indexed 10-K (spec §4.3; RF22's own rationale)",
 }
+# The development set's questions that list no companies (W1-09 tuning pack), annotated the same way
+DEV_QUESTION_FILTERS: dict[str, tuple[tuple[str, ...], tuple[int, ...], str | None]] = {
+    "dev-G01": (("C",), (2025,), None),
+}
 
 TokenCounter = Callable[[str], int]
 
@@ -157,7 +165,7 @@ def render_passages(passages: Iterable[Passage]) -> str:
 
 def annotated_filters(qid: str) -> tuple[Filters, ...]:
     """Filters for a question that lists no companies: every annotated (ticker, year), quarter included."""
-    tickers, years, period = QUESTION_FILTERS[qid]
+    tickers, years, period = (QUESTION_FILTERS | DEV_QUESTION_FILTERS)[qid]
     return tuple(Filters.of(ticker=t, fiscal_year=y, fiscal_period=period) for t in tickers for y in years or (None,))
 
 
@@ -291,17 +299,23 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--index-dir", type=Path, default=INDEX_DIR)
     ap.add_argument("--chunks-dir", type=Path, default=CHUNKS_DIR)
     ap.add_argument("--out-dir", type=Path, default=RESULTS_DIR)
+    ap.add_argument("--dev", action="store_true", help="build only the development-set pack (context_pack_dev.jsonl)")
     args = ap.parse_args(argv)
 
-    rep = validate_file(args.gold)
+    questions_file = DEV_FILE if args.dev else args.gold
+    if args.dev:
+        rep, tests, errors = validate_file(DEV_FILE, model=DevItem), [], []
+    else:
+        rep = validate_file(args.gold)
+        tests, errors = validate_set("refusal", args.refusal)   # the rules validate_test_sets.py (CI) applies
     if not rep.ok:
-        print(f"ERROR: gold set {args.gold} is invalid; run eval/validate_gold.py first", file=sys.stderr)
+        print(f"ERROR: question set {questions_file} is invalid; run its validator first", file=sys.stderr)
         return 1
-    tests, errors = validate_set("refusal", args.refusal)       # the rules validate_test_sets.py (CI) applies
     if errors:
         print(f"ERROR: refusal tests {args.refusal} are invalid; run eval/validate_test_sets.py", file=sys.stderr)
         return 1
-    missing = sorted(({i.id for i in rep.items if not i.companies} | {t.id for t in tests}) - set(QUESTION_FILTERS))
+    annotated = set(QUESTION_FILTERS) | set(DEV_QUESTION_FILTERS)
+    missing = sorted(({i.id for i in rep.items if not i.companies} | {t.id for t in tests}) - annotated)
     if missing:
         print(f"ERROR: no QUESTION_FILTERS entry for {', '.join(missing)}", file=sys.stderr)
         return 1
@@ -317,8 +331,9 @@ def main(argv: list[str] | None = None) -> int:
         tokenizer = f"{QWEN_TOKENIZER}@{QWEN_TOKENIZER_REVISION}"
         chunks_file, bm25_file = chunks_path(VARIANT, args.chunks_dir), index_path(VARIANT, args.index_dir)
         packs = []                                      # both built first: a failure writes neither
-        for questions, source, name in ((gold_questions(rep.items), args.gold, GOLD_PACK),
-                                        (refusal_questions(tests), args.refusal, REFUSAL_PACK)):
+        sets = [(gold_questions(rep.items), questions_file, DEV_PACK)] if args.dev else [
+            (gold_questions(rep.items), questions_file, GOLD_PACK), (refusal_questions(tests), args.refusal, REFUSAL_PACK)]
+        for questions, source, name in sets:
             records = [build_record(q, retriever, count_tokens, scope) for q in questions]
             packs.append((records, args.out_dir / name,
                           meta(records, source, chunks_file, bm25_file, embedder.model_id, tokenizer)))

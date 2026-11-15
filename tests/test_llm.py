@@ -808,7 +808,8 @@ def test_a_replayed_reply_reports_the_seconds_of_the_live_one(tmp_path):
     assert old.cached and old.seconds >= 0 and len(llm.client.requests) == 1
 
 
-@pytest.mark.parametrize("change", [{"sample": 1}, {"temperature": 0.7}, {"model": "other-model"}])
+@pytest.mark.parametrize("change", [{"sample": 1}, {"temperature": 0.7}, {"model": "other-model"}, {"seed": 3},
+                                    {"response_format": {"type": "json_object"}}])
 def test_a_different_request_is_not_a_cache_hit(tmp_path, change):
     llm = client(reply("a"), reply("b"), LLM_CACHE_DIR=str(tmp_path))
     run(llm.complete(USER))
@@ -1329,3 +1330,25 @@ def test_smoke_embed_tls_line_matches_the_client():
         assert smoke.embed_tls_line(s, embed_url) == line
         llm = LLMClient(s, chat_client=FakeChat(), embed_client=FakeEmbeddings())
         assert (llm._embed_ca is not None) == ("cacert.pem" in line)
+
+
+def test_seed_and_response_format_are_sent_only_when_given(tmp_path):
+    llm = client(reply("a"), reply("b"), LLM_CACHE_DIR=str(tmp_path))
+    run(llm.complete(USER))
+    run(llm.complete(USER, seed=2, response_format={"type": "json_object"}))
+    plain, guided = llm.client.requests
+    assert "seed" not in plain and "response_format" not in plain
+    assert (guided["seed"], guided["response_format"]) == (2, {"type": "json_object"})
+
+
+def test_requests_without_seed_or_response_format_keep_their_cache_keys(tmp_path):
+    """Entries written before W1-09 must still be found: the new fields join the key only when set."""
+    import hashlib
+
+    from core.llm import CACHE_VERSION, _origin
+    llm = client(reply("a"), LLM_CACHE_DIR=str(tmp_path))
+    request = {"model": "m", "messages": USER, "temperature": 0.0, "max_tokens": 1024}
+    key = {"v": CACHE_VERSION, "server": list(_origin(llm.settings.LLM_BASE_URL)), "model": "m", "messages": USER,
+           "temperature": 0.0, "max_tokens": 1024, "thinking": llm.settings.LLM_ENABLE_THINKING, "sample": 0}
+    digest = hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+    assert llm._cache_path(request, 0).name == f"{digest}.json"

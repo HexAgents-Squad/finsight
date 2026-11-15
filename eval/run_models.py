@@ -1,4 +1,6 @@
-"""W1-13: run one model over the context pack with the frozen zero-shot prompt B0 (docs/week1_plan.txt §2.4-2.5, §3).
+"""W1-13: run one model over the context pack with the frozen zero-shot prompt B0 (docs/week1_plan.txt §2.4-2.5, §3);
+W1-09: the same with a prompting strategy (S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition;
+eval/strategies.py).
 
 Usage (the endpoint from .env; one run at a time on the team key):
     python eval/run_models.py --run M1 --label qwen3-8b --context rag
@@ -7,6 +9,8 @@ Usage (the endpoint from .env; one run at a time on the team key):
         --base-url http://localhost:11434/v1 --model llama3.2-3b-8k --api-key ollama \\
         --timeout 300 --context-window 8192                                  # local, in parallel
     python eval/run_models.py --run M1 --label qwen3-8b --context rag --ids A01 RF01 --out-dir /tmp/check
+    python eval/run_models.py --run S2 --label qwen3-8b --context rag                # a W1-09 strategy (rag only)
+    python eval/run_models.py --run S1 --label qwen3-8b --context rag --questions dev # tuning: development set
 
 Every model sees exactly the same inputs: the question, the earlier turns of a follow-up with their gold answers,
 and (rag) the context pack's passages rendered by eval.context_pack.render_passages, under the frozen prompt
@@ -20,7 +24,10 @@ replaces a good runs file.
 
 Output: eval/results/model_runs/<run_id>.jsonl (one RunRecord per question, gold order then refusal tests) and
 <run_id>.meta.json (RunMeta), written when the run completes. run_id = <run>_<label>_<context>_think-<on|off>_
-<prompt version>. Exit codes: 0 = written, 1 = invalid input, 2 = settings or packs missing.
+<prompt version>: M<n> runs use B0 (b0-v1), S1-S3 runs their strategy's prompts (s1-v1, ...). With --questions
+dev the run answers the 15 development questions (eval/results/context_pack_dev.jsonl, built by
+`python eval/context_pack.py --dev`) and is written to eval/results/dev/model_runs/, never next to the gold runs.
+Exit codes: 0 = written, 1 = invalid input, 2 = settings or packs missing.
 """
 from __future__ import annotations
 
@@ -42,7 +49,15 @@ from pydantic import ValidationError  # noqa: E402
 from core.exceptions import FinSightError  # noqa: E402
 from core.llm import LLMClient, TokenCounter, count_prompt_tokens, extract_json  # noqa: E402
 from core.settings import ENV_FILE, HTTPS, REPO_ROOT, Settings  # noqa: E402
-from eval.context_pack import GOLD_PACK, PACK_VERSION, REFUSAL_PACK, Passage, render_passages, sha256  # noqa: E402
+from eval.context_pack import (  # noqa: E402
+    DEV_PACK,
+    GOLD_PACK,
+    PACK_VERSION,
+    REFUSAL_PACK,
+    Passage,
+    render_passages,
+    sha256,
+)
 from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 from eval.runs_schema import RUN_ID_PATTERN, B0Answer, RunMeta, RunRecord  # noqa: E402
 
@@ -50,6 +65,8 @@ PROMPT_VERSION = "b0-v1"
 PROMPTS_DIR = REPO_ROOT / "agent" / "prompts"
 CONTEXTS = ("rag", "closed")
 RUNS_DIR = RESULTS_DIR / "model_runs"
+DEV_RUNS_DIR = RESULTS_DIR / "dev" / "model_runs"
+QUESTION_SETS = {"gold": (GOLD_PACK, REFUSAL_PACK), "dev": (DEV_PACK,)}     # the packs each set reads
 JSON_RETRIES = 1                                    # the plan's "one retry on invalid JSON"
 TEMPERATURE = 0.0
 NO_PASSAGES = "(none)"
@@ -174,16 +191,16 @@ async def answer(llm: LLMClient, run_id: str, record: dict, messages: list[dict[
                      latency_s=round(seconds, 3), cached=cached and error is None, error=error)
 
 
-def load_records(pack_dir: Path) -> list[dict]:
-    """Gold questions then refusal tests, in pack order."""
+def load_records(pack_dir: Path, questions: str = "gold") -> list[dict]:
+    """Gold questions then refusal tests (or the development questions), in pack order."""
     records = []
-    for name in (GOLD_PACK, REFUSAL_PACK):
+    for name in QUESTION_SETS[questions]:
         records += [json.loads(line) for line in (pack_dir / name).read_text(encoding="utf-8").splitlines()]
     return records
 
 
-def run_id_for(run: str, label: str, context: str, thinking: bool) -> str:
-    run_id = f"{run}_{label}_{context}_think-{'on' if thinking else 'off'}_{PROMPT_VERSION}"
+def run_id_for(run: str, label: str, context: str, thinking: bool, version: str = PROMPT_VERSION) -> str:
+    run_id = f"{run}_{label}_{context}_think-{'on' if thinking else 'off'}_{version}"
     if not re.fullmatch(RUN_ID_PATTERN, run_id):
         raise ValueError(f"run id {run_id!r} does not match {RUN_ID_PATTERN} (lower-case label, run like M1)")
     return run_id
@@ -198,27 +215,40 @@ def git_commit() -> str | None:
         return None
 
 
-def framing_sha256() -> str:
-    """The fixed text around the prompt (question and passage framing, retry instruction): part of what every
-    model is sent, so recorded like the prompt itself."""
-    framing = "\n".join(["Question: ", "Passages:\n", NO_PASSAGES, RETRY_INSTRUCTION])
+def framing_sha256(extra: tuple[str, ...] = ()) -> str:
+    """The fixed text around the prompt (question and passage framing, retry instruction, and a strategy's own,
+    e.g. S3's research heading): part of what every model is sent, so recorded like the prompt itself."""
+    framing = "\n".join(["Question: ", "Passages:\n", NO_PASSAGES, RETRY_INSTRUCTION, *extra])
     return hashlib.sha256(framing.encode("utf-8")).hexdigest()
 
 
 def run_meta(run_id: str, settings: Settings, context: str, pack_dir: Path, system: str,
              truncation_check: bool = False, started: str | None = None,
-             context_window: int | None = None) -> RunMeta:
-    return RunMeta(run_id=run_id, model=settings.LLM_MODEL,
-                   endpoint="hosted" if settings.LLM_BASE_URL.lower().startswith(HTTPS) else "local",
-                   context=context, thinking=bool(settings.LLM_ENABLE_THINKING), temperature=TEMPERATURE,
-                   max_tokens=settings.LLM_MAX_COMPLETION_TOKENS, prompt_version=PROMPT_VERSION,
-                   context_pack=f"{pack_dir.name}/{GOLD_PACK} + {REFUSAL_PACK} ({PACK_VERSION})",
-                   context_pack_sha256={n: sha256(pack_dir / n) for n in (GOLD_PACK, REFUSAL_PACK)},
-                   prompt_sha256=hashlib.sha256(system.encode("utf-8")).hexdigest(),
-                   framing_sha256=framing_sha256(), json_retries=JSON_RETRIES, repair=REPAIR_VERSION,
-                   truncation_check=truncation_check, context_window=context_window,
-                   git_commit=git_commit(), started=started,
-                   finished=datetime.now(UTC).isoformat(timespec="seconds"))
+             context_window: int | None = None, strategy: str = "b0", questions: str = "gold") -> RunMeta:
+    packs = QUESTION_SETS[questions]
+    common = dict(run_id=run_id, model=settings.LLM_MODEL,
+                  endpoint="hosted" if settings.LLM_BASE_URL.lower().startswith(HTTPS) else "local",
+                  context=context, thinking=bool(settings.LLM_ENABLE_THINKING),
+                  max_tokens=settings.LLM_MAX_COMPLETION_TOKENS,
+                  context_pack=f"{pack_dir.name}/{' + '.join(packs)} ({PACK_VERSION})",
+                  context_pack_sha256={n: sha256(pack_dir / n) for n in packs},
+                  json_retries=JSON_RETRIES, truncation_check=truncation_check, context_window=context_window,
+                  git_commit=git_commit(), started=started, finished=datetime.now(UTC).isoformat(timespec="seconds"))
+    if strategy == "b0":
+        return RunMeta(**common, temperature=TEMPERATURE, prompt_version=PROMPT_VERSION,
+                       prompt_sha256=hashlib.sha256(system.encode("utf-8")).hexdigest(),
+                       framing_sha256=framing_sha256(), repair=REPAIR_VERSION)
+    from eval import strategies as st
+    extra: dict[str, Any] = {"strategy": strategy, "response_format": "json_schema (strict guided decoding)",
+                             "repair": None}
+    if strategy == "s1":
+        extra["examples"] = st.example_ids()
+    if strategy == "s2":
+        extra |= {"samples": st.SAMPLES, "seeds": list(range(st.SAMPLES)), "vote": "majority of valid samples on "
+                  "refused, rule, company and value (3 significant digits); ties to the first decision seen"}
+    return RunMeta(**common, temperature=st.SAMPLE_TEMPERATURE if strategy == "s2" else TEMPERATURE,
+                   prompt_version=st.PROMPT_VERSIONS[strategy], prompt_sha256=st.prompt_sha256(strategy),
+                   framing_sha256=framing_sha256((st.RESEARCH_HEADING,) if strategy == "s3" else ()), **extra)
 
 
 def write_run(records: list[RunRecord], meta: RunMeta, out_dir: Path) -> Path:
@@ -226,8 +256,11 @@ def write_run(records: list[RunRecord], meta: RunMeta, out_dir: Path) -> Path:
     with the old records (the scorer then refuses a mismatch), never half a file."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{meta.run_id}.jsonl"
+    # a B0 record leaves out the strategy fields it never has, so B0 runs files keep their exact bytes
+    lines = "".join(r.model_dump_json(exclude={k for k in ("steps", "agreement") if getattr(r, k) is None}) + "\n"
+                    for r in records)
     for target, text in ((out_dir / f"{meta.run_id}.meta.json", meta.model_dump_json(indent=2) + "\n"),
-                         (path, "".join(r.model_dump_json() + "\n" for r in records))):
+                         (path, lines)):
         tmp = target.with_name(target.name + ".part")
         try:
             tmp.write_text(text, encoding="utf-8", newline="\n")
@@ -269,23 +302,33 @@ def qwen_counter() -> TokenCounter | None:
 
 async def run(llm: LLMClient, run_id: str, records: list[dict], context: str, system: str,
               count: TokenCounter | None = None, progress: bool = True,
-              windows: tuple[int, ...] = COMMON_WINDOWS) -> list[RunRecord]:
+              windows: tuple[int, ...] = COMMON_WINDOWS, strategy: str = "b0") -> list[RunRecord]:
+    """Every record with B0 (the truncation check on) or with a W1-09 strategy (eval/strategies.py; hosted
+    endpoint only, so no truncation check)."""
+    runner = None
+    if strategy != "b0":
+        from eval.strategies import RUNNERS
+        runner = RUNNERS[strategy]
     out = []
     for n, record in enumerate(records, start=1):
-        messages = build_messages(record, context, system)
-        expected = count_prompt_tokens(messages, count) if count else None
-        result = await answer(llm, run_id, record, messages, expected, windows)
+        if runner is None:
+            messages = build_messages(record, context, system)
+            expected = count_prompt_tokens(messages, count) if count else None
+            result = await answer(llm, run_id, record, messages, expected, windows)
+        else:
+            result = await runner(llm, run_id, record)
         out.append(result)
         if progress:
             status = result.error or ("ok" if result.json_valid else "invalid JSON")
+            votes = f", agreement {result.agreement}" if result.agreement else ""
             print(f"[{n}/{len(records)}] {record['id']}: {status} ({result.latency_s:.1f} s"
-                  f"{', cached' if result.cached else ''})", flush=True)
+                  f"{', cached' if result.cached else ''}{votes})", flush=True)
     return out
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run", required=True, help="M1, M2, ...")
+    ap.add_argument("--run", required=True, help="M1, M2, ... (B0), or S1, S2, S3 (a W1-09 strategy)")
     ap.add_argument("--label", required=True, help="short lower-case model name for the run id, e.g. qwen3-8b")
     ap.add_argument("--context", required=True, choices=CONTEXTS)
     ap.add_argument("--thinking", choices=("on", "off"), default="off")
@@ -298,24 +341,36 @@ def main(argv: list[str] | None = None) -> int:
                          "(8192 only for the llama3.2-3b-8k Modelfile). The truncation check then looks for a "
                          "cut at that size instead of 2,048 / 4,096, so a value above the real window hides cuts")
     ap.add_argument("--ids", nargs="+", help="only these question ids (a check run; use --out-dir)")
+    ap.add_argument("--questions", choices=tuple(QUESTION_SETS), default="gold",
+                    help="gold = gold set + refusal tests; dev = the 15 development questions (prompt tuning)")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
-    ap.add_argument("--out-dir", type=Path, default=RUNS_DIR)
+    ap.add_argument("--out-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_RUNS_DIR})")
     args = ap.parse_args(argv)
     try:
-        run_id = run_id_for(args.run, args.label, args.context, args.thinking == "on")
-        system = prompt_file(args.context).read_text(encoding="utf-8")
-        records = load_records(args.pack_dir)
+        from eval.strategies import PROMPT_VERSIONS, strategy_for, system_prompt
+        strategy = strategy_for(args.run)
+        if strategy != "b0" and args.context != "rag":
+            raise ValueError(f"{args.run} is a RAG strategy: use --context rag")
+        out_dir = args.out_dir or (DEV_RUNS_DIR if args.questions == "dev" else RUNS_DIR)
+        if args.questions == "dev" and out_dir.resolve() == RUNS_DIR.resolve():
+            raise ValueError("a development-set run must not be written next to the gold runs")
+        version = PROMPT_VERSION if strategy == "b0" else PROMPT_VERSIONS[strategy]
+        run_id = run_id_for(args.run, args.label, args.context, args.thinking == "on", version)
+        system = prompt_file(args.context).read_text(encoding="utf-8") if strategy == "b0" else \
+            system_prompt(strategy)
+        records = load_records(args.pack_dir, args.questions)
         if args.ids:
             unknown = set(args.ids) - {r["id"] for r in records}
             if unknown:
                 raise ValueError(f"unknown question ids {sorted(unknown)}")
             records = [r for r in records if r["id"] in set(args.ids)]
-            if args.out_dir.resolve() == RUNS_DIR.resolve():
+            if out_dir.resolve() in (RUNS_DIR.resolve(), DEV_RUNS_DIR.resolve()):
                 raise ValueError("a run limited by --ids must not overwrite the full runs file: pass --out-dir")
         if args.context_window is not None and args.context_window <= 0:
             raise ValueError("--context-window must be a positive number of tokens")
         settings = settings_for(args)
-        meta = run_meta(run_id, settings, args.context, args.pack_dir, system)
+        meta = run_meta(run_id, settings, args.context, args.pack_dir, system, strategy=strategy,
+                        questions=args.questions)
     except ValidationError as err:
         print(f"ERROR: settings: {err}", file=sys.stderr)
         return 2
@@ -327,12 +382,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     started = datetime.now(UTC).isoformat(timespec="seconds")
-    count = qwen_counter()
+    count = qwen_counter() if strategy == "b0" else None
     windows = (args.context_window,) if args.context_window else COMMON_WINDOWS
 
     async def go() -> list[RunRecord]:
         async with LLMClient(settings) as llm:
-            results = await run(llm, run_id, records, args.context, system, count, windows=windows)
+            results = await run(llm, run_id, records, args.context, system, count, windows=windows,
+                                strategy=strategy)
             u = llm.usage
             print(f"{run_id}: {len(results)} answers, {sum(r.json_valid for r in results)} valid, "
                   f"{sum(r.error is not None for r in results)} errors; {u.calls} requests, {u.cache_hits} cached, "
@@ -348,8 +404,8 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: every answer failed; nothing written (the previous runs file, if any, is kept)", file=sys.stderr)
         return 2
     meta = run_meta(run_id, settings, args.context, args.pack_dir, system, count is not None, started,
-                    args.context_window)
-    print(f"written: {write_run(results, meta, args.out_dir)}")
+                    args.context_window, strategy, args.questions)
+    print(f"written: {write_run(results, meta, out_dir)}")
     return 0
 
 
