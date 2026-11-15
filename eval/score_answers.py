@@ -752,7 +752,8 @@ def strategy_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     rows: dict[str, list[str]] = {"model calls per question (mean, JSON retries included)": [],
                                   "tokens per question (mean, prompt + completion)": [],
                                   "seconds per question p50 / p95": [],
-                                  "S2: all valid samples agreed": [], "S2: a bare majority decided (3/5 or less)": []}
+                                  "S2: all valid samples agreed": [], "S2: a bare majority decided (3/5 or less)": [],
+                                  "LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide)": []}
     for _, sc in runs:
         rows["model calls per question (mean, JSON retries included)"].append(
             f"{statistics.fmean(s.get('calls', 1 + s['retries']) for s in sc):.1f}")
@@ -766,7 +767,31 @@ def strategy_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
             f"{sum(k == n and n > 0 for k, n in votes)}/{len(votes)}" if votes else "–")
         rows["S2: a bare majority decided (3/5 or less)"].append(
             f"{sum(0 < n and k / n <= 0.6 for k, n in votes)}/{len(votes)}" if votes else "–")
+        judged = Counter(s.get("judge_score") for s in sc if s["answer_type"] == "summary")
+        rows["LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide)"].append(
+            f"{judged[2]} / {judged[1]} / {judged[0]}" if sum(judged[g] for g in (0, 1, 2)) else "–")
     out += [f"| {k} | " + " | ".join(v) + " |" for k, v in rows.items()]
+    return "\n".join(out) + "\n" + paired_table(runs)
+
+
+def paired_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """Each later run against the first (B0) on the same questions: right only with it / right only with B0,
+    among the questions both decided, and the two-sided sign test on those (eval/retrieval_eval.sign_test)."""
+    from eval.retrieval_eval import sign_test
+    if len(runs) < 2:
+        return ""
+    (ref_meta, ref), others = runs[0], runs[1:]
+    out = table(f"### 10. Paired with {ref_meta.run_id}: questions right only with the strategy / only with it, "
+                f"two-sided sign test", "Answers", [m.run_id for m, _ in others])
+    by_id = {s["id"]: s for s in ref}
+    for label, types in {**REPORT_TYPES, "All decided answers": ANSWER_TYPES}.items():
+        cells = []
+        for _, sc in others:
+            pairs = [(s["correct"], by_id[s["id"]]["correct"]) for s in sc if s["answer_type"] in types
+                     and s["correct"] is not None and by_id[s["id"]]["correct"] is not None]
+            win, loss = sum(a and not b for a, b in pairs), sum(b and not a for a, b in pairs)
+            cells.append(f"{win} / {loss} (p = {sign_test(win, loss):.2f}, n = {len(pairs)})" if pairs else "–")
+        out.append(f"| {label} | " + " | ".join(cells) + " |")
     return "\n".join(out) + "\n"
 
 

@@ -801,10 +801,11 @@ def test_the_model_comparison_keeps_the_model_runs_and_the_baselines_compare_b0_
 
 def test_the_strategy_table_counts_calls_tokens_and_votes():
     rows = [{"calls": 5, "retries": 0, "prompt_tokens": 900, "completion_tokens": 100, "latency_s": 5.0,
-             "error": False, "agreement": "5/5"},
+             "error": False, "agreement": "5/5", "answer_type": "short_numeric", "id": "A01", "correct": True},
             {"calls": 6, "retries": 1, "prompt_tokens": 1900, "completion_tokens": 100, "latency_s": 7.0,
-             "error": False, "agreement": "3/5"}]
-    b0 = [{"retries": 0, "prompt_tokens": 950, "completion_tokens": 50, "latency_s": 1.0, "error": False}]
+             "error": False, "agreement": "3/5", "answer_type": "short_numeric", "id": "A02", "correct": False}]
+    b0 = [{"retries": 0, "prompt_tokens": 950, "completion_tokens": 50, "latency_s": 1.0, "error": False,
+           "answer_type": "short_numeric", "id": "A01", "correct": True}]
     text = sa.strategy_table([(meta(S2), rows), (meta(), b0)])
     assert "| model calls per question (mean, JSON retries included) | 5.5 | 1.0 |" in text
     assert "| tokens per question (mean, prompt + completion) | 1500 | 1000 |" in text
@@ -820,3 +821,22 @@ def test_the_development_set_is_scored_on_its_own():
     for qid, ticker in sa.DEV_D_WINNERS.items():           # the company the gold answer names last, as for gold
         last = re.split(r"(?<=\.)\s+", dev[qid].gold_answer.strip())[-1]
         assert sa.companies_named(last, MATCHERS) == {ticker}, qid
+
+
+def test_the_paired_table_counts_questions_only_one_run_got_right():
+    def s(qid, correct, answer_type="short_numeric"):
+        return {"id": qid, "correct": correct, "answer_type": answer_type}
+    b0 = [s("A01", True), s("A02", False), s("A03", False), s("G01", None, "refusal")]
+    strategy = [s("A01", False), s("A02", True), s("A03", True), s("G01", True, "refusal")]
+    text = sa.paired_table([(meta(), b0), (meta(S2), strategy)])
+    assert f"### 10. Paired with {RAG}" in text
+    assert "| Short: numeric | 2 / 1 (p = 1.00, n = 3) |" in text
+    assert "| Refusal & not reported | – |" in text                    # B0 left G01 undecided: not paired
+    assert sa.paired_table([(meta(), b0)]) == ""
+
+
+def test_the_judge_row_shows_the_grade_counts_of_summaries():
+    rows = [{"answer_type": "summary", "judge_score": g, "retries": 0, "prompt_tokens": 1, "completion_tokens": 1,
+             "latency_s": 1.0, "error": False} for g in (2, 2, 1, None)]
+    assert "| LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide) | 2 / 1 / 0 |" in \
+        sa.strategy_table([(meta(S2), rows)])

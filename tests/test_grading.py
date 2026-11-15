@@ -80,7 +80,8 @@ def test_copies_are_the_untouched_sheet_with_assignments(sheet, tmp_path):
     for name in ("Chandra", "Amresh"):
         assert (out / f"grading_sheet_{name}.csv").read_bytes() == sheet.read_bytes()
     text = (out / "assignments.txt").read_text(encoding="utf-8")
-    assert text == "\n".join(lines) and "Grader 1 = Chandra" in text and "column grader_2 on all 32" in text
+    n = len(grade_numbers(sheet))                        # every grade row (32 for M1-M3, more with W1-09's runs)
+    assert text == "\n".join(lines) and "Grader 1 = Chandra" in text and f"column grader_2 on all {n}" in text
     split, labels = gr.split_row(rows_of(sheet)), label_rows(sheet)
     mine = [n for n in labels if n < split], [n for n in labels if n >= split]
     assert f"spreadsheet rows {mine[0][0]}-{mine[0][-1]}" in text
@@ -122,7 +123,8 @@ def test_merge_sets_final_where_grades_agree_and_lists_the_rest(sheet):
     g2 = fill(sheet, 2, lambda n: "1" if n == numbers[1] else "2", notes={numbers[0]: "fine"})
     merged, rep = gr.merge(sheet, g1, g2)
     by_row = dict(enumerate(merged, start=2))
-    assert (rep["pairs"], rep["agree"], rep["missing"], rep["warnings"]) == (32, 31, [], [])
+    n = len(numbers)
+    assert (rep["pairs"], rep["agree"], rep["missing"], rep["warnings"]) == (n, n - 1, [], [])
     assert by_row[numbers[0]]["final"] == "2" and by_row[numbers[1]]["final"] == ""
     assert rep["disagree"][0].startswith(f"row {numbers[1]}: grader 1 = 2, grader 2 = 1")
     assert by_row[numbers[0]]["note"] == "G1: overturn? the figure is right | G2: fine"
@@ -239,7 +241,8 @@ def test_cli_merge_checks_first_and_writes_only_when_asked(sheet, capsys):
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2)]) == 0
     assert sheet.read_bytes() == before and "check only" in capsys.readouterr().out
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2), "--write"]) == 0
-    assert "32 graded by both, 32 agree" in capsys.readouterr().out
+    n = len(grade_numbers(sheet))
+    assert f"{n} graded by both, {n} agree" in capsys.readouterr().out
     assert all(r["final"] == "2" for r in rows_of(sheet) if r["task"] == sa.GRADE)
     assert not list(sheet.parent.glob("*.part"))
     assert gr.main(["merge", "--sheet", str(sheet), "--g1", str(g1), "--g2", str(g2)]) == 1

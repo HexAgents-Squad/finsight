@@ -10,10 +10,11 @@
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
-| `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json` |
+| `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json`; W1-09: `--run S1/S2/S3` runs a prompting strategy instead |
+| `strategies.py` | W1-09: the prompting strategies S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition (prompts in `agent/prompts/s*`, frozen) |
 | `judge_summaries.py` | W1-13: LLM-as-judge grades (0/1/2) for the summary answers → `results/grading/judge_<run_id>.jsonl` |
 | `runs_schema.py` | W1-08: the runs-file format (B0 answer, run record, run meta) shared by the runner (W1-13) and the scorer |
-| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (docs/week1_plan.txt §2.6) |
+| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (M runs) and `results/prompting_baselines.md` (B0 = M1 next to S1-S3, W1-09) (docs/week1_plan.txt §2.6) |
 | `grading.py` | W1-14: tools for the human grading (guide: `GRADING.md`): a blind copy of the sheet per grader, a passages handout, the merge of both graders' copies, and `results/failure_examples.md` |
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
@@ -91,6 +92,21 @@ there replaces the suggested one. Re-running never erases what was entered, and 
 answer (it becomes a "stale" row). Graders work from the sheet only; `grading_key.csv` says which model wrote
 each answer. Save from Excel as "CSV UTF-8" so names with accents survive.
 The grading workflow (copies, handout, merge, examples) and the graders' instructions are in [`GRADING.md`](GRADING.md).
+
+## Prompting baselines S1/S2/S3 (W1-09)
+```bash
+python eval/context_pack.py --dev                                             # the development-set pack (once)
+python eval/run_models.py --run S1 --label qwen3-8b --context rag --questions dev    # tuning: dev set only
+python eval/score_answers.py --questions dev                                  # -> results/dev/dev_baselines.md
+python eval/run_models.py --run S1 --label qwen3-8b --context rag             # gold runs, after the freeze
+python eval/run_models.py --run S3 --label qwen3-8b --context rag
+python eval/run_models.py --run S2 --label qwen3-8b --context rag             # 5 samples per question (510 calls)
+python eval/judge_summaries.py && python eval/score_answers.py                # -> results/prompting_baselines.md
+```
+The strategies keep B0's rules word for word and add one thing each (`eval/strategies.py`); their prompts were
+tuned on the 15 development questions only and are pinned by sha256 (`tests/test_strategies.py`), so a change
+needs a new version. S1's four examples are development questions, so judge S1 on the dev set without them.
+A development-set run is never written next to the gold runs (`results/dev/model_runs/`).
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
