@@ -121,3 +121,19 @@ def test_a_follow_up_naming_only_a_year_asks_about_that_fiscal_year():
     read = from_turns(["What was Apple's revenue in Q3 2025?", "What about fiscal 2024?"])
     assert (read.tickers, read.years, read.periods) == (("AAPL",), (2024,), ())
     assert read.filters(period=True) == [Filters.of(ticker="AAPL", fiscal_year=2024, fiscal_period="FY")]
+
+
+def test_a_year_only_turn_in_the_middle_ends_an_earlier_quarter():
+    read = from_turns(["What was Apple's revenue in Q2 fiscal 2025?", "And in fiscal 2025 as a whole?",
+                       "And Microsoft's?"])
+    assert (read.tickers, read.years, read.periods) == (("MSFT",), (2025,), ())
+    assert from_turns(["Apple's revenue in Q2 fiscal 2025?", "And Microsoft's?"]).periods == ("Q2",)
+
+
+@pytest.mark.parametrize("text, found", [
+    ("Did Apple chase growth in 2024?", ("AAPL",)), ("What meta trends did Pfizer note?", ("PFE",)),
+    ("What did Chase report?", ("JPM",)), ("META's revenue", ("META",)),
+    ("what did bank of america report?", ("BAC",)),               # a name of several words: any case
+])
+def test_a_one_word_name_in_lower_case_is_an_ordinary_word(text, found):
+    assert companies(text) == found

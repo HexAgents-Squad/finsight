@@ -50,7 +50,7 @@ from retrieval.chunking import VARIANTS  # noqa: E402
 from retrieval.common import NO_FILTERS, Filters, chunks_path, read_chunks  # noqa: E402
 from retrieval.dense import Embedder, cached, embedder_from_settings  # noqa: E402
 from retrieval.entities import Entities, from_turns  # noqa: E402
-from retrieval.hybrid import HybridIndex, Retriever, interleave  # noqa: E402,F401  (interleave: the context pack)
+from retrieval.hybrid import HybridIndex, Retriever, interleave  # noqa: E402
 from retrieval.statement import StatementFirstIndex  # noqa: E402
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -105,11 +105,6 @@ def settings_for(variant: str, retriever: str) -> tuple[Setting, ...]:
     if retriever == RERANKED:
         return GRID[1:] + TRIALS
     return GRID + (TRIALS if variant == TRIAL_VARIANT and retriever == "hybrid" else ())
-
-
-def item_filters(item: GoldItem) -> list[Filters]:
-    """One filter per (company, fiscal year) of the gold item, in the order they are listed."""
-    return [Filters.of(ticker=t, fiscal_year=y) for t in item.companies for y in item.fiscal_years]
 
 
 def turns(item: GoldItem, by_id: dict[str, GoldItem]) -> list[str]:
@@ -244,6 +239,11 @@ def _category_table(best: dict, label: str) -> list[str]:
     return out + [_metric_row([cat, str(by_cat[cat]["n"])], by_cat[cat]) for cat in CATEGORY_ORDER if cat in by_cat]
 
 
+def _p(p: float) -> str:
+    """A sign-test p as the table prints it: '<0.001' rather than a rounded '0.000'."""
+    return "<0.001" if p < 0.001 else f"{p:.3f}"
+
+
 def _pairs_table(rows: list[dict], items: list[GoldItem]) -> list[str]:
     """The PAIRS whose two runs are in `rows` (with their ranked keys)."""
     by_run = {(r["retriever"], r["filters"]): r for r in rows if r["variant"] == TRIAL_VARIANT and "keys" in r}
@@ -259,10 +259,10 @@ def _pairs_table(rows: list[dict], items: list[GoldItem]) -> list[str]:
         ra, rb = by_run[a], by_run[b]
         c = paired_recall(items, ra["keys"], rb["keys"])
         cells = [f"{a[0]}, {a[1]}", f"{b[0]}, {b[1]}", f"{c['better']} / {c['worse']} / {c['same']}",
-                 f"{c['sign_test_p']:.3f}"]
+                 _p(c["sign_test_p"])]
         if "figures" in ra and "figures" in rb:
             win, loss = len(rb["figures"] - ra["figures"]), len(ra["figures"] - rb["figures"])
-            cells += [f"{win} / {loss}", f"{sign_test(win, loss):.3f}"]
+            cells += [f"{win} / {loss}", _p(sign_test(win, loss))]
         else:
             cells += ["-", "-"]
         out.append("| " + " | ".join(cells) + " |")
@@ -344,13 +344,16 @@ def main(argv: list[str] | None = None) -> int:
         # one embedder (the model is loaded once) for every variant's dense index, with the queries cached
         if {"dense", "hybrid"} & set(args.retrievers):
             embedder = cached(embedder_from_settings())
-        reranker = load_reranker() if args.rerank and "hybrid" in args.retrievers else None
+        try:
+            reranker = load_reranker() if args.rerank and "hybrid" in args.retrievers else None
+        except OSError as err:                     # the model is not downloaded and the Hub is not reachable
+            raise FileNotFoundError(f"the reranker model is not available: {err}") from err
         rows = evaluate(args.variants, args.retrievers, rep.items, embedder, args.index_dir, args.chunks_dir,
                         args.out_dir, reranker)
     except ValidationError as err:
         print(f"ERROR: settings are incomplete; copy .env.example to .env and fill it in.\n{err}", file=sys.stderr)
         return 2
-    except (FileNotFoundError, ValueError, OSError, ImportError) as err:
+    except (FileNotFoundError, ValueError, ImportError) as err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 2
     finally:

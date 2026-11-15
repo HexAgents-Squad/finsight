@@ -317,7 +317,8 @@ than 70% of the prompt's Qwen tokens, or reports a window size (--context-window
 the prompt.
 Budget: M1 and M3 102 calls each, judge ~40, all through the cache, one at a time; M2 runs locally in
 parallel (no key; ~1–2 h on a CPU).
-Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
+Caveats the report states: oracle filters (W1-05 found question-derived filters equal to them on the gold set,
+ADR-017, but real questions are phrased more freely),
 small n per cell, a single frozen prompt, and these properties of B0 found in review after the runs (the prompt
 stays frozen; changing it after seeing results would be tuning on gold):
 - R2's wording ("a question about what will happen") also covers RF10 ("which bank stock will rise"), which the
@@ -444,7 +445,7 @@ report.
 | Ollama truncating prompts                  | 8k-context model; one long-prompt check                      |
 | Small n (12 summary questions)             | counts + intervals, the 22 refusal tests, concrete examples  |
 | Qwen judging Qwen (self-preference)        | human grades are primary; judge agreement reported           |
-| Oracle filters overstate accuracy          | stated in the report; question-derived filters in W1-05      |
+| Oracle filters overstate accuracy          | stated in the report; W1-05: question-derived = oracle (gold)|
 | Prompt tuned on gold (leakage)             | B0 frozen before runs; S1–S3 tuned on the dev set (W1-06)    |
 | 8,192-token limit                          | passages capped at ~4,000 tokens; over-budget prompts refused|
 +--------------------------------------------+--------------------------------------------------------------+

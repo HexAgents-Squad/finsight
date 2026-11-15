@@ -64,7 +64,8 @@ retrieval default ADR-017 (W1-05).
   For each, the questions better and worse in b than in a, with a two-sided sign test on those that differ.
 - `s/query` is wall-clock per question on a laptop CPU and moves by up to ~50% between runs with machine load.
   Query embeddings are cached for the run, so only the first search of a question pays the endpoint request
-  (dense rows that come later in the run show ~0.00); a statement trial searches twice per filter, and the
+  (the unfiltered dense rows show ~0.00, the filtered ones Chroma's filtered search); a statement trial
+  searches twice per filter, and the
   reranker scores 30 passages per search.
 - **Reproducibility:** BM25, the endpoint's vectors (identical bytes for the same text) and every filtered search
   reproduce exactly; the `company+year` run files are byte-identical to the W1-04 ones. Unfiltered dense top-50
@@ -131,7 +132,7 @@ Paired on C3: questions better / worse with b than with a, by recall@5 (all ques
 | hybrid, question | hybrid+rerank, question | 6 / 12 / 55 | 0.238 | 14 / 8 | 0.286 |
 | hybrid, question+period | hybrid+rerank, question+period | 4 / 8 / 61 | 0.388 | 17 / 5 | 0.017 |
 | hybrid, question+period+statement | hybrid+rerank, question+period+statement | 1 / 0 / 72 | 1.000 | 14 / 3 | 0.013 |
-| hybrid, company+year | hybrid, company+year+period+statement | 21 / 0 / 52 | 0.000 | 10 / 2 | 0.039 |
+| hybrid, company+year | hybrid, company+year+period+statement | 21 / 0 / 52 | <0.001 | 10 / 2 | 0.039 |
 
 By question category, best setting (C3 hybrid+rerank, filters question+period+statement):
 
@@ -246,7 +247,7 @@ Bank of America's net interest income), a qualitative question the statement tri
 and significantly so with the trials: with the period filter 25 -> 37 (17 / 5, p = 0.017), with period +
 statements 31 -> 42 (14 / 3, p = 0.013), where recall@5 reaches 1.000 (E05 found) and MRR 0.986. It reads the passage against
 the question, so it moves the chunk with the asked-for line up, often an MD&A chunk that repeats it, which costs
-Item-level recall. The price is time: ~5-6 s per question with one search, ~9-12 s with statements first
+Item-level recall. The price is time: ~5-6 s per question with one search, ~9-10 s with statements first
 (two reranked searches per filter), against ~0.3-1.0 s without, on a laptop CPU, while the spec allows 60 s for
 the whole question (§9) and an agent question makes several searches.
 

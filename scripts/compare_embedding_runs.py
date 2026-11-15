@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eval.retrieval_eval import hit_key, score_runs, sign_test  # noqa: E402,F401  (sign_test: re-export)
+from eval.retrieval_eval import hit_key, score_runs  # noqa: E402
 from eval.retrieval_eval import paired_recall as compare  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_FILE  # noqa: E402
 from eval.validate_gold import validate_file  # noqa: E402
@@ -30,7 +30,6 @@ RESULTS = ROOT / "eval" / "results"
 MODELS = {"all-MiniLM-L6-v2": RESULTS / "embedding_comparison" / "runs_minilm",
           "bge-small-en-v1.5": RESULTS / "embedding_comparison" / "runs_bge"}
 SETTINGS = [("C3", r, f) for r in ("dense", "hybrid") for f in ("none", "company_year")]
-PAIRED_K = 5
 OUT_DIR = RESULTS                       # where the report goes (the inputs stay under RESULTS)
 
 

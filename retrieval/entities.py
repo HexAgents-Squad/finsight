@@ -1,7 +1,8 @@
 """Companies, fiscal years and fiscal periods named in a question (W1-05), for question-derived search filters.
 
 The rules are lexical and come from config/companies.yaml, so they need no model and no gold data:
-- a company is named by its full name or an alias, matched case-insensitively as whole words, or by its ticker
+- a company is named by its full name or an alias, matched case-insensitively as whole words (a one-word name
+  only when not all in lower case, so "chase growth" names no company), or by its ticker
   written in capitals (so the ticker "C" never matches the letter "c"; the config's documented planner rule), and
   not after "Class" or "Series" ("Class C shares");
 - a fiscal year is a four-digit year from 1993 on ("fiscal 2024", "FY2024", "2024") or "FY24"; "latest" or "most
@@ -14,8 +15,9 @@ The rules are lexical and come from config/companies.yaml, so they need no model
   date, whose fiscal quarter depends on the company) without a quarter means every indexed quarter.
 A follow-up ("And in the third quarter?") names only what changes: `from_turns` takes what the last turn names
 and fills what it does not name from the earlier turns, the latest first; a turn that names a year but no period
-keeps no earlier quarter. Known limit: a calendar date's year is read as the fiscal year ("quarter ended September
-30, 2024" is Microsoft's fiscal 2025).
+keeps no earlier quarter. Known limits: a calendar date's year is read as the fiscal year ("quarter ended
+September 30, 2024" is Microsoft's fiscal 2025); any number from 1993 to 2099 standing alone reads as a year
+("2051 units"; a year outside the corpus makes search_filings answer out_of_corpus); "FY 2024-25" reads as 2024.
 """
 from __future__ import annotations
 
@@ -103,7 +105,9 @@ def indexed(year: int | None, period: str) -> bool:
 def companies(text: str) -> tuple[str, ...]:
     """Tickers named in the text, in the order they first appear."""
     names = _names()
-    found = [(m.start(), names.by_name[m.group().casefold()]) for m in names.pattern.finditer(text)]
+    # a one-word name in lower case is an ordinary word ("chase growth", "meta trends"), not the company
+    found = [(m.start(), names.by_name[m.group().casefold()]) for m in names.pattern.finditer(text)
+             if " " in m.group() or not m.group().islower()]
     found += [(m.start(), m.group()) for m in names.tickers.finditer(text)]
     return tuple(dict.fromkeys(t for _, t in sorted(found)))
 
@@ -152,10 +156,12 @@ def from_turns(questions: list[str]) -> Entities:
     if not questions:
         return Entities()
     out = extract(questions[-1])
-    keep_periods = not out.years
+    tickers, years, periods = out.tickers, out.years, out.periods
+    open_period = not periods and not years          # the period is still to be found in an earlier turn
     for earlier in reversed(questions[:-1]):
         prev = extract(earlier)
-        out = Entities(out.tickers or prev.tickers, out.years or prev.years,
-                       out.periods or (prev.periods if keep_periods else ()))
-    return out
+        tickers, years = tickers or prev.tickers, years or prev.years
+        if open_period and (prev.periods or prev.years):
+            periods, open_period = prev.periods, False   # a turn naming only a year asks about the fiscal year
+    return Entities(tickers, years, periods)
 

@@ -20,7 +20,6 @@ from eval.run_retrieval import (
     best_row,
     entity_accuracy,
     interleave,
-    item_filters,
     main,
     run,
     run_file,
@@ -49,7 +48,8 @@ def hit(cid, ticker="AAPL"):
 
 
 def test_one_filter_per_company_and_year():
-    assert item_filters(item(companies=("AAPL", "MSFT"), years=(2023, 2024))) == [
+    gold = item(companies=("AAPL", "MSFT"), years=(2023, 2024))
+    assert setting_filters(gold, {gold.id: gold}, Setting("gold")) == [
         Filters.of(ticker="AAPL", fiscal_year=2023), Filters.of(ticker="AAPL", fiscal_year=2024),
         Filters.of(ticker="MSFT", fiscal_year=2023), Filters.of(ticker="MSFT", fiscal_year=2024)]
 
@@ -318,3 +318,21 @@ def test_a_statement_setting_runs_through_the_statement_first_wrapper():
     without = run(ByItem(), items, "question+period")[0][0]["retrieved"]
     assert [h["chunk_id"] for h in with_statements] == ["Item 8-0", "any-0"]
     assert [h["chunk_id"] for h in without] == ["any-0"]
+
+
+def test_a_tiny_p_value_is_printed_as_below_one_in_a_thousand():
+    from eval.run_retrieval import _p
+    assert (_p(9.5e-7), _p(0.001), _p(0.0389)) == ("<0.001", "0.001", "0.039")
+
+
+def test_a_reranker_model_that_cannot_be_loaded_is_exit_2(bm25_dirs, monkeypatch, capsys):
+    from retrieval.dense import Embedder
+
+    def offline():
+        raise OSError("cross-encoder/ms-marco-MiniLM-L-6-v2 is not in the local cache")
+
+    monkeypatch.setattr(run_retrieval, "embedder_from_settings", lambda: Embedder(lambda texts: [], "m"))
+    monkeypatch.setattr(run_retrieval, "load_reranker", offline)
+    capsys.readouterr()
+    assert cli(bm25_dirs, "--variants", "C1", "--retrievers", "hybrid", "--rerank") == 2
+    assert "the reranker model is not available" in capsys.readouterr().err

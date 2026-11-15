@@ -53,7 +53,7 @@ from pydantic import ValidationError  # noqa: E402
 
 from core.exceptions import FinSightError  # noqa: E402
 from eval.retrieval_eval import build_query, hit_key  # noqa: E402
-from eval.run_retrieval import RESULTS_DIR, interleave, load_retrievers  # noqa: E402
+from eval.run_retrieval import RESULTS_DIR, load_retrievers  # noqa: E402
 from eval.safety_tests import RefusalTest  # noqa: E402
 from eval.schema import CorpusScope, GoldItem, corpus_scope  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_PATH  # noqa: E402
@@ -62,7 +62,7 @@ from eval.validate_test_sets import SETS, validate_set  # noqa: E402
 from retrieval import CHUNKS_DIR, INDEX_DIR  # noqa: E402
 from retrieval.bm25 import index_path  # noqa: E402
 from retrieval.common import Filters, SearchResult, chunks_path  # noqa: E402
-from retrieval.hybrid import CANDIDATES, RRF_K, Retriever  # noqa: E402
+from retrieval.hybrid import CANDIDATES, RRF_K, Retriever, interleave  # noqa: E402
 from tools.search_filings import citation  # noqa: E402
 
 PACK_VERSION = "cp-v1"
