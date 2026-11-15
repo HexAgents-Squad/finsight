@@ -1,0 +1,131 @@
+==============================================================================================================
+WEEK 2 PLAN: THE AGENTIC LAYER (16 – 21 NOV 2026)
+==============================================================================================================
+Jira: one Week 2 epic and tickets W2-01 … W2-14 (keys assigned on creation; dependencies as "Blocks" links).
+
+Goal: the FinSight agent answers a question end to end (plan, call tools, verify, answer with citations) inside
+the 60 s budget per question (spec §9), traced in Langfuse, behind a FastAPI service and a Streamlit UI.
+
+Exit gate shown to the mentor (Sat 21 Nov):
+- an end-to-end demo on 10 queries, each with its trace;
+- the agent's first scored run (A1) on the 80 gold questions + 22 refusal tests, next to B0 and S1–S3.
+
+Everything below that does not exist yet is planned; the ticket that creates it is named.
+
+1. What Week 1 measured, and what it decides for the agent
+===========================================================
+- Retrieval decides most answers (ADR-017, ADR-018): with every gold figure in the passages, reasoning or
+  decomposition gets 17/18 numeric questions right; without, every model fails. The agent searches with the
+  company, year and fiscal period read from the question (retrieval/entities.py) and the financial statements
+  first (the search_filings default); the reranker stays an opt-in setting (RETRIEVAL_RERANK) for latency.
+- Numbers come from tools, not the model: arithmetic slips are the main loss when the evidence is present, and
+  Qwen writes "$47.52 billion" as a wrong plain-dollar integer. The analyst step computes with calculate /
+  compare_periods; the critic owns units.
+- Refusal is decided first (ADR-018): reasoning and decomposition under-refused (S2 7, S3 8) because they started
+  extracting; few-shot refusal examples fixed refusals (S1 20/20) but copied a real figure, so examples carry no
+  real figures.
+- Reasoning before a figure, not five samples: S2's reasoning field cut ungrounded numbers from 20/74 to 4/85,
+  but five samples cost ~23 s per question; the planner and answer steps write a reasoning field once.
+- Structured output and tools through the endpoint (ADR-016): json_schema guided decoding for every control-flow
+  output (100% valid in Week 1), native tool calling for the four tools; get_financial_fact's metric becomes an
+  enum first (the probe asked for 'net_sales').
+- The answer leaves only through the contract and the critic (ADR-022): every number backed, calculations
+  recomputed, company/year/period as asked, refusal policy; one send-back, then "could not verify".
+
+2. Design: the LangGraph agent (W2-01 … W2-07)
+===============================================
+    question (+ earlier turns)
+          │
+          ▼
+    ┌────────────┐  refuse (R1–R7) ─────────────────────────────────────────────┐
+    │  PLANNER   │  entities (company, year, period) · plan: ordered tool steps  │
+    └─────┬──────┘                                                               │
+          │ Plan (JSON, guided)                                                   │
+          ▼                                                                       │
+    ┌────────────┐  search_filings (filters from the question, statements first)  │
+    │  EXECUTOR  │  get_financial_fact (XBRL) · calculate · compare_periods        │
+    │            │  guards: 10 steps, repeated call, token budget, 60 s            │
+    └─────┬──────┘  tool error → back to the planner once (replan)                │
+          │ tool results                                                          │
+          ▼                                                                       │
+    ┌────────────┐  draft answer with a reasoning field, citations = passage ids   │
+    │  ANALYST / │                                                                │
+    │  COMPOSER  │                                                                │
+    └─────┬──────┘                                                                │
+          ▼                                                                       │
+    ┌────────────┐  check_contract (W1-07) + recomputed numbers + units           │
+    │   CRITIC   │  fail → back to the executor once → else "could not verify"    │
+    └─────┬──────┘                                                                │
+          ▼                                                                       ▼
+    Answer (agent/contract.py: answer, value, unit, citations → SEC links, verified flag, refusal rule)
+
+State (agent/state.py, W2-01): messages and earlier turns, entities, plan, tool calls and results, draft answer,
+critic verdict, step / token / time counters, errors. Every LLM output that drives control flow is a pydantic
+model sent as json_schema (ADR-016) with one retry on invalid JSON. Settings: AGENT_MAX_STEPS = 10,
+AGENT_TOKEN_BUDGET, AGENT_TIMEOUT_S = 60. Memory across turns (W2-06): a LangGraph checkpointer (in memory for
+now) and retrieval.entities.from_turns for follow-ups. Tracing (W2-08): every node and tool call in Langfuse,
+tagged with the question id; off in tests.
+
+Around the graph: api/main.py (W2-09: POST /ask, GET /health, reply cache, rate limit, agent in a worker thread)
+and ui/app.py (W2-10: chat, answer card with the verified badge and citations, trace expander, disclaimer).
+Evaluation (W2-11): eval/run_agent.py writes a RunRecord per question (with its tool calls) for the same scorer.
+
+3. Tickets, owners and execution order
+======================================
++----+-------+---------------------------------------------------------+-----------------+-----------------+--------+------------------+
+| #  | Ticket| Summary                                                 | Owner           | Backup          | Due    | Depends on       |
++====+=======+=========================================================+=================+=================+========+==================+
+| 1  | W2-01 | Agent state, message schemas and graph skeleton         | Alok            | Amresh          | Mon 16 | –                |
+| 2  | W2-02 | Planner: refusal first, entities, a JSON plan           | Amresh          | Alok            | Tue 17 | W2-01            |
+| 3  | W2-03 | Tool schemas for native tool calling                    | Giridharan      | Anirudh         | Tue 17 | W2-01            |
+| 4  | W2-04 | Executor: research/data/analyst steps, guards           | Giridharan      | Anirudh         | Wed 18 | W2-02, W2-03     |
+| 5  | W2-05 | Critic: contract checks, recomputation, citations       | Amresh          | Alok            | Wed 18 | W2-01            |
+| 6  | W2-06 | Answer composer and memory across turns                 | Chandra Shekhar | Alok            | Thu 19 | W2-01            |
+| 7  | W2-07 | Graph end to end, 10 demo queries                       | Alok            | Giridharan      | Thu 19 | W2-04, 05, 06    |
+| 8  | W2-08 | Langfuse tracing and the trace dashboard                | Anirudh         | Giridharan      | Thu 19 | W2-01            |
+| 9  | W2-09 | FastAPI service: /ask, /health, cache, rate limit       | Giridharan      | Chandra Shekhar | Fri 20 | W2-07            |
+| 10 | W2-10 | Streamlit UI                                            | Chandra Shekhar | Anirudh         | Fri 20 | W2-09            |
+| 11 | W2-11 | Agent run on the gold set, scored next to B0            | Alok            | Amresh          | Sat 21 | W2-07            |
+| 12 | W2-12 | Week 1 carry-overs (grading round 2, smoke, WP2)        | Chandra Shekhar | Anirudh         | Wed 18 | –                |
+| 13 | W2-13 | Prompt-injection and PII defences in the agent          | Amresh          | Chandra Shekhar | Fri 20 | W2-07            |
+| 14 | W2-14 | Week 2 results note, mentor demo, Week 3 kick-off       | Alok            | Amresh          | Sat 21 | W2-07, 08, 11    |
++----+-------+---------------------------------------------------------+-----------------+-----------------+--------+------------------+
+Critical path: W2-01 → W2-02 / W2-03 → W2-04 → W2-07 → W2-11 → W2-14 (W2-05 critic and W2-06 memory in
+parallel with W2-04). Full ticket text (goal, steps, acceptance criteria) is in the Jira tickets.
+
+    Mon 16   W2-01 skeleton (Alok) · W2-03 tool schemas (Giridharan) · W2-12 carry-overs start (Chandra, Amresh)
+    Tue 17   W2-02 planner (Amresh) · W2-08 Langfuse (Anirudh) · W2-05 critic starts (Amresh)
+    Wed 18   W2-04 executor (Giridharan) · W2-05 critic · W2-06 memory starts (Chandra)
+    Thu 19   W2-07 end to end + 10 demo queries (Alok) · W2-10 UI starts against a fake API
+    Fri 20   W2-09 API · W2-10 UI · W2-13 safety · W2-11 gold run starts
+    Sat 21   W2-11 scored · W2-14 note and demo
+
+4. Process (as in Week 1)
+=========================
+- Branches w2/UPGRAD-<key>-<short-desc>; every commit message starts with the Jira key; one review by the
+  ticket's backup; CI green before merge.
+- Definition of done: tests offline and fast (fake LLM and fake tools; no key in CI), ruff clean, docs updated,
+  PR reviewed.
+- Prompts are tuned on the development set only and pinned by sha256 before any gold run; gold-v1 stays frozen.
+- The shared key: one evaluation run at a time, through the reply cache; announce long runs in the team chat.
+- Decisions with numbers go into docs/decisions.md (next free ADR: ADR-024).
+
+5. Risks
+========
++--------------------------------------------+--------------------------------------------------------------+
+| Risk                                       | Mitigation                                                   |
++============================================+==============================================================+
+| Agent exceeds 60 s per question            | step cap 10, no multi-sampling, reranker off, timings traced |
+| Tool calls with wrong arguments            | metric enum and clear schemas (W2-03), one replan on errors  |
+| The critic rejects good answers            | each check tested on passing and failing cases; one retry    |
+| Langfuse setup takes too long              | tracing optional in code; local JSON trace as a fallback     |
+| Grading round 2 not done by Wed            | judge scores as the interim second opinion, stated as such   |
+| Team availability                          | every ticket has a backup who reviews and can take it over   |
++--------------------------------------------+--------------------------------------------------------------+
+
+6. After Week 2
+===============
+Week 3 (22 – 27 Nov, evaluate, harden, ship): the full evaluation of the agent and ablations (without the
+calculator, the critic, statements first), the failure taxonomy, injection/PII/refusal tests, caching and rate
+limits, Docker Compose, the 12-page report; freeze on 25 Nov, submit by 26 Nov. Presentation and live demo on
+Sat 5 Dec.
