@@ -30,10 +30,15 @@ EXCERPT_CHARS = 300
 SENTENCES = 3
 MIN_SENTENCE_WORDS = 10
 # A prose sentence (no table cell): it starts a line or follows a sentence end, and ends at . ! or ? followed by
-# white space, so "$4.8 billion", "U.S." and "Securities, Inc." do not end it (W1-10: the first worksheet cut
-# four sentences there)
-SENTENCE = re.compile(r"(?m)(?:^|(?<=[.!?] ))[A-Z][^\n|]{40,240}?"
-                      r"(?<![^A-Za-z][A-Z])(?<!Inc)(?<!Corp)(?<!Co)(?<!Ltd)(?<!No)(?<!vs)[.!?](?=\s|$)")
+# white space, so "$4.8 billion", "U.S.", "Securities, Inc." and "Mr." do not end it (W1-10: the first worksheet
+# cut four sentences there) and no sentence starts right after them. A sentence that ends in a one-letter
+# abbreviation ("Form 10-K.") runs on into the next one, which is still text to find; sentences over 241
+# characters are not drawn.
+ABBREVIATIONS = ("Inc", "Corp", "Co", "Ltd", "No", "Nos", "vs", "Mr", "Mrs", "Ms", "Dr", "Jr", "Sr", "St", "al")
+_NOT_AFTER = "".join(rf"(?<!\b{a})" for a in ABBREVIATIONS)
+_NOT_STARTING_AFTER = r"(?<![^A-Za-z][A-Z]\. )" + "".join(rf"(?<!\b{a}\. )" for a in ABBREVIATIONS)
+SENTENCE = re.compile(rf"(?m)(?:^|(?<=[.!?] )){_NOT_STARTING_AFTER}[A-Z][^\n|]{{40,240}}?"
+                      rf"(?<![^A-Za-z][A-Z]){_NOT_AFTER}[.!?](?=\s|$)")
 
 CHECKS = """For each section, open the SEC link, find the Item, and check:
 1. **Boundaries:** the text starts at this Item's heading and ends where the next Item (or the signatures)
@@ -66,8 +71,13 @@ def sample(docs: list[dict], seed: int = SEED) -> list[dict]:
 def middle_sentences(text: str, seed: int) -> list[str]:
     """Up to SENTENCES prose sentences from the middle half of the text, in text order."""
     lo, hi = len(text) // 4, 3 * len(text) // 4
-    found = [m.group().strip() for m in SENTENCE.finditer(text, lo, hi)
-             if len(m.group().split()) >= MIN_SENTENCE_WORDS]
+    # a sentence must start in the middle half but may end after it (a search cut at `hi` would end "$4." there)
+    found = []
+    for m in SENTENCE.finditer(text, lo):
+        if m.start() >= hi:
+            break
+        if len(m.group().split()) >= MIN_SENTENCE_WORDS:
+            found.append(m.group().strip())
     if len(found) <= SENTENCES:
         return found
     return [found[i] for i in sorted(random.Random(seed).sample(range(len(found)), SENTENCES))]

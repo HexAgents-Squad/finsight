@@ -83,3 +83,36 @@ def test_a_sentence_starts_at_a_sentence_start():
     found = [m.group() for m in sc.SENTENCE.finditer(text, text.index("investee"))]
     assert found == []
     assert [m.group() for m in sc.SENTENCE.finditer(text)][-1].startswith("During the period")
+
+
+@pytest.mark.parametrize("sentence", [
+    "The Board of Directors of the company unanimously selected Mr. Gonzalez as chief executive officer in 2024.",
+    "These findings are consistent with the earlier work of Smith et al. on the effects of interest rate changes.",
+])
+def test_honorifics_and_abbreviations_do_not_end_a_sentence(sentence):
+    assert [m.group() for m in sc.SENTENCE.finditer(sentence)] == [sentence]
+
+
+def test_a_word_ending_like_an_abbreviation_still_ends_a_sentence():
+    # "financial." ends in "al" and "Mexico." in "co": only the whole abbreviations ("et al.", "Co.") are exempt
+    text = "Our ratios meet the requirements for banks that are large and internationally financial. Next sentence here."
+    assert sc.SENTENCE.match(text).group().endswith("financial.")
+
+
+def test_no_sentence_starts_right_after_an_abbreviation():
+    # the search can restart after "U.S. " when a sentence is too long to match from its true start (review)
+    text = ("The rules were issued by the U.S. " + "Securities and Exchange Commission and several other agencies " * 5
+            + "with effect from January.")
+    assert all(not m.group().startswith("Securities") for m in sc.SENTENCE.finditer(text))
+
+
+def test_a_sentence_may_end_after_the_middle_half():
+    # the search used to treat the end of the middle half as the end of the text and cut "$4.8 billion" at "$4."
+    head = "Words that fill the first quarter of this section text so that it is long enough here. " * 3
+    sentence = "The commercial allowance for loan and lease losses increased $153 million during 2025 to $4.8 billion."
+    target = len(head) + sentence.index("$4.") + 3                  # the middle half ends right after "$4."
+    tail_len = next(n for n in range(4 * target) if 3 * (len(head) + len(sentence) + n) // 4 == target)
+    text = head + sentence + ("x" * (tail_len - 1)).join([" ", ""])[:tail_len]
+    assert 3 * len(text) // 4 == target and len(text) // 4 <= len(head)
+    found = sc.middle_sentences(text, seed=1)
+    assert sentence in found and not any(s.endswith("$4.") for s in found)

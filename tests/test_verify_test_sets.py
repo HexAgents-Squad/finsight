@@ -25,7 +25,7 @@ def sets(tmp_path, monkeypatch):
 
 def make_sheet(tmp_path, sets):
     sheet = tmp_path / "verification.csv"
-    assert vt.main(["sheet", str(sheet)]) == 0
+    assert vt.main(["sheet", str(sheet), "--force"]) == 0
     with sheet.open(encoding="utf-8-sig", newline="") as f:
         return sheet, list(csv.DictReader(f))
 
@@ -56,7 +56,9 @@ def test_the_sheet_has_one_row_per_test_with_what_the_verifier_checks(tmp_path, 
     assert "391,035" in inj["must_contain_any"] and "1 trillion" in inj["must_not_contain"]
     assert inj["filing"].startswith("AAPL 10-K FY2024 FY Item 7") and inj["planted_text"]
     assert by_id["INJ03"]["expected"].startswith("refuse the user's question (R1")
-    assert all(r["fingerprint"] and not r["verdict"] for r in rows)
+    assert all(r["fingerprint"].startswith("fp-") and not r["verdict"] for r in rows)
+    assert inj["forbidden_values"] == "1000000; 1000000000000"                  # every field the hash covers
+    assert by_id["RF05"]["notes"] == "Microsoft has filed its FY2026 10-K, but it is not indexed"
 
 
 def test_agreeing_on_every_test_sets_verified_by_and_passes_the_final_rules(tmp_path, sets, capsys):
@@ -139,3 +141,112 @@ def test_the_fingerprint_ignores_only_verified_by():
     rec = {"id": "RF01", "question": "q", "written_by": "Alok", "verified_by": None}
     assert vt.fingerprint(rec) == vt.fingerprint({**rec, "verified_by": "Amresh"})
     assert vt.fingerprint(rec) != vt.fingerprint({**rec, "question": "q2"})
+
+
+@pytest.mark.parametrize("verifier", ["Alok Srivastava", "ALOK", "srivastava, alok", " alok "])
+def test_the_author_cannot_verify_under_a_fuller_name(tmp_path, sets, capsys, verifier):
+    # the tests are signed "Alok": a sheet naming "Alok Srivastava" once passed as a second person (W1-10 review)
+    sheet, rows = make_sheet(tmp_path, sets)
+    save(sheet, fill(rows, verifier=verifier, only={"RF01"}))
+    assert vt.main(["apply", str(sheet)]) == 1
+    assert "wrote this test" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("a, b, same", [
+    ("Alok", "Alok Srivastava", True), ("Amresh Kumar", "Amresh", True), ("Chandra Shekhar", "chandra shekhar", True),
+    ("Amresh Kumar", "Alok", False), ("Chandra Shekhar", "Chandra Mohan", False), ("Alok", "", False),
+])
+def test_same_person_compares_the_words_of_two_names(a, b, same):
+    assert vt.same_person(a, b) is same
+
+
+def test_sheet_never_overwrites_a_filled_sheet_without_force(tmp_path, sets):
+    sheet, rows = make_sheet(tmp_path, sets)
+    save(sheet, fill(rows))
+    assert vt.main(["sheet", str(sheet)]) == 1                               # review: verdicts were lost
+    assert sum(r["verdict"] == "agree" for r in csv.DictReader(sheet.open(encoding="utf-8-sig"))) == 34
+
+
+def test_a_fingerprint_never_looks_like_a_number():
+    # Excel turns an all-digit cell into 6.62345E+11 on save, and the row could never be applied (review)
+    rec = {"id": "RF01", "question": "q", "written_by": "Alok", "notes": "n446", "verified_by": None}
+    for notes in ("n446", "a", "b", "c", "d"):
+        fp = vt.fingerprint({**rec, "notes": notes})
+        assert fp.startswith("fp-") and len(fp) == 15
+        with pytest.raises(ValueError):
+            float(fp)                                                        # no spreadsheet reads it as a number
+
+
+def test_an_older_sheet_does_not_replace_a_newer_verifier(tmp_path, sets, capsys):
+    sheet, rows = make_sheet(tmp_path, sets)
+    save(sheet, fill(rows, verifier="Amresh Kumar"))
+    assert vt.main(["apply", str(sheet)]) == 0
+    stale = fill([dict(r) for r in rows], verifier="Giridharan", only={"RF01"})
+    save(sheet, stale)
+    before = sets["refusal"].read_bytes()
+    assert vt.main(["apply", str(sheet)]) == 1
+    assert "already verified by Amresh Kumar" in capsys.readouterr().out
+    assert sets["refusal"].read_bytes() == before
+    save(sheet, fill([dict(r) for r in rows], verifier="Amresh"))           # the same person, shorter name
+    assert vt.main(["apply", str(sheet)]) == 0
+    assert sets["refusal"].read_bytes() == before                            # the first recorded name stays
+
+
+def test_a_name_in_another_unicode_form_is_the_same_person():
+    composed, decomposed = "Alók", "Alók"                         # NFC and NFD (a Mac keyboard)
+    assert composed != decomposed and vt.same_person(composed, decomposed)
+
+
+def test_both_files_or_neither_when_a_write_fails(tmp_path, sets, monkeypatch, capsys):
+    sheet, rows = make_sheet(tmp_path, sets)
+    save(sheet, fill(rows))
+    before = {name: path.read_bytes() for name, path in sets.items()}
+    real_replace, calls = vt.os.replace, []
+
+    def flaky_replace(src, dst):
+        calls.append(dst)
+        if len(calls) == 2:
+            raise PermissionError("the file is open in another program")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(vt.os, "replace", flaky_replace)
+    assert vt.main(["apply", str(sheet)]) == 2
+    assert "nothing written" in capsys.readouterr().err
+    assert {name: path.read_bytes() for name, path in sets.items()} == before
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_excel_quirks_are_handled_or_named(tmp_path, sets, capsys):
+    sheet, rows = make_sheet(tmp_path, sets)
+    save(sheet, fill(rows, only={"RF01"}))
+    with sheet.open("a", encoding="utf-8", newline="") as f:
+        f.write("," * (len(vt.COLUMNS) - 1) + "\r\n" + "," * (len(vt.COLUMNS) - 1) + "\r\n")   # empty rows at the end
+    assert vt.main(["apply", str(sheet), "--dry-run"]) == 0
+    sheet.write_text(";".join(vt.COLUMNS) + "\nrefusal;RF01\n", encoding="utf-8")
+    assert vt.main(["apply", str(sheet)]) == 2
+    assert "semicolons" in capsys.readouterr().err
+    sheet.write_bytes(",".join(vt.COLUMNS).encode() + b"\nrefusal,RF01,,,,,,,,,,,,,Jos\xe9,agree,\n")   # cp1252
+    assert vt.main(["apply", str(sheet)]) == 2
+    assert "CSV UTF-8" in capsys.readouterr().err
+
+
+def test_a_comment_without_a_verdict_is_reported(tmp_path, sets, capsys):
+    sheet, rows = make_sheet(tmp_path, sets)
+    rows[0]["comment"] = "looks fine"
+    save(sheet, rows)
+    assert vt.main(["apply", str(sheet)]) == 1
+    assert "a comment without a verdict" in capsys.readouterr().out
+
+
+def test_applying_the_committed_verification_again_changes_no_byte(tmp_path, monkeypatch):
+    # not circular: the committed files as they are in git, not rewritten by the script's own serializer
+    copies = {}
+    for name, (model, item_rules, set_rules, path) in SETS.items():
+        copy = tmp_path / path.name
+        copy.write_bytes(path.read_bytes())
+        copies[name] = (model, item_rules, set_rules, copy)
+    monkeypatch.setattr(vt, "SETS", copies)
+    sheet = tmp_path / "again.csv"
+    assert vt.main(["sheet", str(sheet)]) == 0
+    assert vt.main(["apply", str(sheet)]) == 0
+    assert all(spec[3].read_bytes() == SETS[name][3].read_bytes() for name, spec in copies.items())

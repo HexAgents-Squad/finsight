@@ -84,7 +84,7 @@ file; verification is never switched off.
    error means the wrong file or group.
 4. **Run the smoke test**: `python scripts/smoke_llm.py`. It shows `TLS: verified against <group>-ca.crt` and
    `Thinking: off`, hides the endpoint's address, and ends with `OK: ...`. Post that output (never the key) in
-   the team chat as your smoke-test check, and add your result line to `docs/smoke_tests.md`.
+   the team chat as your smoke-test check.
 5. **Embedding endpoint (W1-16)**: put the course's `vm02-ca.crt` in `certs/` (git-ignored) and add to `.env`
    `EMBED_BASE_URL`, `EMBED_API_KEY` (the shared embedding key), `EMBED_CA_CERT=certs/vm02-ca.crt`,
    `EMBED_MODEL=bge-small-en-v1.5`, `EMBED_BATCH_SIZE=16` and `EMBED_MAX_INPUT_TOKENS=512`. Since the W1-04
@@ -92,6 +92,8 @@ file; verification is never switched off.
    `EMBED_BACKEND=sentence-transformers` and `EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5` they are embedded
    locally with the same model (the fallback when the endpoint is down). A full rebuild
    (`EMBED_BACKEND=openai python ingest/04_index.py`) takes about 1.6 h through the endpoint (94 min measured in W1-04).
+   Run the smoke test again with `EMBED_BACKEND=openai` (it shows `Embeddings: openai (bge-small-en-v1.5)`) and
+   add your result line to `docs/smoke_tests.md` (W1-10).
 6. **Capability probe (optional, W1-03)**: `python scripts/probe_endpoint.py` measures tool calling, JSON modes, the
    thinking switch, latency, limits and determinism (~33 requests, about 2 minutes) and writes
    `eval/results/endpoint_probe.md`. It deliberately sends two requests at once to confirm the 429, so run it only

@@ -237,7 +237,7 @@ Known now:
 Found in WP2 (ADR-010):
 6. **Citigroup** files no Item headings, so only Items 1A, 7 and 8 (10-Q: Part I Items 1-2) are mapped from its report.
 7. **Pointer-only Items** (e.g. JPM/BAC/GS Item 1C, GS Item 7A) are dropped as too short; relocated bank statements keep trailing glossaries.
-8. **Page furniture**: about 2,500 lone "Table of Contents" back-links and some page footers ("Bank of America 22") remain in the text. They add noise to chunks and keyword search; removing them needs a re-parse and a full re-index (planned for Week 1).
+8. **Page furniture**: lone "Table of Contents" back-links (2,455), bare page numbers and running page footers and headers were removed in W1-04 (ADR-023). Left: running section titles ("... (continued)", Microsoft's "PART I / Item 1A") and, in 13 sections, an index of page-numbered rows at the start (the W1-10 spot check, `docs/wp2_spot_check.md`).
 
 Found in WP3 (ADR-011):
 9. **Declared gaps** ("not reported", never derived): operating income (banks, JNJ, PFE, MRK), gross profit (15 companies), R&D (10 companies; P&G quarterly), capex (JPM, BAC, WFC), total liabilities (AMZN, MRK, ABBV, WMT, KO), equity (UNH, PG), long-term debt (GS).
