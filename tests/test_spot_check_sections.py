@@ -1,6 +1,8 @@
 """scripts/spot_check_sections.py (W1-10): a reproducible WP2 spot-check sample and its worksheet, offline."""
 import json
 
+import pytest
+
 import scripts.spot_check_sections as sc
 
 PROSE = "The Company reported higher net sales in every geographic segment during the fiscal year. "
@@ -57,3 +59,27 @@ def test_middle_sentences_are_prose_from_the_middle_in_order():
     numbers = [int(s.split()[2]) for s in found]
     assert len(found) == sc.SENTENCES and numbers == sorted(numbers) and 8 <= min(numbers) and max(numbers) <= 31
     assert sc.middle_sentences("Revenue | 1,234 | 5,678\n" * 50, seed=1) == []     # table rows are no sentences
+
+
+@pytest.mark.parametrize("sentence", [
+    "The commercial allowance for loan and lease losses increased $153 million during 2025 to $4.8 billion.",
+    "Special Resolution Regime confers substantially the same powers on the Bank of England, as the U.K. "
+    "resolution authority, and substantially the same requirements on U.K. financial institutions.",
+    "These include reviews by the Federal Trade Commission, U.S. Congressional committees and the SEC.",
+    "The principal broker-dealer subsidiaries are BofA Securities, Inc. and Merrill Lynch, Pierce, Fenner & Smith.",
+])
+def test_a_decimal_or_an_abbreviation_does_not_end_a_sentence(sentence):
+    # the first worksheet cut these at "$4.", "U." and "U." (W1-10 review of the screenshots)
+    text = "Intro line.\n" + ("Filler words make this paragraph long enough to sit in the middle of it. " * 8 + "\n") * 2
+    text = text + sentence + " " + text
+    assert sentence in [m.group() for m in sc.SENTENCE.finditer(text)]
+
+
+def test_a_sentence_starts_at_a_sentence_start():
+    # not mid-sentence at a capitalised name ("... investee in Latin America and a loss of $7 million ...")
+    # the search starts where the middle half begins, which can be inside a sentence (Coca-Cola, sentence 3)
+    text = ("The earlier paragraph of this note ends with this sentence. During the period the company recorded a charge related to an equity method "
+            "investee in Latin America and a loss of $7 million related to post-closing adjustments in Vietnam.")
+    found = [m.group() for m in sc.SENTENCE.finditer(text, text.index("investee"))]
+    assert found == []
+    assert [m.group() for m in sc.SENTENCE.finditer(text)][-1].startswith("During the period")

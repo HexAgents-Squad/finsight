@@ -29,7 +29,11 @@ N_10K, N_10Q = 7, 3
 EXCERPT_CHARS = 300
 SENTENCES = 3
 MIN_SENTENCE_WORDS = 10
-SENTENCE = re.compile(r"[A-Z][^.!?\n|]{40,240}[.!?]")      # prose sentences, not table rows
+# A prose sentence (no table cell): it starts a line or follows a sentence end, and ends at . ! or ? followed by
+# white space, so "$4.8 billion", "U.S." and "Securities, Inc." do not end it (W1-10: the first worksheet cut
+# four sentences there)
+SENTENCE = re.compile(r"(?m)(?:^|(?<=[.!?] ))[A-Z][^\n|]{40,240}?"
+                      r"(?<![^A-Za-z][A-Z])(?<!Inc)(?<!Corp)(?<!Co)(?<!Ltd)(?<!No)(?<!vs)[.!?](?=\s|$)")
 
 CHECKS = """For each section, open the SEC link, find the Item, and check:
 1. **Boundaries:** the text starts at this Item's heading and ends where the next Item (or the signatures)
