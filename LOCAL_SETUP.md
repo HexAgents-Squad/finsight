@@ -142,6 +142,11 @@ python ingest/02_parse_sections.py    # 1,260 Item sections -> data/sections/sec
 python ingest/05_xbrl_facts.py        # 1,303 facts + coverage and spot checks -> data/xbrl/*.csv (seconds)
 python ingest/03_chunk.py             # chunk variants C1/C2/C3 -> data/chunks/ (seconds)
 python ingest/04_index.py             # BM25 (seconds) + dense Chroma index (~1 h per variant on a CPU)
-python eval/run_retrieval.py          # recall@k tables -> eval/results/retrieval_summary.md
+python eval/run_retrieval.py --rerank # recall@k tables -> eval/results/retrieval_summary.md (~1 h, most of it reranking)
 ```
 Only the C3 indexes are needed by `search_filings`: `python ingest/04_index.py --variants C3`.
+
+Reranking (ADR-017) is optional and off by default. `RETRIEVAL_RERANK=true` in `.env` makes `search_filings`
+reorder the hybrid top 30 with the cross-encoder `cross-encoder/ms-marco-MiniLM-L-6-v2`, run locally: the model
+(~91 MB) downloads from Hugging Face on first use (internet needed once), and each search then takes about 4-6 s
+longer on a laptop CPU (a figure question searches twice, once in the statements). `eval/run_retrieval.py --rerank` needs the same download.

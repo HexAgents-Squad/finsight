@@ -52,7 +52,7 @@ python eval/validate_gold.py --final                       # before tagging gold
 
 ## Scoring retrieval (with WP5)
 ```bash
-python eval/run_retrieval.py                       # all variants and retrievers; rewrites the tables in results/retrieval_summary.md
+python eval/run_retrieval.py --rerank              # every variant, retriever, filter setting and the reranker trials; rewrites the tables in results/retrieval_summary.md (~1 h)
 python eval/retrieval_eval.py --runs eval/results/runs/C3_hybrid_company_year.jsonl   # score one run file
 ```
 `retrieval_eval.py --out FILE` appends a table to FILE, so never point it at `retrieval_summary.md` (its tables are generated between markers). Build queries with `retrieval_eval.build_query()` so follow-up questions include the previous turn, exactly as the agent will.
@@ -60,6 +60,10 @@ python eval/retrieval_eval.py --runs eval/results/runs/C3_hybrid_company_year.js
 Reading the numbers:
 - recall@k is the share of an item's gold sources found. Items with two sources (two companies, or a period comparison citing each year's own 10-K) score at most 0.5 at recall@1.
 - Gold sources name where a figure is printed in the statements (Item 8, 10-Q Part I Item 1). Most figures are repeated in the MD&A (Item 7), and retrieving only that copy counts as a miss, so say so next to the recall table.
+- recall@k checks the Item, not the passage: a hit can be an Item 8 chunk that does not hold the figure asked
+  about. `figure@5` (W1-05) counts the questions whose gold answer states a figure as the gold set writes it
+  ("391,035") and one of the first 5 chunks contains it verbatim; it is the passage-level check, and a question
+  with several figures counts when any one is found.
 
 ## Context pack for the model comparison (W1-12)
 ```bash

@@ -23,7 +23,7 @@ config/        companies.yaml (corpus scope), concept_map.yaml (metric → XBRL 
 docs/          spec, decisions (ADRs), week-0 and week-1 plans, report/
 data/          raw/ (SEC filings), sections/ (parsed sections), xbrl/ (structured financial data); not committed
 ingest/        download → parse sections → XBRL facts → chunk → index
-retrieval/     chunking, BM25, dense (Chroma), hybrid fusion (RRF); reranker planned
+retrieval/     chunking, BM25, dense (Chroma), hybrid fusion (RRF), entities from the question, statements first, cross-encoder reranker
 agent/         (planned) planner, executor, critic, LangGraph graph; prompts/
 tools/         search_filings, get_financial_fact, calculate, compare_periods
 api/           (planned) FastAPI service

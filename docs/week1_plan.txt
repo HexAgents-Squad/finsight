@@ -317,7 +317,8 @@ than 70% of the prompt's Qwen tokens, or reports a window size (--context-window
 the prompt.
 Budget: M1 and M3 102 calls each, judge ~40, all through the cache, one at a time; M2 runs locally in
 parallel (no key; ~1–2 h on a CPU).
-Caveats the report states: oracle filters (real accuracy will be lower until question-derived filters, W1-05),
+Caveats the report states: oracle filters (W1-05 found question-derived filters equal to them on the gold set,
+ADR-017, but real questions are phrased more freely),
 small n per cell, a single frozen prompt, and these properties of B0 found in review after the runs (the prompt
 stays frozen; changing it after seeing results would be tuning on gold):
 - R2's wording ("a question about what will happen") also covers RF10 ("which bank stock will rise"), which the
@@ -398,6 +399,11 @@ W1-05 (Anirudh): retrieval/rerank.py (cross-encoder/ms-marco-MiniLM-L-6-v2 on th
   retrieval/entities.py (company, fiscal year and quarter from the question); filter settings none /
   question-derived / company+year / +form-period; Item 8 preference trial; run_retrieval.py --rerank.
   ADR-017 sets the retrieval default.
+  Done as in ADR-017 (15 Nov): question-derived filters equal the gold ones (73/73 gold, 14/14 dev); on C3
+  hybrid the period filter lifts recall@5 0.774 -> 0.890 (p = 0.006) and statements first (the Item 8
+  preference) to 0.986 (p = 0.001); the reranker adds the most answer-bearing chunks (figure@5 31 -> 42 of 59,
+  p = 0.013) but ~4-6 s per search, so the default is filters + statements first and RETRIEVAL_RERANK is opt-in
+  (eval/results/retrieval_summary.md). The planner should pass the company, year and period the question names.
 W1-09 (Alok + sub-owners): same context pack, runner and scorer as Sprint A; B0 is the zero-shot reference.
   S1 few-shot structured output (examples from the dev set), S2 chain-of-thought + self-consistency (3–5
   samples, majority vote on the value), S3 decomposition. Prompts frozen and tagged before the gold runs (Fri
@@ -439,7 +445,7 @@ report.
 | Ollama truncating prompts                  | 8k-context model; one long-prompt check                      |
 | Small n (12 summary questions)             | counts + intervals, the 22 refusal tests, concrete examples  |
 | Qwen judging Qwen (self-preference)        | human grades are primary; judge agreement reported           |
-| Oracle filters overstate accuracy          | stated in the report; question-derived filters in W1-05      |
+| Oracle filters overstate accuracy          | stated in the report; W1-05: question-derived = oracle (gold)|
 | Prompt tuned on gold (leakage)             | B0 frozen before runs; S1–S3 tuned on the dev set (W1-06)    |
 | 8,192-token limit                          | passages capped at ~4,000 tokens; over-budget prompts refused|
 +--------------------------------------------+--------------------------------------------------------------+

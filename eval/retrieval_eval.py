@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -71,6 +72,29 @@ def recall_at_k(retrieved: list[SourceKey], gold: list[SourceKey], k: int) -> fl
 def reciprocal_rank(retrieved: list[SourceKey], gold: list[SourceKey]) -> float:
     gold_set = set(gold)
     return next((1.0 / rank for rank, key in enumerate(retrieved, start=1) if key in gold_set), 0.0)
+
+
+def sign_test(wins: int, losses: int) -> float:
+    """Two-sided exact binomial (p = 0.5) on the questions where two runs differ."""
+    n = wins + losses
+    if n == 0:
+        return 1.0
+    tail = sum(math.comb(n, i) for i in range(min(wins, losses) + 1)) / 2 ** n
+    return min(1.0, 2 * tail)
+
+
+def paired_recall(items: list[GoldItem], a: dict[str, list[SourceKey]], b: dict[str, list[SourceKey]],
+                  k: int = 5) -> dict[str, float | int]:
+    """Questions (with gold sources) where run b's recall@k is higher, lower or equal than run a's, and the sign
+    test on the first two (W1-16, W1-05)."""
+    wins = losses = ties = 0
+    for item in items:
+        if not item.gold_sources:
+            continue
+        gold = [s.key() for s in item.gold_sources]
+        ra, rb = recall_at_k(a.get(item.id, []), gold, k), recall_at_k(b.get(item.id, []), gold, k)
+        wins, losses, ties = wins + (rb > ra), losses + (rb < ra), ties + (rb == ra)
+    return {"better": wins, "worse": losses, "same": ties, "sign_test_p": round(sign_test(wins, losses), 4)}
 
 
 def score_runs(items: list[GoldItem], runs: dict[str, list[SourceKey]], ks: tuple[int, ...] = KS) -> dict:

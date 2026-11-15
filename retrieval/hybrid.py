@@ -6,6 +6,7 @@ max(k, CANDIDATES) of each. RRF uses ranks only, so the two retrievers' scores n
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import zip_longest
 from typing import Protocol
 
 from retrieval.common import NO_FILTERS, Filters, SearchResult
@@ -44,3 +45,15 @@ class HybridIndex:
             raise ValueError("k must be positive")
         depth = max(k, self.candidates)
         return rrf([self.bm25.search(query, depth, filters), self.dense.search(query, depth, filters)], k)
+
+
+def interleave(rankings: list[list[SearchResult]], k: int) -> list[SearchResult]:
+    """Round-robin merge (1st of each list, then 2nd of each...), without repeating a chunk: one search per entity
+    (run_retrieval, the context pack) or a preferred Item's results first (retrieval/statement.py)."""
+    out, seen = [], set()
+    for tier in zip_longest(*rankings):
+        for hit in tier:
+            if hit is not None and hit.chunk_id not in seen:
+                seen.add(hit.chunk_id)
+                out.append(hit)
+    return out[:k]

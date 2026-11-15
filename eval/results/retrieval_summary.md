@@ -1,10 +1,11 @@
 # Retrieval results (WP5)
 
-Recall@k and MRR of three retrievers (BM25, dense, hybrid RRF) over three chunking variants, with and without
-company + year filters, on the 73 gold-v1 questions that have gold sources. Produced by
-`python eval/run_retrieval.py`; the tables between the GENERATED markers are rewritten on every run, the text
-around them is kept. Design and choices: ADR-013 in `docs/decisions.md`; embedding model ADR-021; page
-furniture removed from the corpus ADR-023 (W1-04).
+Recall@k and MRR of three retrievers (BM25, dense, hybrid RRF) over three chunking variants and three filter
+settings, plus the W1-05 trials on C3 (period filter, statements first, cross-encoder reranking), on the 73
+gold-v1 questions that have gold sources. Produced by `python eval/run_retrieval.py --rerank`; the tables between
+the GENERATED markers are rewritten on every full run, the text around them is kept. Design and choices: ADR-013
+in `docs/decisions.md`; embedding model ADR-021; page furniture removed from the corpus ADR-023 (W1-04);
+retrieval default ADR-017 (W1-05).
 
 ## Setup
 
@@ -41,47 +42,128 @@ furniture removed from the corpus ADR-023 (W1-04).
 - **Hybrid:** reciprocal rank fusion of the top 50 from each retriever, score Σ 1/(60 + rank).
 - **Scoring** (`eval/retrieval_eval.py`): a retrieved chunk is a hit when its (ticker, fiscal year, fiscal
   period, Item) equals a gold source (ADR-009). Follow-ups are searched with the previous question prepended.
-- **Filters:** `none` searches all 120 filings. `company+year` restricts each search to the companies and fiscal
-  years the question names, taken from the gold item's `companies` and `fiscal_years` (correct by construction,
-  so an upper bound: the agent will have to extract them from the question, WP6); a question with several
-  companies or years gets one search per (company, year), and the results are interleaved. Form and quarter are
-  not filtered, so a 10-K question can still retrieve that year's 10-Qs, and vice versa.
-- `s/query` is wall-clock and includes embedding the query through the endpoint (one request per search, so a
-  filtered question with several companies or years pays several).
+- **Filters:** `none` searches all 120 filings. `question` restricts each search to the companies and fiscal
+  years read from the question by `retrieval/entities.py` (names, aliases and capitalised tickers from
+  `config/companies.yaml`, four-digit years and "FY24", "latest"; a follow-up keeps what it does not name from
+  the turn before): what the agent can do. `company+year` takes them from the gold item's `companies` and
+  `fiscal_years` (correct by construction, an upper bound). A question with several companies or years gets one
+  search per (company, year), and the results are interleaved.
+- **Trials (C3, hybrid; W1-05):** `+period` also filters on the fiscal period the question names (FY when it
+  names no quarter; "Q2", "second quarter", "six months" or "first half" = Q2, Q4 = the 10-K), which also picks
+  the form; a period the corpus does not index for that year is dropped. `+statement` (the Item 8 preference,
+  `retrieval/statement.py`): for a question that asks for a figure (a metric word and no "why", "drove",
+  "describe" ...), a second search restricted to the statement Item (Item 8, or Part I Item 1 of a 10-Q) is
+  interleaved first. `hybrid+rerank` reorders the hybrid top 30 with `cross-encoder/ms-marco-MiniLM-L-6-v2`
+  (`retrieval/rerank.py`, revision pinned, run locally on the CPU), each passage given as
+  `[TICKER FORM FYyyyy · Item]` plus its text.
+- **figure@5** (added in W1-05, after the first run showed the Item-level score and the passages disagreeing):
+  of the 59 questions whose gold answer states a figure as the gold set writes it ("391,035"), how many have it
+  verbatim in one of the first 5 chunks (any one of its figures for a multi-figure answer). recall@k asks for the
+  right Item; figure@5 asks for the chunk that answers.
+- **Paired tests:** the pairs in the third table were fixed before the first W1-05 run (`PAIRS` in the script).
+  For each, the questions better and worse in b than in a, with a two-sided sign test on those that differ.
+- `s/query` is wall-clock per question on a laptop CPU and moves by up to ~50% between runs with machine load.
+  Query embeddings are cached for the run, so only the first search of a question pays the endpoint request
+  (the unfiltered dense rows show ~0.00, the filtered ones Chroma's filtered search); a statement trial
+  searches twice per filter, and the
+  reranker scores 30 passages per search.
+- **Reproducibility:** BM25, the endpoint's vectors (identical bytes for the same text) and every filtered search
+  reproduce exactly; the `company+year` run files are byte-identical to the W1-04 ones. Unfiltered dense top-50
+  lists can differ by a few near-equal chunks between processes (Chroma's HNSW search is approximate; measured
+  with fixed query vectors). Against the W1-04 run files this changed the order of near-equal chunks for one
+  question each in C1 and C2 hybrid `none` (no score moved in this run); in another W1-05 run it moved C2 hybrid
+  `none` by 3 questions (recall@10 0.459 instead of 0.452, MRR 0.210 instead of 0.207).
 
 <!-- GENERATED:START (eval/run_retrieval.py) -->
-| Variant | Retriever | Filters | recall@1 | recall@5 | recall@10 | MRR | s/query |
-|---|---|---|---:|---:|---:|---:|---:|
-| C1 | bm25 | none | 0.103 | 0.322 | 0.445 | 0.240 | 0.60 |
-| C1 | bm25 | company+year | 0.342 | 0.692 | 0.822 | 0.539 | 0.03 |
-| C1 | dense | none | 0.123 | 0.295 | 0.500 | 0.235 | 0.06 |
-| C1 | dense | company+year | 0.281 | 0.671 | 0.829 | 0.488 | 0.36 |
-| C1 | hybrid | none | 0.144 | 0.342 | 0.493 | 0.268 | 0.65 |
-| C1 | hybrid | company+year | 0.295 | 0.685 | 0.842 | 0.519 | 0.34 |
-| C2 | bm25 | none | 0.116 | 0.274 | 0.452 | 0.223 | 0.51 |
-| C2 | bm25 | company+year | 0.295 | 0.664 | 0.842 | 0.513 | 0.02 |
-| C2 | dense | none | 0.089 | 0.288 | 0.514 | 0.219 | 0.05 |
-| C2 | dense | company+year | 0.240 | 0.658 | 0.808 | 0.456 | 0.30 |
-| C2 | hybrid | none | 0.103 | 0.308 | 0.452 | 0.207 | 0.55 |
-| C2 | hybrid | company+year | 0.301 | 0.719 | 0.829 | 0.529 | 0.31 |
-| C3 | bm25 | none | 0.137 | 0.301 | 0.418 | 0.227 | 0.54 |
-| C3 | bm25 | company+year | 0.308 | 0.685 | 0.842 | 0.527 | 0.02 |
-| C3 | dense | none | 0.110 | 0.425 | 0.589 | 0.264 | 0.05 |
-| C3 | dense | company+year | 0.322 | 0.740 | 0.836 | 0.546 | 0.31 |
-| C3 | hybrid | none | 0.103 | 0.336 | 0.548 | 0.230 | 0.56 |
-| C3 | hybrid | company+year | 0.301 | 0.774 | 0.870 | 0.550 | 0.30 |
+| Variant | Retriever | Filters | recall@1 | recall@5 | recall@10 | MRR | figure@5 | s/query |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| C1 | bm25 | none | 0.103 | 0.322 | 0.445 | 0.240 | 9/59 | 0.66 |
+| C1 | bm25 | question | 0.342 | 0.692 | 0.822 | 0.539 | 17/59 | 0.03 |
+| C1 | bm25 | company+year | 0.342 | 0.692 | 0.822 | 0.539 | 17/59 | 0.03 |
+| C1 | dense | none | 0.123 | 0.295 | 0.500 | 0.235 | 16/59 | 0.06 |
+| C1 | dense | question | 0.281 | 0.671 | 0.829 | 0.488 | 29/59 | 0.38 |
+| C1 | dense | company+year | 0.281 | 0.671 | 0.829 | 0.488 | 29/59 | 0.33 |
+| C1 | hybrid | none | 0.144 | 0.342 | 0.493 | 0.268 | 17/59 | 0.70 |
+| C1 | hybrid | question | 0.295 | 0.685 | 0.842 | 0.519 | 24/59 | 0.34 |
+| C1 | hybrid | company+year | 0.295 | 0.685 | 0.842 | 0.519 | 24/59 | 0.34 |
+| C2 | bm25 | none | 0.116 | 0.274 | 0.452 | 0.223 | 9/59 | 0.63 |
+| C2 | bm25 | question | 0.295 | 0.664 | 0.842 | 0.513 | 21/59 | 0.03 |
+| C2 | bm25 | company+year | 0.295 | 0.664 | 0.842 | 0.513 | 21/59 | 0.03 |
+| C2 | dense | none | 0.089 | 0.288 | 0.514 | 0.219 | 15/59 | 0.00 |
+| C2 | dense | question | 0.240 | 0.658 | 0.808 | 0.456 | 27/59 | 0.32 |
+| C2 | dense | company+year | 0.240 | 0.658 | 0.808 | 0.456 | 27/59 | 0.30 |
+| C2 | hybrid | none | 0.103 | 0.308 | 0.452 | 0.207 | 17/59 | 0.55 |
+| C2 | hybrid | question | 0.301 | 0.719 | 0.829 | 0.529 | 24/59 | 0.31 |
+| C2 | hybrid | company+year | 0.301 | 0.719 | 0.829 | 0.529 | 24/59 | 0.29 |
+| C3 | bm25 | none | 0.137 | 0.301 | 0.418 | 0.227 | 3/59 | 0.49 |
+| C3 | bm25 | question | 0.308 | 0.685 | 0.842 | 0.527 | 9/59 | 0.02 |
+| C3 | bm25 | company+year | 0.308 | 0.685 | 0.842 | 0.527 | 9/59 | 0.02 |
+| C3 | dense | none | 0.110 | 0.425 | 0.589 | 0.264 | 19/59 | 0.00 |
+| C3 | dense | question | 0.322 | 0.740 | 0.836 | 0.546 | 30/59 | 0.24 |
+| C3 | dense | company+year | 0.322 | 0.740 | 0.836 | 0.546 | 30/59 | 0.29 |
+| C3 | hybrid | none | 0.103 | 0.336 | 0.548 | 0.230 | 12/59 | 0.53 |
+| C3 | hybrid | question | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
+| C3 | hybrid | company+year | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
 
-By question category, best setting (C3 hybrid, filters company+year):
+Trials on C3 (period filter, statement Item first, cross-encoder reranking):
+
+| Retriever | Filters | recall@1 | recall@5 | recall@10 | MRR | figure@5 | s/query |
+|---|---|---:|---:|---:|---:|---:|---:|
+| hybrid | question | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
+| hybrid | company+year | 0.301 | 0.774 | 0.870 | 0.550 | 23/59 | 0.25 |
+| hybrid | question+period | 0.377 | 0.890 | 0.959 | 0.633 | 25/59 | 0.55 |
+| hybrid | question+period+statement | 0.808 | 0.986 | 1.000 | 0.975 | 31/59 | 0.97 |
+| hybrid | company+year+period | 0.377 | 0.890 | 0.959 | 0.633 | 25/59 | 0.51 |
+| hybrid | company+year+period+statement | 0.808 | 0.986 | 1.000 | 0.975 | 31/59 | 0.95 |
+| hybrid+rerank | question | 0.281 | 0.726 | 0.836 | 0.493 | 29/59 | 6.39 |
+| hybrid+rerank | company+year | 0.281 | 0.726 | 0.836 | 0.493 | 29/59 | 5.87 |
+| hybrid+rerank | question+period | 0.397 | 0.856 | 0.932 | 0.609 | 37/59 | 6.00 |
+| hybrid+rerank | question+period+statement | 0.822 | 1.000 | 1.000 | 0.986 | 42/59 | 9.46 |
+| hybrid+rerank | company+year+period | 0.397 | 0.856 | 0.932 | 0.609 | 37/59 | 4.98 |
+| hybrid+rerank | company+year+period+statement | 0.822 | 1.000 | 1.000 | 0.986 | 42/59 | 9.93 |
+
+Paired on C3: questions better / worse with b than with a, by recall@5 (all questions with gold sources) and by the answer figure in the first 5 chunks (questions whose gold answer states one), with a two-sided sign test on the questions that differ:
+
+| a | b | recall@5 better / worse / same | p | figure better / worse | p |
+|---|---|---|---:|---|---:|
+| hybrid, question | hybrid, company+year | 0 / 0 / 73 | 1.000 | 0 / 0 | 1.000 |
+| hybrid, question | hybrid, question+period | 11 / 1 / 61 | 0.006 | 2 / 0 | 0.500 |
+| hybrid, question+period | hybrid, question+period+statement | 11 / 0 / 62 | 0.001 | 8 / 2 | 0.109 |
+| hybrid, question | hybrid+rerank, question | 6 / 12 / 55 | 0.238 | 14 / 8 | 0.286 |
+| hybrid, question+period | hybrid+rerank, question+period | 4 / 8 / 61 | 0.388 | 17 / 5 | 0.017 |
+| hybrid, question+period+statement | hybrid+rerank, question+period+statement | 1 / 0 / 72 | 1.000 | 14 / 3 | 0.013 |
+| hybrid, company+year | hybrid, company+year+period+statement | 21 / 0 / 52 | <0.001 | 10 / 2 | 0.039 |
+
+By question category, best setting (C3 hybrid+rerank, filters question+period+statement):
 
 | Category | n | recall@1 | recall@5 | recall@10 | MRR |
 |---|---:|---:|---:|---:|---:|
-| fact | 15 | 0.267 | 0.867 | 0.933 | 0.503 |
-| ratio | 15 | 0.333 | 0.867 | 0.867 | 0.484 |
-| period_comparison | 12 | 0.250 | 0.583 | 0.750 | 0.626 |
-| multi_company | 10 | 0.100 | 0.650 | 0.750 | 0.508 |
-| qualitative | 12 | 0.583 | 0.833 | 0.917 | 0.679 |
-| multi_turn | 6 | 0.000 | 0.667 | 1.000 | 0.381 |
-| refuse | 3 | 0.667 | 1.000 | 1.000 | 0.778 |
+| fact | 15 | 1.000 | 1.000 | 1.000 | 1.000 |
+| ratio | 15 | 1.000 | 1.000 | 1.000 | 1.000 |
+| period_comparison | 12 | 0.500 | 1.000 | 1.000 | 1.000 |
+| multi_company | 10 | 0.500 | 1.000 | 1.000 | 1.000 |
+| qualitative | 12 | 0.833 | 1.000 | 1.000 | 0.917 |
+| multi_turn | 6 | 1.000 | 1.000 | 1.000 | 1.000 |
+| refuse | 3 | 1.000 | 1.000 | 1.000 | 1.000 |
+
+By question category, best setting with question-derived filters and no reranker (C3 hybrid, filters question+period+statement):
+
+| Category | n | recall@1 | recall@5 | recall@10 | MRR |
+|---|---:|---:|---:|---:|---:|
+| fact | 15 | 1.000 | 1.000 | 1.000 | 1.000 |
+| ratio | 15 | 1.000 | 1.000 | 1.000 | 1.000 |
+| period_comparison | 12 | 0.500 | 1.000 | 1.000 | 1.000 |
+| multi_company | 10 | 0.500 | 1.000 | 1.000 | 1.000 |
+| qualitative | 12 | 0.750 | 0.917 | 1.000 | 0.847 |
+| multi_turn | 6 | 1.000 | 1.000 | 1.000 | 1.000 |
+| refuse | 3 | 1.000 | 1.000 | 1.000 | 1.000 |
+
+Question-derived filters against the items' own (retrieval/entities.py; exact matches, items with gold sources; a period counts as FY when the question names none):
+
+| Set | n | companies | fiscal years | periods | all three |
+|---|---:|---:|---:|---:|---:|
+| development set | 14 | 14 | 14 | 14 | 14 |
+| gold-v1 | 73 | 73 | 73 | 73 | 73 |
 
 73 gold questions with gold sources (gold-v1); items without sources (out-of-scope refusals) are skipped.
 <!-- GENERATED:END -->
@@ -95,15 +177,17 @@ the right filing is often outranked by look-alikes from other companies and year
 extract company and year from the question and filter before ranking (WP6).
 
 **With filters, hybrid C3 is the best setting:** recall@5 0.774, recall@10 0.870, MRR 0.550, the highest of the
-18 rows on all three (recall@1 is led by C1 BM25, 0.342, against 0.301). On C3, dense with bge-small is now the
+grid's filtered rows on all three (recall@1 is led by C1 BM25, 0.342, against 0.301). On C3, dense with bge-small is now the
 stronger single retriever (recall@5 0.740 vs BM25 0.685); on C1 and C2 the two are level (0.671 vs 0.692,
 0.658 vs 0.664). They still find different things: at rank 5 on C3, 9 questions are hit only by BM25 and 10 only
 by dense (union 67 of 73), and hybrid hits 62: 60 of those 67 plus 2 that neither finds alone in its top 5.
 Hybrid helps C2 (0.719, above both its parts) and C3, and is level on C1 (0.685 vs BM25 0.692).
 
 **C3 (table-aware) helps where it should.** Whole tables with their caption keep a statement's title, units,
-dates and rows together: C3 has the best filtered recall@5 for dense (0.740) and hybrid (0.774), and its fact
-and ratio questions reach recall@5 0.867. For BM25 the three variants are within noise (0.664-0.692). With
+dates and rows together: C3 has the best filtered recall@5 for dense (0.740) and hybrid (0.774). For BM25 the
+three variants are within noise by recall@5 (0.664-0.692), but BM25 on C3 rarely ranks the chunk holding the
+answer figure first (figure@5 9/59 with filters, against 17 on C1 and 21 on C2), whereas dense C3 has the most
+(30/59). With
 bge-small's 512-token limit C2's larger chunks are almost never cut (0.6%, against about 23% at MiniLM's 256).
 
 **Without filters dense is the best retriever on C3** (recall@5 0.425 and recall@10 0.589, the best unfiltered
@@ -135,14 +219,50 @@ two-sided sign test on those; differences of a few questions are noise.
 - *Net, against the previous committed table (MiniLM on the old corpus):* C3 hybrid with filters recall@5 0.747
   → 0.774 (6 better, 3 worse, p = 0.51), C3 dense with filters 0.630 → 0.740 (16 / 8, p = 0.15).
 
-**Where it still misses** (C3 hybrid, filtered, rank 5): 25 gold sources are missed (27 before). 22 of them are
-in the right filing but the wrong Item, 21 being statement questions (gold Item 8, or Part I Item 1 for a 10-Q)
-where the MD&A chunks that repeat the same figures are ranked higher. For the answer these chunks often hold the
-right number, but the citation rule (spec §8) asks for the statement, so they count as misses. The other 3 (9
-before) had no chunk of the gold filing in the top 5; all three ask about a 10-K and get that fiscal year's
-10-Qs instead (GOOGL in a period comparison, NVIDIA in a multi-company question, NVIDIA in a qualitative one).
-Form and quarter are not filtered. Period comparisons (recall@5 0.583) and multi-company questions (0.650) are
-lowest because each needs two or more sources inside five results.
+**W1-05: question-derived filters equal the gold ones.** Read from the question, companies, years and periods
+match the gold items exactly on all 73 gold questions with sources and on 14 of 14 development questions, so the
+`question` and `company+year` rows are identical in every variant (0 questions differ). One gold question was
+read wrongly in the first run (A15, "first half of fiscal 2025" took no quarter); "first half" was added with
+"six months" as the standard name of the Q2 year to date, with a test. The gold set is not a held-out test of
+the reader after that fix, and real users will phrase things the rules do not know; a missed entity fails open
+(no filter is a wider search, never a wrong one), while a wrongly read company or year narrows the search to the
+wrong filing, which the planner can see in the filters it passes.
+
+**The period filter helps.** Also filtering on the fiscal period (C3 hybrid): recall@5 0.774 -> 0.890 (11
+better, 1 worse, p = 0.006), recall@10 0.959. It removes most of the misses W1-04 left where a 10-K question
+got that year's 10-Qs.
+
+**Statements first fixes the wrong-Item misses; read its recall with care.** With the statement Item interleaved
+first for figure questions: recall@5 0.890 -> 0.986 (11 better, 0 worse, p = 0.001), recall@1 0.377 -> 0.808,
+MRR 0.633 -> 0.975. Most of that is by construction: the gold source of a figure question is its statement
+Item (spec §8), and the trial puts a chunk of that Item first. The passage-level check is smaller: figure@5 25
+-> 31 of 59 (8 better, 2 worse, p = 0.11, not significant alone); against company+year without either trial,
+period + statements gives 21 / 0 by recall@5 and 10 / 2 by figure (p = 0.039). In all 28 questions where this
+setting misses the figure, the figure is in a chunk of the right Item, just not in the first five chunks (Item
+8 holds every statement and the notes; figure@10 is 45 of 59). The only recall@5 miss left is E05 (what drove
+Bank of America's net interest income), a qualitative question the statement trial does not touch.
+
+**The reranker finds the answering chunk, not the Item.** By recall@5 the cross-encoder looks neutral or worse
+(question filters 0.774 -> 0.726, 6 better / 12 worse, p = 0.24), but by figure@5 it is better in every pair
+and significantly so with the trials: with the period filter 25 -> 37 (17 / 5, p = 0.017), with period +
+statements 31 -> 42 (14 / 3, p = 0.013), where recall@5 reaches 1.000 (E05 found) and MRR 0.986. It reads the passage against
+the question, so it moves the chunk with the asked-for line up, often an MD&A chunk that repeats it, which costs
+Item-level recall. The price is time: ~5-6 s per question with one search, ~9-10 s with statements first
+(two reranked searches per filter), against ~0.3-1.0 s without, on a laptop CPU, while the spec allows 60 s for
+the whole question (§9) and an agent question makes several searches.
+
+**Default (ADR-017).** `search_filings` keeps C3 hybrid and puts the statements first for a figure question
+whose filters name a fiscal period; the planner passes the company, year and period the question names
+(`retrieval/entities.py` reads them). That is the best setting without the reranker (recall@5 0.986, figure@5
+31/59, ~1 s per question). Reranking is opt-in (`RETRIEVAL_RERANK=true`): it is the best setting found (figure@5
+42/59) but adds ~4-6 s per search, so it waits until the agent's end-to-end latency is measured (W2); turning
+it on is one setting, with no index change.
+
+**Where W1-04 missed** (C3 hybrid, company+year, rank 5; before the W1-05 trials): 25 gold sources were missed
+(27 before W1-04). 22 of them were in the right filing but the wrong Item, 21 being statement questions (gold
+Item 8, or Part I Item 1 for a 10-Q) where the MD&A chunks that repeat the same figures ranked higher; the other
+3 asked about a 10-K and got that fiscal year's 10-Qs. The W1-05 period filter and statements-first trial
+address exactly these two patterns (above).
 
 **Reading the numbers.** 73 questions: one question moves recall by 0.014, so differences below ~0.04 (three
 questions) between rows are within noise. For a question with two gold sources recall@1 is at most 0.5, so
@@ -150,8 +270,8 @@ recall@1 understates period-comparison and multi-company retrieval. The refuse r
 reported" traps (JPM gross profit, AMZN total liabilities, UNH R&D), whose gold source is the statement that
 shows the line is absent.
 
-**Next steps.** Use C3 + hybrid with company+year filters as the default retriever for WP6 (W1-05 measures it
-with question-derived filters); extract the filters from the question; add form and quarter filters (a question
-about an annual figure should search 10-Ks, a quarterly one its quarter's 10-Q); prefer Item 8 chunks for
-statement metrics or use the XBRL facts tool (WP3) for them; name the company in the chunk header (above); a
-reranker could address the remaining ranking losses.
+**Next steps.** The planner (WP6) passes the question's company, year and period to `search_filings` (with
+`retrieval/entities.py`); measure end-to-end latency and turn reranking on if it fits the 60 s budget; rank the
+right statement table within Item 8 (the remaining figure misses), or answer statement metrics from the XBRL
+facts tool (WP3); name the company in the chunk header (above); raise unfiltered dense search's `ef_search` (or
+search exactly) so unfiltered rows reproduce exactly.

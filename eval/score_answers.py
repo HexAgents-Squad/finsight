@@ -65,7 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import yaml  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
-from core.figures import SCALE_WORDS, Figure, figures  # noqa: E402  (the figure reader, shared with the critic)
+from core.figures import GROUPED_FIGURE, SCALE_WORDS, Figure, figures  # noqa: E402  (shared with the critic)
 from core.llm import strip_thinking  # noqa: E402
 from eval.context_pack import GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
 from eval.context_pack import REFUSAL_PATH as REFUSALS_FILE  # noqa: E402
@@ -129,7 +129,6 @@ DERIVED_RE = re.compile(r"\b(?:deriv|calculat|comput|estimat|approximat)\w*", re
 DECREASE_RE = re.compile(r"\b(?:decreas\w*|declin\w*|fell|fall\w*|dropp?\w*|lower\w*|down|reduc\w*|shr[aiu]nk\w*)\b",
                          re.IGNORECASE)
 CITATION_MARK = re.compile(r"\s*\[P\d+\]")
-GROUPED_FIGURE = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+)(?![\d,])")   # a dollar figure as the gold set writes it
 
 
 # --------------------------------------------------------------------------------------------- numbers

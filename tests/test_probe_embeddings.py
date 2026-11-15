@@ -187,10 +187,10 @@ def test_chunk_length_summary_counts_both_limits():
 
 
 def test_sign_test_is_the_exact_two_sided_binomial():
-    import scripts.compare_embedding_runs as ce
-    assert ce.sign_test(0, 0) == 1.0 and ce.sign_test(5, 5) == 1.0
-    assert abs(ce.sign_test(23, 5) - 0.000903) < 1e-5                  # the dense / no-filter row (measured)
-    assert ce.sign_test(1, 0) == 1.0 and abs(ce.sign_test(6, 0) - 0.03125) < 1e-9
+    from eval.retrieval_eval import sign_test
+    assert sign_test(0, 0) == 1.0 and sign_test(5, 5) == 1.0
+    assert abs(sign_test(23, 5) - 0.000903) < 1e-5                     # the dense / no-filter row (measured)
+    assert sign_test(1, 0) == 1.0 and abs(sign_test(6, 0) - 0.03125) < 1e-9
 
 
 def test_paired_comparison_counts_questions_per_model():

@@ -19,7 +19,8 @@ forms:
 #   fiscal_year_end_month  month the fiscal year USUALLY ends (1–12), for code. 52/53-week years can end a few
 #                          days into the next month (J&J FY2022 ended 1 Jan 2023), so never derive the fiscal-year
 #                          label from a period-end date; use the XBRL fy/fp labels.
-#   aliases                names users type, matched case-insensitively as whole words by the planner. Bare
+#   aliases                names users type, matched case-insensitively as whole words by the planner (a one-word
+#                          name only when not all in lower case: "chase growth" is not JPMorgan). Bare
 #                          tickers also match, but only when written in capitals (so the ticker "C" never matches
 #                          the letter "c").
 companies:

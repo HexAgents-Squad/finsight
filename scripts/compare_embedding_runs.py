@@ -13,7 +13,6 @@ Exit codes: 0 = written, 2 = a run file or the gold set is missing.
 from __future__ import annotations
 
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -21,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eval.retrieval_eval import hit_key, recall_at_k, score_runs  # noqa: E402
+from eval.retrieval_eval import hit_key, score_runs  # noqa: E402
+from eval.retrieval_eval import paired_recall as compare  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_FILE  # noqa: E402
 from eval.validate_gold import validate_file  # noqa: E402
 
@@ -30,32 +30,12 @@ RESULTS = ROOT / "eval" / "results"
 MODELS = {"all-MiniLM-L6-v2": RESULTS / "embedding_comparison" / "runs_minilm",
           "bge-small-en-v1.5": RESULTS / "embedding_comparison" / "runs_bge"}
 SETTINGS = [("C3", r, f) for r in ("dense", "hybrid") for f in ("none", "company_year")]
-PAIRED_K = 5
 OUT_DIR = RESULTS                       # where the report goes (the inputs stay under RESULTS)
 
 
 def load_run(path: Path) -> dict[str, list]:
     return {r["id"]: [hit_key(x) for x in r["retrieved"]]
             for r in (json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())}
-
-
-def sign_test(wins: int, losses: int) -> float:
-    """Two-sided exact binomial (p = 0.5) on the questions where the two models differ."""
-    n = wins + losses
-    if n == 0:
-        return 1.0
-    tail = sum(math.comb(n, i) for i in range(min(wins, losses) + 1)) / 2 ** n
-    return min(1.0, 2 * tail)
-
-
-def compare(items: list, a: dict[str, list], b: dict[str, list], k: int = PAIRED_K) -> dict[str, float | int]:
-    """Questions where b's recall@k is higher, lower or equal than a's, and the sign test on the first two."""
-    wins = losses = ties = 0
-    for item in items:
-        gold = [s.key() for s in item.gold_sources]
-        ra, rb = recall_at_k(a.get(item.id, []), gold, k), recall_at_k(b.get(item.id, []), gold, k)
-        wins, losses, ties = wins + (rb > ra), losses + (rb < ra), ties + (rb == ra)
-    return {"better": wins, "worse": losses, "same": ties, "sign_test_p": round(sign_test(wins, losses), 4)}
 
 
 def main() -> int:

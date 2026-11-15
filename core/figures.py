@@ -25,6 +25,9 @@ NOT_A_FIGURE = re.compile(
     r"|\b10-[KQ]s?\b|\b(?:Part\s+I{1,2}\s+)?Item\s+\d{1,2}[A-C]?\b|\bQ[1-4]\b|\b\d+Q\d{2,4}\b|\bFY\s?\d{2,4}\b"
     r"|\b\d+(?:st|nd|rd|th)\b|\bS&P\s*500\b|\bCOVID-19\b|(?<=[A-Za-z)])\(\d{1,2}\)|\[P\d+\]|\bP\d+\b",
     re.IGNORECASE)
+# A dollar figure as the gold set writes it ("391,035"): what the verbatim-figure checks look for (ADR-012
+# check 2, W1-08 evidence, W1-05 answer figure in the retrieved chunks)
+GROUPED_FIGURE = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+)(?![\d,])")
 PERCENT_RANGE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%")       # "10-12%" -> "10% 12%"
 FIGURE = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(?:\s*(%|percent|per cent|pp|percentage points?)"
                     r"|\s*(thousands?|millions?|billions?|trillions?|bn|mn|mm|tn|k|m|b)\b)?(?![\w%])", re.IGNORECASE)
@@ -55,3 +58,8 @@ def figures(text: str) -> list[Figure]:
         decimals = len(frac) - 1 if frac else 0
         out.append(Figure(number * scale, 0.5 * 10 ** -decimals * scale, bool(pct), m.group(0).strip()))
     return out
+
+
+def contains_figure(text: str, figure: str) -> bool:
+    """Whether `figure` ("391,035") appears in `text` as a whole number, not inside a longer one ("1,391,035")."""
+    return re.search(rf"(?<![\d,]){re.escape(figure)}(?![\d,])", text) is not None
