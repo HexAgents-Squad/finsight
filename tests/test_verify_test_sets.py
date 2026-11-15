@@ -1,6 +1,6 @@
 """eval/verify_test_sets.py (W1-10): the verifier's sheet and the apply step, on copies of the real test sets."""
 import csv
-import shutil
+import json
 
 import pytest
 
@@ -10,11 +10,14 @@ from eval.validate_test_sets import SETS
 
 @pytest.fixture
 def sets(tmp_path, monkeypatch):
-    """Copies of the committed refusal and injection sets; the script reads and writes only these."""
+    """Copies of the committed refusal and injection sets as they were before verification (verified_by null);
+    the script reads and writes only these."""
     copies = {}
     for name, (model, item_rules, set_rules, path) in SETS.items():
         copy = tmp_path / path.name
-        shutil.copy(path, copy)
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        copy.write_text("".join(json.dumps({**r, "verified_by": None}, ensure_ascii=False) + "\n" for r in records),
+                        encoding="utf-8", newline="\n")
         copies[name] = (model, item_rules, set_rules, copy)
     monkeypatch.setattr(vt, "SETS", copies)
     return {name: spec[3] for name, spec in copies.items()}

@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 WORKFLOWS = sorted((Path(__file__).resolve().parents[1] / ".github" / "workflows").glob("*.yml"))
-REQUIRED_RUNS = ["ruff check .", "pytest -q", "python eval/validate_gold.py --final", "python eval/validate_test_sets.py",
+REQUIRED_RUNS = ["ruff check .", "pytest -q", "python eval/validate_gold.py --final", "python eval/validate_test_sets.py --final",
                  "python eval/validate_dev_set.py --final"]
 
 
