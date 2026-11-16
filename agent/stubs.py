@@ -1,0 +1,65 @@
+"""Stub nodes for the W2-01 skeleton: the graph runs end to end before any node is built.
+
+Each Week 2 ticket replaces one stub with its node: the planner (W2-02), the executor (W2-04), the critic (W2-05)
+and the composer (W2-06). The stubs make no LLM or tool call:
+- planner: reads the companies, years and periods (retrieval.entities.from_turns, ADR-017) and plans no steps;
+- executor: runs nothing;
+- composer: a refusal sentence for a refusal plan (docs/spec.md §6), otherwise a placeholder without citations;
+- critic: the spec §8 checks (agent/critic_checks.check_contract), so the placeholder fails, is sent back once and
+  ends as "could not verify": the skeleton shows every bound working.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from agent.contract import AnswerContract, refusal_answer
+from agent.critic_checks import QuestionScope, check_contract
+from agent.state import AgentState, Plan, Verdict
+from retrieval.entities import from_turns
+
+if TYPE_CHECKING:
+    from agent.graph import Nodes
+
+SKELETON_ANSWER = ("FinSight's agent skeleton ran every step but cannot answer yet: the planner, tools and writer "
+                   "are still stubs.")
+REFUSAL_SUGGESTION = "Apple's total revenue for fiscal 2024"
+
+
+async def plan_stub(state: AgentState) -> dict[str, Any]:
+    entities = from_turns([*state.get("history", []), state["question"]])
+    plan = Plan(reasoning="W2-01 skeleton: no planner yet, so no tool steps.", refuse=False, refusal_rule=None,
+                steps=[])
+    return {"entities": entities, "plan": plan}
+
+
+async def execute_stub(state: AgentState) -> dict[str, Any]:
+    return {}
+
+
+async def compose_stub(state: AgentState) -> dict[str, Any]:
+    plan = state.get("plan")
+    if plan is not None and plan.refuse:
+        draft = AnswerContract(answer=refusal_answer(plan.refusal_rule, REFUSAL_SUGGESTION), verified=False,
+                               refused=True, refusal_rule=plan.refusal_rule)
+    else:
+        draft = AnswerContract(answer=SKELETON_ANSWER, verified=False, refused=False)
+    return {"draft": draft}
+
+
+def question_scope(state: AgentState) -> QuestionScope | None:
+    """The planner's entities as the critic's scope (spec §8 invariant 4); None when nothing was read."""
+    entities = state.get("entities")
+    if entities is None:
+        return None
+    return QuestionScope(frozenset(entities.tickers), frozenset(entities.years), frozenset(entities.periods))
+
+
+async def critic_stub(state: AgentState) -> dict[str, Any]:
+    return {"verdict": Verdict.of(check_contract(state["draft"], question_scope(state), state["question"]))}
+
+
+def stub_nodes() -> Nodes:
+    """The four stubs (agent.graph imports this module lazily, so importing agent.graph here is no cycle)."""
+    from agent.graph import Nodes
+
+    return Nodes(planner=plan_stub, executor=execute_stub, composer=compose_stub, critic=critic_stub)

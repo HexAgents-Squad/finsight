@@ -8,6 +8,8 @@ requires-python = ">=3.11"
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-ra"
+# langsmith (a langgraph dependency) calls asyncio.iscoroutinefunction, deprecated from Python 3.14
+filterwarnings = ["ignore:.asyncio.iscoroutinefunction. is deprecated:DeprecationWarning"]
 
 [tool.ruff]
 line-length = 110

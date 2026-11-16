@@ -229,6 +229,11 @@ def _for_decoding(node: Any) -> Any:
     return out
 
 
+def decoding_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Any strict model's JSON schema made plain for guided decoding (as _for_decoding), e.g. the planner's Plan."""
+    return _for_decoding(model.model_json_schema())
+
+
 CITATION_KIND_FIELDS = {"filing": ("item", "chunk_id"), "xbrl": ("concept", "accession_no")}
 
 

@@ -49,6 +49,7 @@ def test_only_week1_adrs_are_listed_in_order():
     rows = wn.week1_adrs()
     assert [r[0] for r in rows] == sorted(r[0] for r in rows) and "ADR-015" not in [r[0] for r in rows]
     assert {"ADR-016", "ADR-017", "ADR-018", "ADR-023"} <= {r[0] for r in rows}
+    assert "ADR-024" not in [r[0] for r in rows]                        # dated 16 Nov: Week 2's
     assert all(len(r[2]) <= 160 for r in rows)
 
 

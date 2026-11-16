@@ -12,7 +12,7 @@ reports. Every number in the tables is read from a committed file, so a fresh cl
     eval/results/retrieval_summary.md    eval/run_retrieval.py (W1-04, W1-05)
     eval/results/embedding_comparison.md scripts/compare_embedding_runs.py (W1-16)
     eval/gold_set.jsonl, eval/dev_set.jsonl, eval/refusal_tests.jsonl, eval/injection_tests.jsonl
-    docs/decisions.md                    the ADRs dated in Week 1
+    docs/decisions.md                    the ADRs dated in Week 1 (8-15 Nov; later ones are Week 2's)
 A source table that is missing or changed shape is an error naming the file, never a silently empty cell.
 Exit codes: 0 = written (or current with --check), 1 = stale (--check) or a source is unreadable.
 """
@@ -32,7 +32,8 @@ REPORT_DIR = REPO / "docs" / "report"
 NOTE = REPORT_DIR / "week1_results_note.md"
 DETAILED = REPORT_DIR / "week1_detailed_results.md"
 START, END = "<!-- GENERATED:START (scripts/week1_notes.py) -->", "<!-- GENERATED:END -->"
-WEEK1_FIRST_DAY = (11, 8)                          # ADRs dated 8 Nov 2026 or later are Week 1's
+WEEK1_FIRST_DAY = (11, 8)                          # ADRs dated 8-15 Nov 2026 are Week 1's
+WEEK1_LAST_DAY = (11, 15)                          # Week 2 starts on 16 Nov (ADR-024 onwards)
 MONTHS = {"Oct": 10, "Nov": 11, "Dec": 12}
 
 # Short, readable names for the run ids (the reports use the full ids)
@@ -211,7 +212,7 @@ def week1_adrs() -> list[list[str]]:
         if len(c) != 7:                                 # a '|' inside a cell would shift the Status column
             raise SourceError(f"docs/decisions.md: {c[0]} has {len(c)} cells, not 7")
         m = re.match(r"(\d+) (\w{3})", c[1])
-        if not m or (MONTHS.get(m.group(2), 0), int(m.group(1))) < WEEK1_FIRST_DAY:
+        if not m or not WEEK1_FIRST_DAY <= (MONTHS.get(m.group(2), 0), int(m.group(1))) <= WEEK1_LAST_DAY:
             continue
         decision = re.split(r"(?<=\.)\s(?=[A-Z(`])", c[3], maxsplit=1)[0]      # the first full sentence
         rows.append([c[0], c[1], decision if len(decision) <= 160 else decision[:157].rstrip() + "...",

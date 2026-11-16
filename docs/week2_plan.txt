@@ -37,37 +37,40 @@ Everything below that does not exist yet is planned; the ticket that creates it 
     question (+ earlier turns)
           │
           ▼
-    ┌────────────┐  refuse (R1–R7) ─────────────────────────────────────────────┐
-    │  PLANNER   │  entities (company, year, period) · plan: ordered tool steps  │
-    └─────┬──────┘                                                               │
+    ┌────────────┐  refuse (R1–R7) ───────────────────────────────────────────────┐
+    │  PLANNER   │  entities (company, year, period) · plan: ordered tool steps   │
+    └─────┬──────┘                                                                │
           │ Plan (JSON, guided)                                                   │
           ▼                                                                       │
     ┌────────────┐  search_filings (filters from the question, statements first)  │
-    │  EXECUTOR  │  get_financial_fact (XBRL) · calculate · compare_periods        │
-    │            │  guards: 10 steps, repeated call, token budget, 60 s            │
+    │  EXECUTOR  │  get_financial_fact (XBRL) · calculate · compare_periods       │
+    │            │  guards: 10 steps, repeated call, token budget, 60 s           │
     └─────┬──────┘  tool error → back to the planner once (replan)                │
           │ tool results                                                          │
           ▼                                                                       │
-    ┌────────────┐  draft answer with a reasoning field, citations = passage ids   │
-    │  ANALYST / │                                                                │
-    │  COMPOSER  │                                                                │
-    └─────┬──────┘                                                                │
-          ▼                                                                       │
-    ┌────────────┐  check_contract (W1-07) + recomputed numbers + units           │
-    │   CRITIC   │  fail → back to the executor once → else "could not verify"    │
-    └─────┬──────┘                                                                │
-          ▼                                                                       ▼
+    ┌────────────┐  draft answer with a reasoning field, citations = passage ids  │
+    │  ANALYST / │ ◄──────────────────────────────────────────────────────────────┘
+    │  COMPOSER  │  (a refusal: the §6 sentence)
+    └─────┬──────┘
+          ▼
+    ┌────────────┐  check_contract (W1-07) + recomputed numbers + units
+    │   CRITIC   │  fail → back to the executor once (a refusal: to the composer)
+    └─────┬──────┘  fails again → "could not verify"
+          ▼
     Answer (agent/contract.py: answer, value, unit, citations → SEC links, verified flag, refusal rule)
 
-State (agent/state.py, W2-01): messages and earlier turns, entities, plan, tool calls and results, draft answer,
-critic verdict, step / token / time counters, errors. Every LLM output that drives control flow is a pydantic
-model sent as json_schema (ADR-016) with one retry on invalid JSON. Settings: AGENT_MAX_STEPS = 10,
-AGENT_TOKEN_BUDGET, AGENT_TIMEOUT_S = 60. Memory across turns (W2-06): a LangGraph checkpointer (in memory for
-now) and retrieval.entities.from_turns for follow-ups. Tracing (W2-08): every node and tool call in Langfuse,
-tagged with the question id; off in tests.
+Refusals skip the executor; the composer writes them and the critic checks them like any answer (spec §8
+invariant 5). State (agent/state.py, W2-01): question, earlier turns, limits, messages, entities, plan, tool calls
+and results, draft answer, critic verdict, token and per-node run counters, errors (time: the run's 60 s limit and
+AgentRun.seconds). Every LLM output that drives control flow is a pydantic model sent as json_schema (ADR-016)
+with one retry on invalid JSON. Settings (existing, core/settings.py): MAX_AGENT_STEPS = 10, MAX_TOKENS_PER_QUERY =
+12,000, QUERY_TIMEOUT_S = 60. Memory across turns (W2-06): a LangGraph checkpointer (in memory for now, with
+serde=agent.graph.checkpoint_serde()) and retrieval.entities.from_turns for follow-ups. Tracing (W2-08): every
+node and tool call in Langfuse, tagged with the question id; off in tests.
 
-Around the graph: api/main.py (W2-09: POST /ask, GET /health, reply cache, rate limit, agent in a worker thread)
-and ui/app.py (W2-10: chat, answer card with the verified badge and citations, trace expander, disclaimer).
+Around the graph: api/main.py (W2-09: POST /ask, GET /health, reply cache, rate limit; it awaits agent.graph.run
+with one compiled graph shared by all requests) and ui/app.py (W2-10: chat, answer card with the verified badge
+and citations, trace expander, disclaimer).
 Evaluation (W2-11): eval/run_agent.py writes a RunRecord per question (with its tool calls) for the same scorer.
 
 3. Tickets, owners and execution order
@@ -108,7 +111,7 @@ parallel with W2-04). Full ticket text (goal, steps, acceptance criteria) is in 
   PR reviewed.
 - Prompts are tuned on the development set only and pinned by sha256 before any gold run; gold-v1 stays frozen.
 - The shared key: one evaluation run at a time, through the reply cache; announce long runs in the team chat.
-- Decisions with numbers go into docs/decisions.md (next free ADR: ADR-024).
+- Decisions with numbers go into docs/decisions.md (next free ADR: ADR-025; ADR-024 = the agent graph, W2-01).
 
 5. Risks
 ========
