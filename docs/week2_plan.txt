@@ -61,8 +61,8 @@ Everything below that does not exist yet is planned; the ticket that creates it 
 
 State (agent/state.py, W2-01): messages and earlier turns, entities, plan, tool calls and results, draft answer,
 critic verdict, step / token / time counters, errors. Every LLM output that drives control flow is a pydantic
-model sent as json_schema (ADR-016) with one retry on invalid JSON. Settings: AGENT_MAX_STEPS = 10,
-AGENT_TOKEN_BUDGET, AGENT_TIMEOUT_S = 60. Memory across turns (W2-06): a LangGraph checkpointer (in memory for
+model sent as json_schema (ADR-016) with one retry on invalid JSON. Settings (existing, core/settings.py): MAX_AGENT_STEPS = 10,
+MAX_TOKENS_PER_QUERY = 12,000, QUERY_TIMEOUT_S = 60. Memory across turns (W2-06): a LangGraph checkpointer (in memory for
 now) and retrieval.entities.from_turns for follow-ups. Tracing (W2-08): every node and tool call in Langfuse,
 tagged with the question id; off in tests.
 
