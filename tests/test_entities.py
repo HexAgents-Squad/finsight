@@ -137,3 +137,8 @@ def test_a_year_only_turn_in_the_middle_ends_an_earlier_quarter():
 ])
 def test_a_one_word_name_in_lower_case_is_an_ordinary_word(text, found):
     assert companies(text) == found
+
+
+def test_entities_are_tuples_whatever_sequence_is_given():
+    restored = Entities(["AAPL", "MSFT"], [2024], [])           # as a checkpoint restores them
+    assert restored == Entities(("AAPL", "MSFT"), (2024,), ()) and hash(restored)

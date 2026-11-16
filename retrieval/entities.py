@@ -54,6 +54,12 @@ class Entities:
     years: tuple[int, ...] = ()
     periods: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        """Tuples whatever sequence is given: a checkpoint (W2-06) restores them as lists, which would make an
+        equal value compare unequal and unhashable."""
+        for name in ("tickers", "years", "periods"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+
     def filters(self, period: bool = False) -> list[Filters]:
         """One search filter per (company, year), and per period when `period` is set (FY when the question names
         none). A period the corpus does not index for that year (fiscal 2024 Q2: only fiscal-2025 10-Qs are

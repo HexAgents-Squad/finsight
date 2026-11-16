@@ -36,7 +36,8 @@ MAX_PLAN_STEPS = 10         # = the default MAX_AGENT_STEPS; the executor also s
 
 
 class PlanStep(BaseModel):
-    """One tool call the planner wants, with what it is for (the executor fills it in or replans)."""
+    """One tool call the planner wants, with what it is for. Its arguments are complete when the plan is parsed
+    (validated against the tool's model below); the executor runs them, or replans after a typed tool error."""
     model_config = STRICT
 
     tool: ToolName
@@ -160,7 +161,7 @@ class AgentState(TypedDict, total=False):
     verdict        the critic's Verdict on the latest draft
     answer         the final AnswerContract (written once, by the graph's finish node)
     tokens         LLM tokens used so far (each node returns the tokens it used; the sum is checked)
-    visits         how often each node has run (agent/graph.py counts; the replan and send-back bounds)
+    visits         how often each of the four nodes has run (agent/graph.py counts; finish is not counted)
     errors         messages for the trace (never shown as an answer)
     stop_reason    why the run stopped early (a limit or a give-up), None when it ran to the critic's verdict
     """

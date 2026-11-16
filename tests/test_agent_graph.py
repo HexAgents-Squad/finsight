@@ -210,7 +210,17 @@ def test_longest_legal_run_fits_the_recursion_backstop():
     script = Script(executor=[error, {}, error, {}], critic=[{"verdict": bad}])
     run(script.nodes())
     assert len(script.calls) + 1 == g.LONGEST_RUN == 10                    # + finish
-    assert g.RECURSION_LIMIT > g.LONGEST_RUN
+    assert g.RECURSION_LIMIT > g.LONGEST_RUN + 1
+
+
+@pytest.mark.parametrize(("limit", "finishes"), [(g.LONGEST_RUN, False), (g.LONGEST_RUN + 1, True)])
+def test_langgraph_counts_one_step_more_than_node_runs(monkeypatch, limit, finishes):
+    """Pins the backstop arithmetic: the longest legal run needs LONGEST_RUN + 1 LangGraph steps (the input)."""
+    monkeypatch.setattr(g, "RECURSION_LIMIT", limit)
+    bad = Verdict(violations=[("1", "x")])
+    error = {"tool_results": [error_result()], "tool_error": "no_results"}
+    result = run(Script(executor=[error, {}, error, {}], critic=[{"verdict": bad}]).nodes())
+    assert (result.answer.answer != g.GIVE_UP_ANSWER) == finishes
 
 
 def test_no_plan_gives_up():
@@ -218,7 +228,7 @@ def test_no_plan_gives_up():
     result = run(script.nodes())
     assert script.calls == ["planner"]
     assert result.answer.answer == g.GIVE_UP_ANSWER and not result.answer.verified
-    assert result.answer.notes == [COULD_NOT_VERIFY + "no answer was drafted"]
+    assert result.answer.notes == [COULD_NOT_VERIFY + "the planner returned no plan"]
     assert result.state["errors"] == ["planner: invalid JSON twice"]
 
 
@@ -227,6 +237,26 @@ def test_no_draft_gives_up():
     result = run(script.nodes())
     assert script.calls == ["planner", "executor", "composer"]
     assert result.answer.answer == g.GIVE_UP_ANSWER
+    assert result.answer.notes == [COULD_NOT_VERIFY + "the composer returned no draft"]
+
+
+def test_a_nodes_stop_reason_after_a_draft_is_labelled_stopped_not_limit():
+    script = Script(critic=[{"verdict": Verdict(), "stop_reason": "repeated identical tool call"}])
+    result = run(script.nodes())
+    assert not result.answer.verified
+    assert result.answer.notes == [f"{COULD_NOT_VERIFY}stopped: repeated identical tool call"]
+
+
+def test_a_passed_answer_stays_verified_when_the_critics_tokens_break_the_budget():
+    refusal = AnswerContract(answer=refusal_answer("R1", REFUSAL_SUGGESTION), verified=False, refused=True,
+                             refusal_rule="R1")
+    script = Script(planner=[{"plan": plan(refuse=True, rule="R1", steps=0)}],
+                    composer=[{"draft": refusal, "tokens": 90}], critic=[{"verdict": Verdict(), "tokens": 20}])
+    result = run(script.nodes(), limits=g.Limits(max_steps=10, max_tokens=100, timeout_s=5))
+    assert result.answer.verified                                           # spec §9: best verified answer + note
+    assert result.answer.notes == [f"{g.LIMIT_AFTER_CHECK}token budget exceeded (110 tokens, at most 100)"]
+    assert result.state["stop_reason"] == "token budget exceeded (110 tokens, at most 100)"
+    assert check_contract(result.answer) == []      # the note breaks no invariant (7: verified vs notes; 1: figures)
 
 
 def test_node_stop_reason_gives_up():
@@ -290,6 +320,18 @@ def test_nodes_cannot_write_graph_keys():
         run(script.nodes())
 
 
+def test_nodes_cannot_rewrite_the_question():
+    script = Script(planner=[{"plan": plan(), "question": "Something else?"}])
+    with pytest.raises(ValueError, match="may not write"):
+        run(script.nodes())
+
+
+def test_a_critic_verdict_of_the_wrong_type_is_a_bug():
+    script = Script(critic=[{"verdict": {"violations": []}}])
+    with pytest.raises(TypeError, match="not a Verdict"):
+        run(script.nodes())
+
+
 def test_only_the_critic_writes_a_verdict():
     script = Script(composer=[{"draft": verified_draft(), "verdict": Verdict()}])
     with pytest.raises(ValueError, match="may not write"):
@@ -332,7 +374,40 @@ def test_a_conversation_thread_never_carries_one_question_into_the_next(caplog):
     assert two.answer.answer == g.GIVE_UP_ANSWER and not two.answer.verified
     assert two.state["visits"] == {"planner": 1} and two.state["tokens"] == 0
     assert two.state["tool_results"] == [] and two.state["messages"] == [] and two.state["draft"] is None
-    assert "unregistered type" not in caplog.text          # every state type is allowed (checkpoint_serde)
+    assert "unregistered type" not in caplog.text and "Blocked" not in caplog.text    # checkpoint_serde allows all
+    assert two.state["entities"] is None or isinstance(two.state["entities"].tickers, tuple)
+
+
+def test_every_state_type_round_trips_through_the_checkpoint_serializer(caplog):
+    from agent.contract import Calculation, Citation, Value
+    from retrieval.entities import Entities
+    serde = g.checkpoint_serde()
+    contract = AnswerContract(
+        answer="Revenue was $391,035 million.", verified=True, refused=False,
+        values=[Value(name="revenue", value=391035, unit="USD millions", ticker="AAPL", fiscal_year=2024,
+                      fiscal_period="FY", duration="12M", period_end="2024-09-28")],
+        citations=[Citation(source_type="xbrl", ticker="AAPL", form="10-K", fiscal_year=2024, fiscal_period="FY",
+                            concept="us-gaap:Revenues", accession_no="0000320193-24-000123",
+                            url="https://www.sec.gov/x")],
+        calculations=[Calculation(operation="growth", inputs=[1.0, 2.0], result=100.0, unit="%",
+                                  expression="(2 - 1) / 1")])
+    samples = {"Plan": plan(), "PlanStep": plan().steps[0], "ToolCall": SEARCH, "ToolResult": error_result(),
+               "Verdict": Verdict(violations=[("1", "x")]), "AnswerContract": contract, "Value": contract.values[0],
+               "Citation": contract.citations[0], "Calculation": contract.calculations[0],
+               "Entities": Entities(("AAPL", "MSFT"), (2024,), ())}
+    assert set(samples) == {name for _, name in g.CHECKPOINT_TYPES}
+    for name, value in samples.items():
+        restored = serde.loads_typed(serde.dumps_typed(value))
+        assert restored == value and type(restored) is type(value), name
+    assert hash(serde.loads_typed(serde.dumps_typed(samples["Entities"])))
+    assert "Blocked" not in caplog.text and "unregistered" not in caplog.text
+
+
+def test_limits_defaults_match_the_settings():
+    from core.settings import Settings
+    fields = Settings.model_fields
+    assert g.Limits() == g.Limits(fields["MAX_AGENT_STEPS"].default, fields["MAX_TOKENS_PER_QUERY"].default,
+                                  fields["QUERY_TIMEOUT_S"].default)
 
 
 def test_plan_step_arguments_are_validated_against_the_tool():

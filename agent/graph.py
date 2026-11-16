@@ -15,8 +15,10 @@ nodes (the executor stops itself at the step cap, W2-04) read the same numbers.
 
 The four nodes are injected (Nodes), so each Week 2 ticket replaces one stub (agent/stubs.py) and tests drive every
 edge with scripted nodes. The graph owns the bounds and the verdict: it counts each node's runs (state.visits),
-rejects a node that writes `answer` or `visits`, lets only the critic write `verdict`, and treats a critic run
-without a verdict as a failed check, so no draft leaves verified without the critic's judgement (ADR-022).
+rejects a node that writes `answer`, `visits`, `limits`, `question` or `history`, lets only the critic write
+`verdict`, and treats a critic run without a verdict as a failed check, so no draft leaves verified without the
+critic's judgement (ADR-022). A draft the critic passed stays verified when a limit is broken afterwards (by the
+critic's own tokens): spec §9 returns "its best verified partial answer with a note".
 
     run(question, history)  -> AgentRun(answer, state, seconds)     the entry point (async)
     build_graph(nodes)                                               the compiled graph
@@ -45,12 +47,14 @@ PLANNER, EXECUTOR, COMPOSER, CRITIC, FINISH = "planner", "executor", "composer",
 MAX_PLANS = 2               # the first plan and one replan after a tool error
 MAX_CRITIC_RUNS = 2         # the first check and one after the send-back
 # The longest legal run: planner x2, executor x3 (after each plan and after the send-back), composer x2, critic x2,
-# finish. LangGraph's recursion limit is only a backstop above it: hitting it means a routing bug.
+# finish. LangGraph's recursion limit is only a backstop above it: hitting it means a routing bug. LangGraph counts
+# one more step than node runs (the input), so the longest run needs LONGEST_RUN + 1; the backstop leaves 2 spare.
 LONGEST_RUN = MAX_PLANS + (MAX_PLANS + MAX_CRITIC_RUNS - 1) + MAX_CRITIC_RUNS * 2 + 1
-RECURSION_LIMIT = LONGEST_RUN + 2
-GRAPH_KEYS = frozenset({"answer", "visits", "limits"})      # written by the graph (or the caller) only
+RECURSION_LIMIT = LONGEST_RUN + 1 + 2
+GRAPH_KEYS = frozenset({"answer", "visits", "limits", "question", "history"})   # the graph's or the caller's only
 GIVE_UP_ANSWER = "I could not find a verified answer to this question in the indexed SEC filings."
 NO_VERDICT = Verdict(violations=[("critic", "the critic returned no verdict")])
+LIMIT_AFTER_CHECK = "limit reached after the answer was checked: "
 # Per-question fields, reset at the start of every question (None resets a reducer field, see agent/state.py)
 PER_QUESTION = ("messages", "entities", "plan", "tool_results", "tool_error", "draft", "verdict", "answer", "tokens",
                 "visits", "errors", "stop_reason")
@@ -153,24 +157,36 @@ def route_after_critic(state: AgentState) -> str:
 
 # ----------------------------------------------------------------------------------------------- finish
 def finish(state: AgentState) -> dict[str, Any]:
-    """The final answer: the draft as the critic judged it (with_verification), or a give-up answer. A draft that
-    the critic did not see, or a run that broke a limit, is never verified."""
-    reason = state.get("stop_reason") or limit_reason(state)
+    """The final answer: the draft as the critic judged it (with_verification), or a give-up answer. A draft the
+    critic did not see, a failed verdict, a node's stop_reason or a limit broken before the critic passed the draft
+    is never verified. A draft the critic passed keeps `verified` when a limit is broken afterwards (only the
+    critic's own tokens can do that), with a note saying so (spec §9: the best verified partial answer)."""
+    stopped, limit = state.get("stop_reason"), limit_reason(state)
     draft, verdict = state.get("draft"), state.get("verdict")
     if draft is None:
-        return {"answer": give_up_answer(reason or "no answer was drafted"), "stop_reason": reason}
+        why = stopped or limit or ("the composer returned no draft" if _visits(state, COMPOSER)
+                                   else "the planner returned no plan")
+        return {"answer": give_up_answer(why), "stop_reason": stopped or limit}
+    if verdict is not None and verdict.passed and not stopped:
+        answer = with_verification(draft, [])
+        if limit:
+            answer = answer.model_copy(update={"notes": [*answer.notes, f"{LIMIT_AFTER_CHECK}{limit}"]})
+        return {"answer": answer, "stop_reason": limit}
     violations = verdict.as_violations() if verdict is not None else []
-    if reason:
-        violations.append(Violation("limit", reason))
+    if stopped:
+        violations.append(Violation("stopped", stopped))
+    elif limit:
+        violations.append(Violation("limit", limit))
     elif verdict is None:
         violations.append(Violation("critic", "the answer was not checked"))
-    return {"answer": with_verification(draft, violations), "stop_reason": reason}
+    return {"answer": with_verification(draft, violations), "stop_reason": stopped or limit}
 
 
 def _counted(name: str, node: Node) -> Node:
     """The node with the graph's bookkeeping: its run counted; a planner run without a plan clears the old one (a
     replan never silently re-executes it); a new draft clears the old verdict; the executor's round error resets
-    when a round has none; only the critic writes a verdict, and a critic run without one fails the check."""
+    when a round has none; only the critic writes a verdict (a Verdict), and a critic run without one fails the
+    check."""
     async def run(state: AgentState) -> dict[str, Any]:
         update = dict(await node(state) or {})
         forbidden = GRAPH_KEYS & update.keys() | ({"verdict"} & update.keys() if name != CRITIC else set())
@@ -182,8 +198,10 @@ def _counted(name: str, node: Node) -> Node:
             update.setdefault("tool_error", None)
         elif name == COMPOSER:
             update["verdict"] = None
-        elif not isinstance(update.get("verdict"), Verdict):
+        elif update.get("verdict") is None:
             update["verdict"] = NO_VERDICT
+        elif not isinstance(update["verdict"], Verdict):
+            raise TypeError(f"the critic wrote a {type(update['verdict']).__name__} verdict, not a Verdict")
         update["visits"] = {name: 1}
         return update
     run.__name__ = name
@@ -234,7 +252,7 @@ async def run(question: str, history: Sequence[str] = (), *, graph: Any = None, 
     """Answer one question (with the conversation's earlier questions) within the limits. Always an
     AnswerContract: a run stopped by the time limit or the recursion backstop gives up with a note and keeps the
     state reached so far. Other exceptions, a node's own timeouts included, are bugs and propagate."""
-    if limits is None:
+    if limits is None:                                  # needs a complete .env (core/settings.py); tests pass limits
         from core.settings import get_settings
         limits = Limits.from_settings(get_settings())
     graph = graph or build_graph()

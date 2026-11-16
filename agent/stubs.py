@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 SKELETON_ANSWER = ("FinSight's agent skeleton ran every step but cannot answer yet: the planner, tools and writer "
                    "are still stubs.")
-REFUSAL_SUGGESTION = "What was Apple's total revenue in fiscal 2024?"
+REFUSAL_SUGGESTION = "Apple's total revenue for fiscal 2024"
 
 
 async def plan_stub(state: AgentState) -> dict[str, Any]:
