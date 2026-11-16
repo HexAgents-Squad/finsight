@@ -59,7 +59,8 @@ Everything below that does not exist yet is planned; the ticket that creates it 
           ▼                                                                       ▼
     Answer (agent/contract.py: answer, value, unit, citations → SEC links, verified flag, refusal rule)
 
-State (agent/state.py, W2-01): messages and earlier turns, entities, plan, tool calls and results, draft answer,
+Refusals are written by the composer and checked by the critic like any answer (spec §8 invariant 5), the
+executor is skipped (W2-01 graph). State (agent/state.py, W2-01): messages and earlier turns, entities, plan, tool calls and results, draft answer,
 critic verdict, step / token / time counters, errors. Every LLM output that drives control flow is a pydantic
 model sent as json_schema (ADR-016) with one retry on invalid JSON. Settings (existing, core/settings.py): MAX_AGENT_STEPS = 10,
 MAX_TOKENS_PER_QUERY = 12,000, QUERY_TIMEOUT_S = 60. Memory across turns (W2-06): a LangGraph checkpointer (in memory for

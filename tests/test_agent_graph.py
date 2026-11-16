@@ -22,7 +22,7 @@ SEARCH = ToolCall(name="search_filings", arguments={"query": "total revenue"})
 
 
 def run(nodes: g.Nodes, limits: g.Limits = LIMITS, question: str = QUESTION, history=()) -> g.AgentRun:
-    return asyncio.run(g.run(question, history, graph=g.build_graph(nodes, limits), limits=limits))
+    return asyncio.run(g.run(question, history, graph=g.build_graph(nodes), limits=limits))
 
 
 def plan(refuse: bool = False, rule: str | None = None, steps: int = 1) -> Plan:
@@ -176,6 +176,14 @@ def test_second_tool_error_goes_to_the_composer():
     assert script.calls == ["planner", "executor", "planner", "executor", "composer", "critic"]
 
 
+def test_failed_refusal_goes_back_to_the_composer():
+    bad = Verdict(violations=[("5", "not the §6 sentence")])
+    script = Script(planner=[{"plan": plan(refuse=True, rule="R1", steps=0)}], critic=[{"verdict": bad}])
+    result = run(script.nodes())
+    assert script.calls == ["planner", "composer", "critic", "composer", "critic"]
+    assert not result.answer.verified
+
+
 def test_failed_check_is_sent_back_once():
     bad = Verdict(violations=[("1", "a figure without a value")])
     script = Script(critic=[{"verdict": bad}, {"verdict": Verdict()}])
@@ -257,7 +265,17 @@ def test_time_limit_gives_up():
     script = Script()
     nodes = g.Nodes(script.node("planner"), slow, script.node("composer"), script.node("critic"))
     result = run(nodes, limits=g.Limits(max_steps=10, max_tokens=100, timeout_s=0.05))
-    assert result.answer.notes == [COULD_NOT_VERIFY + "time limit reached (0.05 s)"] and result.state == {}
+    assert result.answer.notes == [COULD_NOT_VERIFY + "time limit reached (0.05 s)"]
+    assert result.state["plan"] is not None and result.state["visits"] == {"planner": 1}   # the state reached
+
+
+def test_a_nodes_own_timeout_is_a_bug_not_the_time_limit():
+    async def inner_timeout(state):
+        raise TimeoutError("an inner wait_for")
+    script = Script()
+    nodes = g.Nodes(inner_timeout, script.node("executor"), script.node("composer"), script.node("critic"))
+    with pytest.raises(TimeoutError, match="inner"):
+        run(nodes)
 
 
 def test_recursion_backstop_gives_up(monkeypatch):
@@ -268,12 +286,65 @@ def test_recursion_backstop_gives_up(monkeypatch):
 
 def test_nodes_cannot_write_graph_keys():
     script = Script(planner=[{"plan": plan(), "visits": {"planner": -5}}])
-    with pytest.raises(ValueError, match="only the graph writes"):
+    with pytest.raises(ValueError, match="may not write"):
         run(script.nodes())
 
 
+def test_only_the_critic_writes_a_verdict():
+    script = Script(composer=[{"draft": verified_draft(), "verdict": Verdict()}])
+    with pytest.raises(ValueError, match="may not write"):
+        run(script.nodes())
+
+
+def test_a_critic_without_a_verdict_fails_the_check():
+    script = Script(critic=[{}])
+    result = run(script.nodes())
+    assert script.calls.count("critic") == 2 and not result.answer.verified
+    assert result.answer.notes == [f"{COULD_NOT_VERIFY}critic: the critic returned no verdict"]
+
+
+def test_a_replan_without_a_plan_gives_up_instead_of_reusing_the_old_plan():
+    script = Script(planner=[{"plan": plan()}, {}],
+                    executor=[{"tool_results": [error_result()], "tool_error": "no_results"}])
+    result = run(script.nodes())
+    assert script.calls == ["planner", "executor", "planner"]
+    assert result.answer.answer == g.GIVE_UP_ANSWER and result.state["plan"] is None
+
+
+def test_limits_travel_in_the_state():
+    script = Script()
+    run(script.nodes(), limits=g.Limits(max_steps=3, max_tokens=500, timeout_s=5))
+    assert script.seen["executor"][0]["limits"] == {"max_steps": 3, "max_tokens": 500, "timeout_s": 5}
+    assert g.Limits.of(script.seen["executor"][0]) == g.Limits(3, 500, 5)
+
+
+def test_a_conversation_thread_never_carries_one_question_into_the_next(caplog):
+    from langgraph.checkpoint.memory import InMemorySaver
+    first = Script(executor=[{"tool_results": [ok_result()], "messages": [{"role": "tool", "content": "x"}]}],
+                   composer=[{"draft": verified_draft(), "tokens": 60}])
+    graph = g.build_graph(first.nodes(), checkpointer=InMemorySaver(serde=g.checkpoint_serde()))
+    config = {"configurable": {"thread_id": "conversation-1"}}
+    one = asyncio.run(g.run(QUESTION, graph=graph, limits=LIMITS, config=config))
+    assert one.answer.verified
+    # same thread, next question: the planner fails. Turn 1's verified draft must not come back.
+    first.updates["planner"] = [{"plan": None}]
+    two = asyncio.run(g.run("And in fiscal 2023?", [QUESTION], graph=graph, limits=LIMITS, config=config))
+    assert two.answer.answer == g.GIVE_UP_ANSWER and not two.answer.verified
+    assert two.state["visits"] == {"planner": 1} and two.state["tokens"] == 0
+    assert two.state["tool_results"] == [] and two.state["messages"] == [] and two.state["draft"] is None
+    assert "unregistered type" not in caplog.text          # every state type is allowed (checkpoint_serde)
+
+
+def test_plan_step_arguments_are_validated_against_the_tool():
+    with pytest.raises(ValidationError, match="search_filings arguments"):
+        PlanStep(tool="search_filings", arguments={"querry": "revenue"}, purpose="typo")
+    with pytest.raises(ValidationError, match="get_financial_fact arguments"):
+        PlanStep(tool="get_financial_fact", arguments={"ticker": "AAPL"}, purpose="missing fields")
+    assert PlanStep(tool="calculate", arguments={"operation": "growth", "inputs": [1.0, 2.0]}, purpose="x")
+
+
 def test_finish_without_a_verdict_is_unverified():
-    out = g.finish({"draft": verified_draft(), "verdict": None, "tool_results": [], "tokens": 0}, LIMITS)
+    out = g.finish({"draft": verified_draft(), "verdict": None, "tool_results": [], "tokens": 0})
     assert not out["answer"].verified
     assert out["answer"].notes == [f"{COULD_NOT_VERIFY}critic: the answer was not checked"]
 

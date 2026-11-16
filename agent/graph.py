@@ -4,24 +4,31 @@
         -> planner     refuse ------------------------------------------> composer
         -> executor    tool error, first time -> planner (replan once); a second error -> composer
         -> composer    draft AnswerContract
-        -> critic      fails, first time -> executor (send back once); fails again -> finish (verified false)
+        -> critic      fails, first time -> executor (send back once; a refusal goes back to the composer);
+                       fails again -> finish (verified false)
         -> finish      the final AnswerContract (with_verification), the only thing that leaves the graph
 
 Any step that finds a limit broken (more tool calls than MAX_AGENT_STEPS, more tokens than MAX_TOKENS_PER_QUERY)
 goes straight to finish, which gives up with a "could not verify: ..." note (docs/spec.md §8 invariant 7, §9).
-The whole run is wrapped in QUERY_TIMEOUT_S. The four nodes are injected (Nodes), so each Week 2 ticket replaces
-one stub (agent/stubs.py) and tests drive every edge with scripted nodes; the graph itself owns the bounds: it
-counts each node's runs (state.visits), so a node cannot loop the graph.
+The whole run is wrapped in QUERY_TIMEOUT_S. The limits travel in the state (state["limits"]), so routing and the
+nodes (the executor stops itself at the step cap, W2-04) read the same numbers.
 
-    run(question, history)  -> AgentRun(answer, state)      the entry point (async)
-    build_graph(nodes, limits)                               the compiled graph
+The four nodes are injected (Nodes), so each Week 2 ticket replaces one stub (agent/stubs.py) and tests drive every
+edge with scripted nodes. The graph owns the bounds and the verdict: it counts each node's runs (state.visits),
+rejects a node that writes `answer` or `visits`, lets only the critic write `verdict`, and treats a critic run
+without a verdict as a failed check, so no draft leaves verified without the critic's judgement (ADR-022).
+
+    run(question, history)  -> AgentRun(answer, state, seconds)     the entry point (async)
+    build_graph(nodes)                                               the compiled graph
+    checkpoint_serde()                                               a checkpointer serializer for the state's types
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from langgraph.errors import GraphRecursionError
@@ -29,7 +36,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.contract import COULD_NOT_VERIFY, AnswerContract
 from agent.critic_checks import Violation, with_verification
-from agent.state import AgentState
+from agent.state import AgentState, Verdict
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +48,12 @@ MAX_CRITIC_RUNS = 2         # the first check and one after the send-back
 # finish. LangGraph's recursion limit is only a backstop above it: hitting it means a routing bug.
 LONGEST_RUN = MAX_PLANS + (MAX_PLANS + MAX_CRITIC_RUNS - 1) + MAX_CRITIC_RUNS * 2 + 1
 RECURSION_LIMIT = LONGEST_RUN + 2
-GRAPH_KEYS = frozenset({"answer", "visits"})      # written by the graph only
+GRAPH_KEYS = frozenset({"answer", "visits", "limits"})      # written by the graph (or the caller) only
 GIVE_UP_ANSWER = "I could not find a verified answer to this question in the indexed SEC filings."
+NO_VERDICT = Verdict(violations=[("critic", "the critic returned no verdict")])
+# Per-question fields, reset at the start of every question (None resets a reducer field, see agent/state.py)
+PER_QUESTION = ("messages", "entities", "plan", "tool_results", "tool_error", "draft", "verdict", "answer", "tokens",
+                "visits", "errors", "stop_reason")
 
 
 @dataclass(frozen=True)
@@ -56,10 +67,16 @@ class Limits:
     def from_settings(cls, settings: Any) -> Limits:
         return cls(settings.MAX_AGENT_STEPS, settings.MAX_TOKENS_PER_QUERY, settings.QUERY_TIMEOUT_S)
 
+    @classmethod
+    def of(cls, state: AgentState) -> Limits:
+        """The limits a run carries (the defaults when a state has none, e.g. in a unit test)."""
+        return cls(**state["limits"]) if state.get("limits") else cls()
+
 
 @dataclass(frozen=True)
 class Nodes:
-    """The four nodes. Each takes the state and returns a partial update (never `answer` or `visits`)."""
+    """The four nodes. Each takes the state and returns a partial update (never `answer`, `visits` or `limits`;
+    only the critic writes `verdict`)."""
     planner: Node
     executor: Node
     composer: Node
@@ -68,10 +85,11 @@ class Nodes:
 
 @dataclass
 class AgentRun:
-    """A run's final answer and its state (tool calls, plan, verdict, tokens, visits: for traces and the
-    evaluation's runs file). `state` is empty when the run was stopped by the time limit."""
+    """A run's final answer, its last state (tool calls, plan, verdict, tokens, visits: for traces and the
+    evaluation's runs file; the state reached so far when the time limit stopped the run) and its seconds."""
     answer: AnswerContract
     state: dict[str, Any] = field(default_factory=dict)
+    seconds: float = 0.0
 
 
 def give_up_answer(reason: str) -> AnswerContract:
@@ -79,8 +97,9 @@ def give_up_answer(reason: str) -> AnswerContract:
     return AnswerContract(answer=GIVE_UP_ANSWER, verified=False, refused=False, notes=[COULD_NOT_VERIFY + reason])
 
 
-def limit_reason(state: AgentState, limits: Limits) -> str | None:
+def limit_reason(state: AgentState) -> str | None:
     """Which limit the run has broken, or None."""
+    limits = Limits.of(state)
     steps = len(state.get("tool_results") or [])
     if steps > limits.max_steps:
         return f"step limit reached ({steps} tool calls, at most {limits.max_steps})"
@@ -90,46 +109,53 @@ def limit_reason(state: AgentState, limits: Limits) -> str | None:
     return None
 
 
+def _stopped(state: AgentState) -> bool:
+    return bool(state.get("stop_reason") or limit_reason(state))
+
+
 def _visits(state: AgentState, node: str) -> int:
     return (state.get("visits") or {}).get(node, 0)
 
 
 # ----------------------------------------------------------------------------------------------- routing
-def route_after_planner(state: AgentState, limits: Limits) -> str:
+def route_after_planner(state: AgentState) -> str:
     plan = state.get("plan")
-    if limit_reason(state, limits) or state.get("stop_reason") or plan is None:
+    if _stopped(state) or plan is None:
         return FINISH
     return COMPOSER if plan.refuse else EXECUTOR
 
 
-def route_after_executor(state: AgentState, limits: Limits) -> str:
-    if limit_reason(state, limits) or state.get("stop_reason"):
+def route_after_executor(state: AgentState) -> str:
+    if _stopped(state):
         return FINISH
     if state.get("tool_error") and _visits(state, PLANNER) < MAX_PLANS:
         return PLANNER                                  # replan once; a second error is answered as not found
     return COMPOSER
 
 
-def route_after_composer(state: AgentState, limits: Limits) -> str:
-    if limit_reason(state, limits) or state.get("stop_reason") or state.get("draft") is None:
+def route_after_composer(state: AgentState) -> str:
+    if _stopped(state) or state.get("draft") is None:
         return FINISH
     return CRITIC
 
 
-def route_after_critic(state: AgentState, limits: Limits) -> str:
+def route_after_critic(state: AgentState) -> str:
     verdict = state.get("verdict")
     if verdict is not None and verdict.passed:
         return FINISH
-    if limit_reason(state, limits) or state.get("stop_reason") or _visits(state, CRITIC) >= MAX_CRITIC_RUNS:
+    if _stopped(state) or _visits(state, CRITIC) >= MAX_CRITIC_RUNS:
         return FINISH                                   # failed twice: verified false
+    draft, plan = state.get("draft"), state.get("plan")
+    if (draft is not None and draft.refused) or (plan is not None and plan.refuse):
+        return COMPOSER                                 # a refusal has no tool steps: rewrite the sentence
     return EXECUTOR                                     # send back once, with the verdict in the state
 
 
 # ----------------------------------------------------------------------------------------------- finish
-def finish(state: AgentState, limits: Limits) -> dict[str, Any]:
+def finish(state: AgentState) -> dict[str, Any]:
     """The final answer: the draft as the critic judged it (with_verification), or a give-up answer. A draft that
     the critic did not see, or a run that broke a limit, is never verified."""
-    reason = state.get("stop_reason") or limit_reason(state, limits)
+    reason = state.get("stop_reason") or limit_reason(state)
     draft, verdict = state.get("draft"), state.get("verdict")
     if draft is None:
         return {"answer": give_up_answer(reason or "no answer was drafted"), "stop_reason": reason}
@@ -142,65 +168,93 @@ def finish(state: AgentState, limits: Limits) -> dict[str, Any]:
 
 
 def _counted(name: str, node: Node) -> Node:
-    """The node, with the graph's bookkeeping: its run counted, a new draft's old verdict cleared, the executor's
-    round error reset when a round has none."""
+    """The node with the graph's bookkeeping: its run counted; a planner run without a plan clears the old one (a
+    replan never silently re-executes it); a new draft clears the old verdict; the executor's round error resets
+    when a round has none; only the critic writes a verdict, and a critic run without one fails the check."""
     async def run(state: AgentState) -> dict[str, Any]:
         update = dict(await node(state) or {})
-        if GRAPH_KEYS & update.keys():
-            raise ValueError(f"node {name!r} wrote {sorted(GRAPH_KEYS & update.keys())}, which only the graph writes")
-        if name == COMPOSER:
-            update.setdefault("verdict", None)
-        if name == EXECUTOR:
+        forbidden = GRAPH_KEYS & update.keys() | ({"verdict"} & update.keys() if name != CRITIC else set())
+        if forbidden:
+            raise ValueError(f"node {name!r} wrote {sorted(forbidden)}, which it may not write")
+        if name == PLANNER:
+            update.setdefault("plan", None)
+        elif name == EXECUTOR:
             update.setdefault("tool_error", None)
+        elif name == COMPOSER:
+            update["verdict"] = None
+        elif not isinstance(update.get("verdict"), Verdict):
+            update["verdict"] = NO_VERDICT
         update["visits"] = {name: 1}
         return update
     run.__name__ = name
     return run
 
 
-def build_graph(nodes: Nodes | None = None, limits: Limits | None = None, checkpointer: Any = None) -> Any:
-    """The compiled graph (nodes default to the stubs; limits to Limits())."""
+# The state's own types: a checkpointer (W2-06 memory) must be allowed to restore them. LangGraph 1.2 warns about
+# unregistered types and will block them in a future version.
+CHECKPOINT_TYPES = (("agent.state", "Plan"), ("agent.state", "PlanStep"), ("agent.state", "ToolCall"),
+                    ("agent.state", "ToolResult"), ("agent.state", "Verdict"), ("agent.contract", "AnswerContract"),
+                    ("agent.contract", "Value"), ("agent.contract", "Citation"), ("agent.contract", "Calculation"),
+                    ("retrieval.entities", "Entities"))
+
+
+def checkpoint_serde() -> Any:
+    """The serializer to give a checkpointer, e.g. InMemorySaver(serde=checkpoint_serde())."""
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+    return JsonPlusSerializer(allowed_msgpack_modules=list(CHECKPOINT_TYPES))
+
+
+def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
+    """The compiled graph (nodes default to the stubs). The limits come with each run's state (run())."""
     if nodes is None:
         from agent.stubs import stub_nodes
         nodes = stub_nodes()
-    limits = limits or Limits()
     graph = StateGraph(AgentState)
     for name in (PLANNER, EXECUTOR, COMPOSER, CRITIC):
         graph.add_node(name, _counted(name, getattr(nodes, name)))
-    graph.add_node(FINISH, lambda state: finish(state, limits))
+    graph.add_node(FINISH, finish)
     graph.add_edge(START, PLANNER)
-    graph.add_conditional_edges(PLANNER, lambda s: route_after_planner(s, limits), [EXECUTOR, COMPOSER, FINISH])
-    graph.add_conditional_edges(EXECUTOR, lambda s: route_after_executor(s, limits), [PLANNER, COMPOSER, FINISH])
-    graph.add_conditional_edges(COMPOSER, lambda s: route_after_composer(s, limits), [CRITIC, FINISH])
-    graph.add_conditional_edges(CRITIC, lambda s: route_after_critic(s, limits), [EXECUTOR, FINISH])
+    graph.add_conditional_edges(PLANNER, route_after_planner, [EXECUTOR, COMPOSER, FINISH])
+    graph.add_conditional_edges(EXECUTOR, route_after_executor, [PLANNER, COMPOSER, FINISH])
+    graph.add_conditional_edges(COMPOSER, route_after_composer, [CRITIC, FINISH])
+    graph.add_conditional_edges(CRITIC, route_after_critic, [EXECUTOR, COMPOSER, FINISH])
     graph.add_edge(FINISH, END)
     return graph.compile(checkpointer=checkpointer)
 
 
-def initial_state(question: str, history: Sequence[str] = ()) -> AgentState:
-    return {"question": question, "history": list(history), "tool_results": [], "tokens": 0, "visits": {},
-            "errors": [], "stop_reason": None}
+def initial_state(question: str, history: Sequence[str] = (), limits: Limits | None = None) -> dict[str, Any]:
+    """A question's input. Every per-question field is reset (None), so a checkpointer thread that keeps the
+    conversation never carries a counter, a tool result or a verified draft into the next question."""
+    return {**dict.fromkeys(PER_QUESTION), "question": question, "history": list(history),
+            "limits": asdict(limits or Limits())}
 
 
 async def run(question: str, history: Sequence[str] = (), *, graph: Any = None, limits: Limits | None = None,
               config: dict[str, Any] | None = None) -> AgentRun:
     """Answer one question (with the conversation's earlier questions) within the limits. Always an
-    AnswerContract: a run stopped by the time limit or the recursion backstop gives up with a note. Other
-    exceptions are bugs and propagate."""
+    AnswerContract: a run stopped by the time limit or the recursion backstop gives up with a note and keeps the
+    state reached so far. Other exceptions, a node's own timeouts included, are bugs and propagate."""
     if limits is None:
         from core.settings import get_settings
         limits = Limits.from_settings(get_settings())
-    graph = graph or build_graph(limits=limits)
+    graph = graph or build_graph()
+    state: dict[str, Any] = {}
+    started = time.monotonic()
     try:
-        async with asyncio.timeout(limits.timeout_s):
-            state = await graph.ainvoke(initial_state(question, history),
-                                        config={"recursion_limit": RECURSION_LIMIT, **(config or {})})
+        async with asyncio.timeout(limits.timeout_s) as deadline:
+            async for snapshot in graph.astream(initial_state(question, history, limits), stream_mode="values",
+                                                config={"recursion_limit": RECURSION_LIMIT, **(config or {})}):
+                state = snapshot                        # the latest full state, kept if the time limit stops the run
     except TimeoutError:
-        return AgentRun(give_up_answer(f"time limit reached ({limits.timeout_s:g} s)"))
+        if not deadline.expired():
+            raise                                       # a node's own timeout, not the question's limit
+        return AgentRun(give_up_answer(f"time limit reached ({limits.timeout_s:g} s)"), dict(state),
+                        time.monotonic() - started)
     except GraphRecursionError:
         log.error("agent graph hit its recursion backstop (%d steps): a routing bug", RECURSION_LIMIT)
-        return AgentRun(give_up_answer("the agent did not finish within its step limit"))
+        return AgentRun(give_up_answer("the agent did not finish within its step limit"), dict(state),
+                        time.monotonic() - started)
     answer = state.get("answer")
     if not isinstance(answer, AnswerContract):          # finish always writes one; anything else is a bug
         raise TypeError(f"the graph returned {type(answer).__name__}, not an AnswerContract")
-    return AgentRun(answer, dict(state))
+    return AgentRun(answer, dict(state), time.monotonic() - started)

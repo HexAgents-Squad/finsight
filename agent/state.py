@@ -12,24 +12,27 @@ contract is (agent/contract.py); plan_json_schema() is its schema for response_f
 final answer is agent/contract.py's AnswerContract: nothing else leaves the graph (ADR-022).
 
 State fields are written by nodes as partial updates. The ones with a reducer (Annotated[..., reducer]) add up
-across nodes: tool_results and errors grow, tokens is a running sum, visits counts each node's runs (kept by
-agent/graph.py, not by the nodes, so a node cannot get the loop bounds wrong).
+across nodes: messages, tool_results and errors grow, tokens is a running sum, visits counts each node's runs (kept
+by agent/graph.py, not by the nodes, so a node cannot get the loop bounds wrong). Writing None to one of them resets
+it: agent.graph.initial_state does, so a question never inherits the counters, results or draft of the question
+before it, even on a checkpointer thread that keeps the conversation (W2-06).
 """
 from __future__ import annotations
 
-import operator
 from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agent.contract import AnswerContract, NonBlank, decoding_schema
 from agent.critic_checks import Violation
 from core.spec import RefusalRule
 from retrieval.entities import Entities
+from tools.base import validation_message
+from tools.registry import TOOLS
 
 STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 ToolName = Literal["search_filings", "get_financial_fact", "calculate", "compare_periods"]   # tools.registry.TOOLS
-MAX_PLAN_STEPS = 10         # the default MAX_AGENT_STEPS: a plan longer than the step cap could never finish
+MAX_PLAN_STEPS = 10         # = the default MAX_AGENT_STEPS; the executor also stops at the configured cap
 
 
 class PlanStep(BaseModel):
@@ -39,6 +42,17 @@ class PlanStep(BaseModel):
     tool: ToolName
     arguments: dict[str, Any]
     purpose: NonBlank
+
+    @model_validator(mode="after")
+    def _arguments_fit_the_tool(self) -> PlanStep:
+        """The arguments validated against the tool's own model (tools.registry), so a misspelt or missing
+        argument is a validation error chat_json can re-prompt with, not a tool error after the plan is made.
+        (Guided decoding sees `arguments` as a free object; per-tool variants are W2-02/W2-03's.)"""
+        try:
+            TOOLS[self.tool][1].model_validate(self.arguments)
+        except ValidationError as err:
+            raise ValueError(f"{self.tool} arguments: {validation_message(err)}") from None
+        return self
 
 
 class Plan(BaseModel):
@@ -112,7 +126,21 @@ class Verdict(BaseModel):
         return [Violation(rule, message) for rule, message in self.violations]
 
 
-def _count_visits(old: dict[str, int], new: dict[str, int]) -> dict[str, int]:
+def _extend(old: list[Any] | None, new: list[Any] | None) -> list[Any]:
+    """Append; None resets (a new question)."""
+    return [] if new is None else [*(old or []), *new]
+
+
+def _add(old: int | None, new: int | None) -> int:
+    """Running sum; None resets."""
+    return 0 if new is None else (old or 0) + new
+
+
+def _count_visits(old: dict[str, int] | None, new: dict[str, int] | None) -> dict[str, int]:
+    """Per-node run counts; None resets."""
+    if new is None:
+        return {}
+    old = old or {}
     return {**old, **{name: old.get(name, 0) + n for name, n in new.items()}}
 
 
@@ -121,9 +149,12 @@ class AgentState(TypedDict, total=False):
 
     question       the user's question (input)
     history        the conversation's earlier questions, oldest first (input; memory across turns is W2-06)
+    limits         {"max_steps", "max_tokens", "timeout_s"} (input, agent.graph.Limits): the executor stops
+                   itself at max_steps - len(tool_results); routing gives up when a limit is broken
+    messages       chat messages ({"role", "content", ...}, core.llm's format) for native tool calling (W2-03/04)
     entities       companies, fiscal years and periods (retrieval.entities.from_turns over history + question)
     plan           the planner's latest Plan (replaced on a replan)
-    tool_results   every tool call and its result, in order (len = steps taken, capped by MAX_AGENT_STEPS)
+    tool_results   every tool call and its result, in order (len = steps taken; more than max_steps gives up)
     tool_error     the typed error of the executor's latest round, None when it had none (drives the replan)
     draft          the composer's AnswerContract, before the critic
     verdict        the critic's Verdict on the latest draft
@@ -135,14 +166,16 @@ class AgentState(TypedDict, total=False):
     """
     question: str
     history: list[str]
+    limits: dict[str, float]
+    messages: Annotated[list[dict[str, Any]], _extend]
     entities: Entities | None
     plan: Plan | None
-    tool_results: Annotated[list[ToolResult], operator.add]
+    tool_results: Annotated[list[ToolResult], _extend]
     tool_error: str | None
     draft: AnswerContract | None
     verdict: Verdict | None
     answer: AnswerContract | None
-    tokens: Annotated[int, operator.add]
+    tokens: Annotated[int, _add]
     visits: Annotated[dict[str, int], _count_visits]
-    errors: Annotated[list[str], operator.add]
+    errors: Annotated[list[str], _extend]
     stop_reason: str | None
