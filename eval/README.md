@@ -10,6 +10,8 @@
 | `gold_sheet_template.csv` | Header row to import into Google Sheets (File → Import) |
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
+| `planner_dev.jsonl` | W2-02: 34 tuning questions for the planner (`pdev-` ids: refusals for every rule R1-R7, partial refusals, answerable controls, one follow-up), written for tuning and kept apart from gold-v1 and the test sets (tests/test_planner.py) |
+| `run_planner.py` | W2-02: the planner node on the development questions only (dev set + `planner_dev.jsonl`) -> `results/planner_runs/<run>.jsonl` and `results/planner_dev.md` (refusal decisions by rule, valid plans, tokens, seconds) |
 | `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json`; W1-09: `--run S1/S2/S3` runs a prompting strategy instead |
 | `strategies.py` | W1-09: the prompting strategies S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition (prompts in `agent/prompts/s*`, frozen) |
 | `judge_summaries.py` | W1-13: LLM-as-judge grades (0/1/2) for the summary answers → `results/grading/judge_<run_id>.jsonl` |
@@ -92,6 +94,12 @@ there replaces the suggested one. Re-running never erases what was entered, and 
 answer (it becomes a "stale" row). Graders work from the sheet only; `grading_key.csv` says which model wrote
 each answer. Save from Excel as "CSV UTF-8" so names with accents survive.
 The grading workflow (copies, handout, merge, examples) and the graders' instructions are in [`GRADING.md`](GRADING.md).
+
+## Planner (W2-02)
+```bash
+python eval/run_planner.py --run P5        # 49 development questions; cached replies cost nothing
+```
+Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (tests/test_planner.py checks it).
 
 ## Prompting baselines S1/S2/S3 (W1-09)
 ```bash
