@@ -30,6 +30,7 @@ from core.spec import ITEMS_OF_FORM, RefusalRule
 from retrieval.entities import Entities
 from tools.base import validation_message
 from tools.calculator import Operation
+from tools.financial_facts import METRICS
 from tools.registry import TOOLS
 
 STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
@@ -124,11 +125,10 @@ def _narrowed(arguments: dict[str, Any]) -> dict[str, Any]:
     """A tool's argument schema with its free strings narrowed for decoding: `item` to the spec's exact Item names
     (core.spec), `metric` to the mapped metrics (config/concept_map.yaml), `ticker` to a ticker's shape and
     `query` to MAX_QUERY_CHARS. The tools validate the same arguments as before (W2-03 owns their schemas)."""
-    from ingest.xbrl import load_concept_map  # tools.registry has imported it already; here for clarity
     props = arguments["properties"]
     narrowed = {
         "item": {"enum": sorted(ITEMS_OF_FORM["10-K"] | ITEMS_OF_FORM["10-Q"]), "type": "string"},
-        "metric": {"enum": sorted(load_concept_map()), "type": "string"},
+        "metric": {"enum": sorted(METRICS), "type": "string"},
         "ticker": TICKER,
         "query": {**props.get("query", {}), "maxLength": MAX_QUERY_CHARS},
     }

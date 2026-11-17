@@ -5,6 +5,7 @@ the cases below include the ones three reviews reproduced. Offline: plans are wr
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -277,3 +278,33 @@ def test_the_runner_scores_company_coverage_not_just_membership():
     assert entity_filters_used(plan(search(ticker="AAPL"), search(ticker="MSFT")), ("AAPL", "MSFT")) is True
     assert entity_filters_used(plan(search(ticker="KO")), ("AAPL",)) is False
     assert entity_filters_used(plan(fact()), ("META",)) is None
+
+
+SAMPLE_SOURCE = '''"""Module docstring."""
+import re  # a comment
+
+PROMPT_SHA256 = "abc123"
+
+
+@staticmethod
+def f(x, *, y=2):
+    """Function docstring."""
+    return (x +
+            y), f"{x}-{y!r}"
+
+
+class C:
+    """Class docstring."""
+
+    def g(self):
+        return "not a docstring"
+'''
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="f-strings are tokenised from Python 3.12 on")
+def test_the_rules_code_is_the_same_on_every_python_from_3_12():
+    """Pinned token output: CI (3.12) and development (3.14) must agree, which ast.dump did not (3.13 changed it)."""
+    assert pl._code(SAMPLE_SOURCE) == (
+        '<nl> import re <nl> PROMPT_SHA256 = "" <nl> @ staticmethod <nl> def f ( x , * , y = 2 ) : <nl> <in> <nl> '
+        'return ( x + y ) , f" { x } - { y ! r } " <nl> <de> class C : <nl> <in> <nl> def g ( self ) : <nl> <in> '
+        'return "not a docstring" <nl> <de> <de>')

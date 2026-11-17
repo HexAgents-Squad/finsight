@@ -62,9 +62,11 @@ HUNDRED = Decimal(100)
 NEGATIVE_BASE_NOTE = "the base (old value) is negative, so growth is measured against its absolute value"
 NO_UNIT_NOTE = "no unit given: the result is in the inputs' unit"
 # W2-03, measured: Qwen3-8B passes the inputs' unit ("USD millions") with growth and percent even when the schema says
-# to leave it out. The unit cannot change those results (the operation sets its own), so it is ignored and noted
-# instead of failing the call (a failed call costs a replan); difference and sum still use it.
-IGNORED_UNIT_NOTE = "the given unit {given!r} is not used: {op} returns {unit!r}"
+# to leave it out. Such a unit cannot change those results (the operation sets its own), so it is not used rather than
+# failing the call (a failed call costs a replan); difference and sum still use it. A unit that names a different
+# derived result ("%" for ratio, "ratio" for percent, growth or cagr) shows the operation was confused (ADR-016 saw
+# percent used for growth), so it stays invalid_input. Nothing is noted: calculate's notes go into the user's answer.
+DERIVED_UNITS = frozenset(RESULT_UNIT.values())
 
 
 class CalculateArgs(ToolArgs):
@@ -150,7 +152,8 @@ def _evaluate(op: str, xs: list[float], years: float | None) -> tuple[Decimal, s
 def compute(operation: str, inputs: list[float], years: float | None = None, unit: str | None = None) -> dict:
     """The calculation result. Raises pydantic ValidationError for wrong argument types, ToolError (invalid_input)
     for a wrong number of inputs or a misplaced years, CalculationError (undefined) for spec §7.2's undefined cases.
-    A unit given to an operation that sets its own (ratio, percent, growth, cagr) is not used and is noted. The
+    An operation that sets its own unit (ratio, percent, growth, cagr) does not use a given input unit such as
+    'USD millions', and rejects a different derived unit ('%' for ratio, 'ratio' for percent) as invalid_input. The
     critic calls this directly to recompute a calculation."""
     args = CalculateArgs(operation=operation, inputs=inputs, years=years, unit=unit)
     op, xs = args.operation, args.inputs
@@ -158,7 +161,8 @@ def compute(operation: str, inputs: list[float], years: float | None = None, uni
     if (args.years is not None) != (op == "cagr"):
         raise ToolError(INVALID_INPUT, "years is required for cagr and not allowed for other operations")
     result_unit = args.unit if op in UNIT_FROM_ARGUMENT else RESULT_UNIT[op]
-    ignored = args.unit is not None and op not in UNIT_FROM_ARGUMENT and args.unit != result_unit
+    if op not in UNIT_FROM_ARGUMENT and args.unit in DERIVED_UNITS and args.unit != result_unit:
+        raise ToolError(INVALID_INPUT, f"{op} returns {result_unit!r}, not {args.unit!r}: check the operation")
     try:
         with localcontext() as ctx:
             ctx.prec = PRECISION
@@ -170,8 +174,6 @@ def compute(operation: str, inputs: list[float], years: float | None = None, uni
         raise CalculationError(UNDEFINED, f"{op} result is not a finite number", inputs=xs)
     if op in UNIT_FROM_ARGUMENT and result_unit is None:
         notes.append(NO_UNIT_NOTE)
-    if ignored:
-        notes.append(IGNORED_UNIT_NOTE.format(given=args.unit, op=op, unit=result_unit))
     # years is returned (null except for cagr) so a calculation copied into the answer can be recomputed
     # (agent/contract.py Calculation, spec §8 invariant 3)
     return {"operation": op, "inputs": xs, "years": args.years, "result": result, "unit": result_unit,

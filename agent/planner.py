@@ -26,8 +26,10 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import io
 import json
 import re
+import tokenize
 import typing
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -97,22 +99,32 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RULE_SOURCES = ("agent/planner.py", "agent/guided.py", "agent/critic_checks.py", "retrieval/entities.py")
 
 
+SKIPPED_TOKENS = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.ENCODING, tokenize.ENDMARKER})
+STRUCTURE = {tokenize.NEWLINE: "<nl>", tokenize.INDENT: "<in>", tokenize.DEDENT: "<de>"}
+
+
 def _code(source: str) -> str:
-    """The source's code without docstrings, comments, layout or the pin's value: its syntax tree, so editing a
-    docstring or a comment does not change rules_sha256 (it did once, between run P8 and the merge)."""
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
+    """The source's code as its tokens, without docstrings, comments, layout (line breaks inside brackets, the width
+    of an indent) or the pin's value, so editing a docstring or a comment does not change rules_sha256 (it did once,
+    between run P8 and the merge). Tokens, not ast.dump: the token text is the same on Python 3.12-3.14 (CI runs
+    3.12), ast.dump's output changed in 3.13. Docstrings are found by their position in the syntax tree."""
+    docstrings = set()
+    for node in ast.walk(ast.parse(source)):
         body = getattr(node, "body", None)
         if isinstance(body, list) and body and isinstance(body[0], ast.Expr) \
                 and isinstance(getattr(body[0], "value", None), ast.Constant) and isinstance(body[0].value.value, str):
-            node.body = body[1:] or [ast.Pass()]
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PROMPT_SHA256" for t in node.targets):
-            node.value = ast.Constant("")
-    return ast.dump(tree, include_attributes=False)
+            docstrings.add((body[0].lineno, body[0].col_offset))
+    out: list[str] = []
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type in SKIPPED_TOKENS or (tok.type == tokenize.STRING and tok.start in docstrings):
+            continue
+        out.append(STRUCTURE.get(tok.type, tok.string))
+    text = " ".join(out)
+    return re.sub(r'PROMPT_SHA256 = "[^"]*"', 'PROMPT_SHA256 = ""', text)
 
 
 def rules_sha256() -> str:
-    """The code that turns the model's reply into the final plan (RULE_SOURCES' syntax trees, see _code)."""
+    """The code that turns the model's reply into the final plan (RULE_SOURCES' tokens, see _code)."""
     return _sha256([_code((REPO_ROOT / name).read_text(encoding="utf-8")) for name in RULE_SOURCES])
 
 

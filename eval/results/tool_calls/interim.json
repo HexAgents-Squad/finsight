@@ -1,5 +1,5 @@
 {
- "label": "after-lenient-unit",
+ "label": "interim",
  "model": "Qwen/Qwen3-8B",
  "date": "2026-11-17",
  "schemas_sha256": "2c404210027193ae5a7a8c5fad6b2c91e8a4f61e79ecc10c10536e1283a2f419",
@@ -343,8 +343,8 @@
    "tool_call": true,
    "name": "calculate",
    "arguments": "{\"operation\": \"percent\", \"inputs\": [18134.0, 82006.0], \"unit\": \"USD millions\"}",
-   "accepted": true,
-   "why": null
+   "accepted": false,
+   "why": "unit is only for difference and sum; percent returns '%'"
   },
   {
    "id": "dev-C01",
@@ -358,8 +358,8 @@
    "tool_call": true,
    "name": "calculate",
    "arguments": "{\"operation\": \"growth\", \"inputs\": [8516.0, 14276.0], \"unit\": \"USD millions\"}",
-   "accepted": true,
-   "why": null
+   "accepted": false,
+   "why": "unit is only for difference and sum; growth returns '%'"
   },
   {
    "id": "dev-C02",
@@ -373,8 +373,8 @@
    "tool_call": true,
    "name": "calculate",
    "arguments": "{\"operation\": \"growth\", \"inputs\": [9228.0, 12682.0], \"unit\": \"USD millions\"}",
-   "accepted": true,
-   "why": null
+   "accepted": false,
+   "why": "unit is only for difference and sum; growth returns '%'"
   },
   {
    "id": "pdev-25",
@@ -386,11 +386,11 @@
   "tool_calls": 31,
   "accepted": 31,
   "with_reference": 31,
-  "matches_plan": 30,
+  "matches_plan": 29,
   "calc_cases": 4,
   "calc_called": 4,
   "calc_right_operation": 4,
-  "calc_accepted": 4
+  "calc_accepted": 1
  },
- "rescored_from": "after"
+ "note": "schemas with a glossary example later withdrawn (gold-v1 C08); measured before the final wording"
 }

@@ -84,16 +84,19 @@ def test_exact_halfway_results_round_up(operation, inputs, result):
 
 
 @pytest.mark.parametrize(("operation", "unit", "result_unit"), [
-    ("growth", "USD millions", "%"), ("percent", "USD millions", "%"), ("ratio", "ratio", "ratio"), ("cagr", "%", "%")])
-def test_a_unit_given_to_an_operation_that_sets_its_own_is_not_used(operation, unit, result_unit):
-    """W2-03: the model passes the inputs' unit with growth/percent; the result is unchanged and the unit noted."""
+    ("growth", "USD millions", "%"), ("percent", "USD millions", "%"), ("ratio", "ratio", "ratio"), ("cagr", "%", "%"),
+    ("ratio", "shares", "ratio")])
+def test_an_input_unit_given_to_an_operation_that_sets_its_own_is_not_used(operation, unit, result_unit):
+    """W2-03: the model passes the inputs' unit with growth/percent; the result and its notes are unchanged."""
     years = {"years": 2} if operation == "cagr" else {}
-    with_unit = calculate(operation, [100.0, 121.0], unit=unit, **years)
-    without = calculate(operation, [100.0, 121.0], **years)
-    assert with_unit["result"] == without["result"] and with_unit["unit"] == result_unit
-    noted = [n for n in with_unit["notes"] if "is not used" in n]
-    assert noted == ([] if unit == result_unit else [f"the given unit {unit!r} is not used: {operation} returns "
-                                                     f"{result_unit!r}"])
+    assert calculate(operation, [100.0, 121.0], unit=unit, **years) == calculate(operation, [100.0, 121.0], **years)
+    assert calculate(operation, [100.0, 121.0], unit=unit, **years)["unit"] == result_unit
+
+
+@pytest.mark.parametrize(("operation", "unit"), [("ratio", "%"), ("percent", "ratio"), ("growth", "ratio")])
+def test_a_different_derived_unit_is_still_a_confused_operation(operation, unit):
+    out = calculate(operation, [100.0, 121.0], unit=unit)
+    assert out["error"]["type"] == "invalid_input" and "check the operation" in out["error"]["message"]
 
 
 def test_difference_and_sum_without_a_unit_keep_the_inputs_unit():
@@ -716,7 +719,9 @@ def test_metric_names_are_normalised_and_unknown_ones_named(given, accepted):
 
 def test_the_metric_help_points_other_line_items_to_search():
     assert "never another metric" in financial_facts.METRIC_HELP and "search_filings" in financial_facts.METRIC_HELP
-    assert "Costco" in financial_facts.METRIC_HELP                  # a sales line inside revenue is not revenue
+    assert "segment or product sales line" in financial_facts.METRIC_HELP
+    for gold_only in ("Costco", "COST"):            # no gold-v1 example in model-facing text (C08 is gold)
+        assert gold_only not in financial_facts.METRIC_HELP
 
 
 def test_the_calculator_schema_explains_every_operation_and_the_unit():

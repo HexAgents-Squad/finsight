@@ -9,7 +9,7 @@ Two measures, both with tool_choice auto (the agent's setting, ADR-016) and the 
   arguments: get_financial_fact, compare_periods and calculate run for real on the local XBRL data (an unknown
   metric or a unit calculate does not take is invalid_input, as in the agent), search_filings' arguments are
   validated against its model (a search would load the index). A text answer without a tool call is not accepted.
-- the right call: the first call's tool (and metric, for a fact) against the first step of the planner's committed
+- the right call: the first call's tool and arguments (company, metric, year, period) against the first step of the planner's committed
   plan for the question (eval/results/planner_runs/P8.jsonl, every plan reviewed as right). Acceptance alone cannot
   see a valid call for the wrong thing, e.g. a metric substituted for a line item that is not one of the 13.
 - the calculator: each of those questions whose wording asks for a calculation (agent/critic_checks
@@ -130,28 +130,43 @@ def calc_messages(case: dict[str, Any], run_tool: Any) -> list[dict[str, Any]] |
             {"role": "assistant", "content": None, "tool_calls": calls}, *results]
 
 
-def reference_steps(planner_run: Path = PLANNER_RUN) -> dict[str, tuple[str, str | None]]:
-    """Per question, the (tool, metric) of the first step of the planner's reviewed plan."""
+Reference = tuple[str, dict[str, Any]]
+
+
+def reference_steps(planner_run: Path = PLANNER_RUN) -> dict[str, Reference]:
+    """Per question, the (tool, arguments) of the first step of the planner's reviewed plan."""
     out = {}
     for line in planner_run.read_text(encoding="utf-8").splitlines():
         record = json.loads(line)
         steps = (record["plan"] or {}).get("steps") or []
         if steps:
-            out[record["id"]] = (steps[0]["tool"], steps[0]["arguments"].get("metric"))
+            out[record["id"]] = (steps[0]["tool"], steps[0]["arguments"])
     return out
 
 
-def matches_plan(call: dict[str, Any], reference: tuple[str, str | None] | None) -> bool | None:
-    """Whether the call fetches what the reviewed plan's first step fetches (None: no reference)."""
+def matches_plan(call: dict[str, Any], reference: Reference | None) -> bool | None:
+    """Whether the call fetches what the reviewed plan's first step fetches (None: no reference): the same tool;
+    for a fact the same company, metric, fiscal year and period (FY when the call leaves it out); for
+    compare_periods the same company, metric and years; for a search the plan's company and year where it set them.
+    A call that is accepted can still ask for the wrong year ("most recent" read as the year before)."""
     if reference is None:
         return None
     if not call.get("tool_call"):
         return False
     try:
-        metric = json.loads(call["arguments"]).get("metric")
-    except (json.JSONDecodeError, AttributeError):
-        metric = None
-    return call["name"] == reference[0] and (reference[0] != "get_financial_fact" or metric == reference[1])
+        args = json.loads(call["arguments"])
+    except json.JSONDecodeError:
+        return False
+    tool, planned = reference
+    if call["name"] != tool or not isinstance(args, dict):
+        return False
+    if tool == "get_financial_fact":
+        keys, args = ("ticker", "metric", "fiscal_year"), {**args, "fiscal_period": args.get("fiscal_period") or "FY"}
+        return all(args.get(k) == planned.get(k) for k in keys) and args["fiscal_period"] == planned["fiscal_period"]
+    if tool == "compare_periods":
+        return all(args.get(k) == planned.get(k) for k in ("ticker", "metric")) \
+            and sorted(args.get("years") or []) == sorted(planned.get("years") or [])
+    return all(args.get(k) == planned[k] for k in ("ticker", "fiscal_year") if planned.get(k) is not None)
 
 
 def first_call(outcome: Any) -> dict[str, Any]:
@@ -191,7 +206,7 @@ async def measure(session: Session, qs: list[dict[str, Any]], cases: list[dict[s
     return {"first_call": first, "calculator": calc}
 
 
-def summarize(run: dict[str, Any], references: dict[str, tuple[str, str | None]] | None = None) -> dict[str, Any]:
+def summarize(run: dict[str, Any], references: dict[str, Reference] | None = None) -> dict[str, Any]:
     first, calc = run["first_call"], [c for c in run["calculator"] if "skipped" not in c]
     references = reference_steps() if references is None else references
     matched = [matches_plan(f, references.get(f["id"])) for f in first]
@@ -201,6 +216,13 @@ def summarize(run: dict[str, Any], references: dict[str, tuple[str, str | None]]
             "calc_cases": len(calc), "calc_called": sum(c.get("name") == "calculate" for c in calc),
             "calc_right_operation": sum(c["right_operation"] for c in calc),
             "calc_accepted": sum(c.get("name") == "calculate" and c.get("accepted", False) for c in calc)}
+
+
+def plan_text(reference: Reference | None) -> str:
+    if reference is None:
+        return "-"
+    tool, args = reference
+    return f"{tool} {json.dumps({k: v for k, v in args.items() if v is not None})}"
 
 
 def markdown(runs: dict[str, dict[str, Any]]) -> str:
@@ -230,7 +252,7 @@ def markdown(runs: dict[str, dict[str, Any]]) -> str:
         bad_calc = [c for c in run["calculator"] if "skipped" not in c and not (c["right_operation"] and c.get("accepted"))]
         lines += ["", f"## {label} ({run['model']}, {run['date']})", ""]
         lines += [f"- first call, {f['id']}: {f.get('name') or '-'} {f.get('arguments') or ''} -> "
-                  f"{f.get('why') or 'accepted, but not what the reviewed plan fetches ' + str(references.get(f['id']))}"
+                  f"{f.get('why') or 'accepted, but not what the reviewed plan fetches: ' + plan_text(references.get(f['id']))}"
                   for f in bad] or ["- every first call accepted and as planned"]
         lines += [f"- calculator, {c['id']}: {c.get('name') or '-'} {c.get('arguments') or ''} (expected "
                   f"{'/'.join(c['expected'])}) -> {c.get('why') or 'wrong operation'}" for c in bad_calc] \

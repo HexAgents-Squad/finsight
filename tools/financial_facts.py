@@ -86,14 +86,15 @@ SETUP_ERRORS = (OSError, ValueError, KeyError, TypeError, yaml.YAMLError)
 
 
 # The 13 metrics of config/concept_map.yaml (tests/test_tools.py keeps the two in sync). An enum in the tool's
-# schema, so the model sees every valid name and guided decoding cannot write another (W2-03: measured, the model
-# wrote capital_expenditures, cash_and_cash_equivalents, net_sales, ... for the 13 names).
+# schema, so the model sees every valid name (W2-03: measured, it wrote capital_expenditures, cash_and_cash_equivalents,
+# net_sales, ... for the 13 names); with tool_choice required or named a server can also constrain the call to it,
+# with auto (the agent's setting) metric_name below rejects any other name as invalid_input.
 Metric = Literal["capex", "cash", "eps_diluted", "gross_profit", "long_term_debt", "net_income", "operating_cash_flow",
                  "operating_income", "rd_expense", "revenue", "stockholders_equity", "total_assets", "total_liabilities"]
 METRICS: tuple[str, ...] = get_args(Metric)
 METRIC_HELP = (
     "One of the 13 mapped metrics. A company's own name for the same line uses the metric: revenue = total revenue "
-    "under any label (net sales, net revenues, sales), but not a sales line inside it such as Costco's net sales; "
+    "under any label (net sales, net revenues, sales), but not a segment or product sales line inside it; "
     "net_income = net income or net earnings attributable to the company; capex = capital expenditures (purchases of "
     "property and equipment); cash = cash and cash equivalents; rd_expense = research and development. Any other line "
     "item (e.g. stock-based compensation): use search_filings, never another metric.")

@@ -69,8 +69,10 @@ QUESTIONS = [
     {"id": "pdev-x3", "kind": "control", "question": "And in fiscal 2023?",
      "history": ["What was Apple's revenue in fiscal 2024?"]},
 ]
-REFERENCES = {"pdev-x1": ("get_financial_fact", "revenue"), "pdev-x2": ("search_filings", None),
-              "pdev-x3": ("get_financial_fact", "revenue")}
+FACT_2024 = {"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024, "fiscal_period": "FY", "duration": None}
+REFERENCES = {"pdev-x1": ("get_financial_fact", FACT_2024),
+              "pdev-x2": ("search_filings", {"query": "stock-based compensation", "ticker": "META", "fiscal_year": None}),
+              "pdev-x3": ("get_financial_fact", {**FACT_2024, "fiscal_year": 2023})}
 CASE = {"id": "pdev-x4", "question": "By what percentage did Apple's revenue change from fiscal 2023 to 2024?",
         "history": [], "expected": ["cagr", "growth"],
         "facts": [{"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2023},
@@ -158,7 +160,7 @@ def test_the_report_compares_labels_and_never_shows_the_key_or_host(tmp_path, mo
     ptc.write("after", {**after, "label": "after"}, tmp_path, tmp_path / "s.md")
     text = (tmp_path / "s.md").read_text(encoding="utf-8")
     assert "| Measure | before | after |" in text and "| first call accepted by the tool | 1/3 | 3/3 |" in text
-    assert "accepted, but not what the reviewed plan fetches ('search_filings', None)" in text
+    assert "accepted, but not what the reviewed plan fetches: search_filings" in text
     for path in tmp_path.iterdir():
         content = path.read_text(encoding="utf-8")
         assert SECRET_HOST not in content and SECRET_KEY not in content
@@ -175,4 +177,27 @@ def test_the_calculator_cases_and_references_come_from_the_committed_planner_run
         "dev-B01": ["percent"], "dev-B02": ["percent"], "dev-C01": ["cagr", "growth"], "dev-C02": ["cagr", "growth"],
         "pdev-25": ["percent"]}
     references = ptc.reference_steps()
-    assert references["pdev-32"] == ("search_filings", None) and references["dev-G02"] == ("get_financial_fact", "capex")
+    assert references["pdev-32"][0] == "search_filings"
+    assert references["dev-G02"][0] == "get_financial_fact" and references["dev-G02"][1]["metric"] == "capex"
+
+
+@pytest.mark.parametrize(("arguments", "matches"), [
+    ({"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024}, True),                  # FY when left out
+    ({"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024, "fiscal_period": "FY"}, True),
+    ({"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2023}, False),                 # the wrong year
+    ({"ticker": "AAPL", "metric": "net_income", "fiscal_year": 2024}, False),
+    ({"ticker": "MSFT", "metric": "revenue", "fiscal_year": 2024}, False),
+    ({"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024, "fiscal_period": "Q2"}, False),
+])
+def test_the_right_call_checks_company_metric_year_and_period(arguments, matches):
+    call = {"tool_call": True, "name": "get_financial_fact", "arguments": json.dumps(arguments)}
+    assert ptc.matches_plan(call, ("get_financial_fact", FACT_2024)) is matches
+
+
+def test_a_search_matches_the_plans_company_and_year_where_set():
+    plan = ("search_filings", {"query": "risks", "ticker": "GS", "fiscal_year": 2023, "fiscal_period": "FY"})
+    def call(**a):
+        return {"tool_call": True, "name": "search_filings", "arguments": json.dumps({"query": "x", **a})}
+    assert ptc.matches_plan(call(ticker="GS", fiscal_year=2023), plan) is True
+    assert ptc.matches_plan(call(ticker="GS", fiscal_year=2024), plan) is False
+    assert ptc.matches_plan(call(ticker="GS", fiscal_year=2023), ("get_financial_fact", FACT_2024)) is False
