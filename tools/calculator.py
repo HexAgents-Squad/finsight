@@ -61,18 +61,30 @@ POWER_PRECISION = 50
 HUNDRED = Decimal(100)
 NEGATIVE_BASE_NOTE = "the base (old value) is negative, so growth is measured against its absolute value"
 NO_UNIT_NOTE = "no unit given: the result is in the inputs' unit"
+# W2-03, measured: Qwen3-8B passes the inputs' unit ("USD millions") with growth and percent even when the schema says
+# to leave it out. Such a unit cannot change those results (the operation sets its own), so it is not used rather than
+# failing the call (a failed call costs a replan); difference and sum still use it. A unit that names a different
+# derived result ("%" for ratio, "ratio" for percent, growth or cagr) shows the operation was confused (ADR-016 saw
+# percent used for growth), so it stays invalid_input. Nothing is noted: calculate's notes go into the user's answer.
+DERIVED_UNITS = frozenset(RESULT_UNIT.values())
 
 
 class CalculateArgs(ToolArgs):
-    operation: Operation = Field(description="ratio | percent | growth | difference | sum | cagr")
+    operation: Operation = Field(description=(
+        "ratio: a / b, e.g. total liabilities / stockholders' equity. "
+        "percent: a part as a % of a whole, e.g. a margin = operating income / revenue. "
+        "growth: % change over time, e.g. revenue from fiscal 2023 to 2024. "
+        "difference: how much more or less, new - old, in the inputs' unit. "
+        "sum: a total of two or more values. "
+        "cagr: compound annual growth rate over several years."))
     inputs: list[Annotated[float, Field(ge=-MAX_ABS_INPUT, le=MAX_ABS_INPUT)]] = Field(
         min_length=MIN_INPUTS, max_length=MAX_INPUTS, description=(
-            "Numbers exactly as returned by get_financial_fact. ratio/percent: [a, b] for a / b. "
-            "growth/difference: [old, new]. cagr: [start, end]. sum: two or more values."))
+            "Numbers exactly as returned by get_financial_fact. ratio/percent: [a, b] for a / b (the part first, "
+            "then the whole). growth/difference: [old, new]. cagr: [start, end]. sum: two or more values."))
     years: float | None = Field(default=None, description="cagr only: number of years between start and end")
     unit: Unit | None = Field(default=None, description=(
-        "difference and sum only (optional): the unit the inputs share, e.g. 'USD millions', returned as the "
-        "result's unit; other operations set their unit themselves"))
+        "Leave out (null) for ratio, percent, growth and cagr: they set their own unit. Only for difference and "
+        "sum: the unit the inputs share, e.g. 'USD millions'."))
 
 
 def _dec(x: float) -> Decimal:
@@ -139,17 +151,18 @@ def _evaluate(op: str, xs: list[float], years: float | None) -> tuple[Decimal, s
 
 def compute(operation: str, inputs: list[float], years: float | None = None, unit: str | None = None) -> dict:
     """The calculation result. Raises pydantic ValidationError for wrong argument types, ToolError (invalid_input)
-    for a wrong number of inputs or a misplaced years/unit, CalculationError (undefined) for spec §7.2's undefined
-    cases. The critic calls this directly to recompute a calculation."""
+    for a wrong number of inputs or a misplaced years, CalculationError (undefined) for spec §7.2's undefined cases.
+    An operation that sets its own unit (ratio, percent, growth, cagr) does not use a given input unit such as
+    'USD millions', and rejects a different derived unit ('%' for ratio, 'ratio' for percent) as invalid_input. The
+    critic calls this directly to recompute a calculation."""
     args = CalculateArgs(operation=operation, inputs=inputs, years=years, unit=unit)
     op, xs = args.operation, args.inputs
     _check_arity(op, xs)
     if (args.years is not None) != (op == "cagr"):
         raise ToolError(INVALID_INPUT, "years is required for cagr and not allowed for other operations")
-    if args.unit is not None and op not in UNIT_FROM_ARGUMENT:
-        raise ToolError(INVALID_INPUT, f"unit is only for difference and sum; {op} returns "
-                                       f"{RESULT_UNIT[op]!r}")
     result_unit = args.unit if op in UNIT_FROM_ARGUMENT else RESULT_UNIT[op]
+    if op not in UNIT_FROM_ARGUMENT and args.unit in DERIVED_UNITS and args.unit != result_unit:
+        raise ToolError(INVALID_INPUT, f"{op} returns {result_unit!r}, not {args.unit!r}: check the operation")
     try:
         with localcontext() as ctx:
             ctx.prec = PRECISION

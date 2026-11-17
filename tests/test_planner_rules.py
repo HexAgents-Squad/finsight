@@ -5,6 +5,7 @@ the cases below include the ones three reviews reproduced. Offline: plans are wr
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -235,15 +236,30 @@ def test_the_pin_follows_the_messages_and_the_schema(monkeypatch):
     assert pl.prompt_sha256() != pinned
 
 
-def test_the_rules_hash_ignores_line_endings_and_the_pin_line(tmp_path, monkeypatch):
+def _copy_sources(tmp_path, edit):
     for name in pl.RULE_SOURCES:
-        text = (pl.REPO_ROOT / name).read_text(encoding="utf-8").replace("\n", "\r\n")
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(re.sub(r'(?m)^PROMPT_SHA256 = "', 'PROMPT_SHA256 = "other', text).encode("utf-8"))
+        target.write_bytes(edit(name, (pl.REPO_ROOT / name).read_text(encoding="utf-8")).encode("utf-8"))
+
+
+def test_the_rules_hash_ignores_layout_docstrings_comments_and_the_pin(tmp_path, monkeypatch):
     original = pl.rules_sha256()
+
+    def cosmetic(name, text):
+        text = re.sub(r'(?m)^PROMPT_SHA256 = "', 'PROMPT_SHA256 = "other', text)
+        text = text.replace('"""The entities without', '"""Reworded. The entities without')
+        return text.replace("\n", "  # a comment\n", 3).replace("\n", "\r\n")
+    _copy_sources(tmp_path, cosmetic)
     monkeypatch.setattr(pl, "REPO_ROOT", Path(tmp_path))
     assert pl.rules_sha256() == original
+
+
+def test_the_rules_hash_changes_with_the_code(tmp_path, monkeypatch):
+    original = pl.rules_sha256()
+    _copy_sources(tmp_path, lambda name, text: text.replace("SEARCH_K = 5", "SEARCH_K = 4"))
+    monkeypatch.setattr(pl, "REPO_ROOT", Path(tmp_path))
+    assert pl.rules_sha256() != original
 
 
 def test_no_control_characters_in_the_planner_sources():
@@ -262,3 +278,33 @@ def test_the_runner_scores_company_coverage_not_just_membership():
     assert entity_filters_used(plan(search(ticker="AAPL"), search(ticker="MSFT")), ("AAPL", "MSFT")) is True
     assert entity_filters_used(plan(search(ticker="KO")), ("AAPL",)) is False
     assert entity_filters_used(plan(fact()), ("META",)) is None
+
+
+SAMPLE_SOURCE = '''"""Module docstring."""
+import re  # a comment
+
+PROMPT_SHA256 = "abc123"
+
+
+@staticmethod
+def f(x, *, y=2):
+    """Function docstring."""
+    return (x +
+            y), f"{x}-{y!r}"
+
+
+class C:
+    """Class docstring."""
+
+    def g(self):
+        return "not a docstring"
+'''
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="f-strings are tokenised from Python 3.12 on")
+def test_the_rules_code_is_the_same_on_every_python_from_3_12():
+    """Pinned token output: CI (3.12) and development (3.14) must agree, which ast.dump did not (3.13 changed it)."""
+    assert pl._code(SAMPLE_SOURCE) == (
+        '<nl> import re <nl> PROMPT_SHA256 = "" <nl> @ staticmethod <nl> def f ( x , * , y = 2 ) : <nl> <in> <nl> '
+        'return ( x + y ) , f" { x } - { y ! r } " <nl> <de> class C : <nl> <in> <nl> def g ( self ) : <nl> <in> '
+        'return "not a docstring" <nl> <de> <de>')

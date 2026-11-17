@@ -23,7 +23,7 @@ from ingest.xbrl import OUTPUT_UNITS
 from tools import financial_facts
 from tools.base import NOT_REPORTED, OUT_OF_CORPUS, ToolArgs, ToolError, tool_boundary, tool_schema
 from tools.calculator import compute
-from tools.financial_facts import ANNUAL, FACT_FIELDS, FactStore
+from tools.financial_facts import ANNUAL, FACT_FIELDS, FactStore, Metric, metric_name
 
 MAX_YEARS = 10                          # distinct years; the corpus has 3, and a bound keeps a bad call cheap
 PER_YEAR_ERRORS = frozenset({NOT_REPORTED, OUT_OF_CORPUS})
@@ -36,9 +36,14 @@ MIXED_RESTATEMENT_NOTE = ("FY{restated} is a restated value and FY{other} is not
 
 class CompareArgs(ToolArgs):
     ticker: str = Field(min_length=1, max_length=10, description="Ticker of one of the 20 companies, e.g. NVDA")
-    metric: str = Field(min_length=1, description="Metric name from config/concept_map.yaml, e.g. revenue")
+    metric: Metric = Field(description="One of get_financial_fact's 13 metric names, e.g. revenue")
     years: list[int] = Field(min_length=1, description=(
         f"The company's own fiscal-year labels to compare, e.g. [2024, 2025]; at most {MAX_YEARS} distinct years"))
+
+    @field_validator("metric", mode="before")
+    @classmethod
+    def _metric(cls, value: Any) -> Any:
+        return metric_name(value)
 
     @field_validator("years")
     @classmethod
@@ -53,11 +58,6 @@ class CompareArgs(ToolArgs):
     @classmethod
     def _upper(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
-
-    @field_validator("metric", mode="before")
-    @classmethod
-    def _lower(cls, value: Any) -> Any:
-        return value.strip().lower() if isinstance(value, str) else value
 
 
 def _row(store: FactStore, ticker: str, metric: str, year: int) -> dict[str, Any]:

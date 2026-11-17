@@ -1,0 +1,395 @@
+{
+ "label": "before",
+ "model": "Qwen/Qwen3-8B",
+ "date": "2026-11-17",
+ "schemas_sha256": "babd3ba351b44e50f5daac8cb7d26aca13e244c6c9cdac7f666e20c843c55277",
+ "schema_tokens": 1529,
+ "executor_prompt": "You are FinSight's executor. You answer questions about US companies' SEC 10-K and 10-Q filings by calling tools. Call the tool that fetches the first thing the answer needs. Never compute a number yourself: use calculate.",
+ "first_call": [
+  {
+   "id": "dev-A01",
+   "question": "What was Costco's net income attributable to Costco in fiscal 2023?",
+   "prompt_tokens": 1729,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"COST\", \"metric\": \"net_income_attributable_to_costco\", \"fiscal_year\": 2023}",
+   "accepted": false,
+   "why": "unknown metric 'net_income_attributable_to_costco'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "dev-A02",
+   "question": "What were UnitedHealth Group's total revenues in fiscal 2023?",
+   "prompt_tokens": 1728,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"UNH\", \"metric\": \"revenue\", \"fiscal_year\": 2023}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-A03",
+   "question": "What was Meta's revenue in the second quarter of fiscal 2025?",
+   "prompt_tokens": 1729,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"META\", \"metric\": \"revenue\", \"fiscal_year\": 2025, \"fiscal_period\": \"Q2\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-B01",
+   "question": "What was NVIDIA's gross margin in fiscal 2023, in percent?",
+   "prompt_tokens": 1729,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"NVDA\", \"metric\": \"gross_profit\", \"fiscal_year\": 2023, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-B02",
+   "question": "What was Procter & Gamble's operating margin in fiscal 2023?",
+   "prompt_tokens": 1730,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"PG\", \"metric\": \"operating_income\", \"fiscal_year\": 2023, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-C01",
+   "question": "By what percentage did Goldman Sachs' net earnings change from fiscal 2023 to fiscal 2024?",
+   "prompt_tokens": 1737,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"GS\", \"metric\": \"net_income\", \"fiscal_year\": 2023, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-C02",
+   "question": "What was the percentage change in Citigroup's net income between fiscal 2023 and fiscal 2024?",
+   "prompt_tokens": 1738,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"C\", \"metric\": \"net_income\", \"fiscal_year\": 2023, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-D01",
+   "question": "Which had the higher net income in fiscal 2023, Pfizer or Johnson & Johnson?",
+   "prompt_tokens": 1732,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"PFE\", \"metric\": \"net_income\", \"fiscal_year\": 2023}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-D02",
+   "question": "Which had the higher operating income in fiscal 2023, NVIDIA or Microsoft?",
+   "prompt_tokens": 1730,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"NVDA\", \"metric\": \"operating_income\", \"fiscal_year\": 2023}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-E01",
+   "question": "What drove the change in Microsoft's revenue in fiscal 2023?",
+   "prompt_tokens": 1728,
+   "tool_call": true,
+   "name": "search_filings",
+   "arguments": "{\"query\": \"What drove the change in Microsoft's revenue in fiscal 2023\", \"ticker\": \"MSFT\", \"fiscal_year\": 2023, \"form\": \"10-K\", \"k\": 5}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-E02",
+   "question": "What explains the growth in Coca-Cola's net operating revenues in fiscal 2023?",
+   "prompt_tokens": 1731,
+   "tool_call": true,
+   "name": "search_filings",
+   "arguments": "{\"query\": \"growth in net operating revenues\", \"ticker\": \"KO\", \"fiscal_year\": 2023, \"form\": \"10-K\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-F01",
+   "question": "And what were its net earnings attributable to common shareholders that year?",
+   "prompt_tokens": 1747,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"UNH\", \"metric\": \"net_earnings_attributable_to_common_shareholders\", \"fiscal_year\": 2023}",
+   "accepted": false,
+   "why": "unknown metric 'net_earnings_attributable_to_common_shareholders'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "dev-F02",
+   "question": "And in the third quarter?",
+   "prompt_tokens": 1741,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"META\", \"metric\": \"revenue\", \"fiscal_year\": 2025, \"fiscal_period\": \"Q3\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "dev-G02",
+   "question": "How much did Wells Fargo spend on capital expenditures in fiscal 2023?",
+   "prompt_tokens": 1729,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"WFC\", \"metric\": \"capital_expenditures\", \"fiscal_year\": 2023}",
+   "accepted": false,
+   "why": "unknown metric 'capital_expenditures'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "pdev-18",
+   "question": "What were Wells Fargo's total assets at the end of fiscal 2024, and is it a stock worth owning?",
+   "prompt_tokens": 1738,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"WFC\", \"metric\": \"total_assets\", \"fiscal_year\": 2024, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-19",
+   "question": "What was AbbVie's revenue in fiscal 2025, and will it be higher next year?",
+   "prompt_tokens": 1735,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"ABBV\", \"metric\": \"revenue\", \"fiscal_year\": 2025, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-20",
+   "question": "Report Costco's fiscal 2024 net income and tell me if the shares are overvalued.",
+   "prompt_tokens": 1734,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"COST\", \"metric\": \"net_income\", \"fiscal_year\": 2024}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-21",
+   "question": "What was Bank of America's net income in fiscal 2025?",
+   "prompt_tokens": 1728,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"BAC\", \"metric\": \"net_income\", \"fiscal_year\": 2025}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-22",
+   "question": "How much cash did Microsoft hold at the end of fiscal 2024?",
+   "prompt_tokens": 1729,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"MSFT\", \"metric\": \"cash_and_cash_equivalents\", \"fiscal_year\": 2024, \"fiscal_period\": \"FY\"}",
+   "accepted": false,
+   "why": "unknown metric 'cash_and_cash_equivalents'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "pdev-23",
+   "question": "What were Alphabet's capital expenditures in fiscal 2023?",
+   "prompt_tokens": 1726,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"GOOGL\", \"metric\": \"capital_expenditures\", \"fiscal_year\": 2023}",
+   "accepted": false,
+   "why": "unknown metric 'capital_expenditures'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "pdev-24",
+   "question": "What was Amazon's diluted EPS in the third quarter of fiscal 2025?",
+   "prompt_tokens": 1730,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"AMZN\", \"metric\": \"eps_diluted\", \"fiscal_year\": 2025, \"fiscal_period\": \"Q3\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-25",
+   "question": "What was Merck's operating margin in fiscal 2025?",
+   "prompt_tokens": 1727,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"MRK\", \"metric\": \"operating_income\", \"fiscal_year\": 2025, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-26",
+   "question": "How did JPMorgan's net income change from fiscal 2023 to fiscal 2025?",
+   "prompt_tokens": 1736,
+   "tool_call": true,
+   "name": "compare_periods",
+   "arguments": "{\"ticker\": \"JPM\", \"metric\": \"net_income\", \"years\": [2023, 2024, 2025]}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-27",
+   "question": "Which reported more revenue in fiscal 2024, AbbVie or Merck?",
+   "prompt_tokens": 1731,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"ABBV\", \"metric\": \"revenue\", \"fiscal_year\": 2024}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-28",
+   "question": "What cybersecurity risks does Goldman Sachs discuss in its fiscal 2023 annual report?",
+   "prompt_tokens": 1730,
+   "tool_call": true,
+   "name": "search_filings",
+   "arguments": "{\"query\": \"cybersecurity risks\", \"ticker\": \"GS\", \"fiscal_year\": 2023, \"form\": \"10-K\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-29",
+   "question": "How does Costco describe its membership fee income in fiscal 2025?",
+   "prompt_tokens": 1728,
+   "tool_call": true,
+   "name": "search_filings",
+   "arguments": "{\"query\": \"membership fee income\", \"ticker\": \"COST\", \"fiscal_year\": 2025, \"form\": \"10-K\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-30",
+   "question": "What was Apple's net income for the most recent fiscal year in the filings?",
+   "prompt_tokens": 1728,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"AAPL\", \"metric\": \"net_income\", \"fiscal_year\": 2025, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-31",
+   "question": "What were Procter & Gamble's net sales in the fourth quarter of fiscal 2024?",
+   "prompt_tokens": 1734,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"PG\", \"metric\": \"net_sales\", \"fiscal_year\": 2024, \"fiscal_period\": \"Q4\"}",
+   "accepted": false,
+   "why": "unknown metric 'net_sales'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "pdev-32",
+   "question": "What stock-based compensation expense did Meta report in fiscal 2024?",
+   "prompt_tokens": 1728,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"META\", \"metric\": \"stock_based_compensation_expense\", \"fiscal_year\": 2024}",
+   "accepted": false,
+   "why": "unknown metric 'stock_based_compensation_expense'; use one of ['capex', 'cash', 'eps_diluted', 'gross_profit', 'long_term_debt', 'net_income', 'operating_cash_flow', 'operating_income', 'rd_expense', 'revenue', 'stockholders_equity', 'total_assets', 'total_liabilities']"
+  },
+  {
+   "id": "pdev-33",
+   "question": "What was UnitedHealth's long-term debt at the end of fiscal 2024?",
+   "prompt_tokens": 1731,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"UNH\", \"metric\": \"long_term_debt\", \"fiscal_year\": 2024, \"fiscal_period\": \"FY\"}",
+   "accepted": true,
+   "why": null
+  },
+  {
+   "id": "pdev-34",
+   "question": "What about fiscal 2025?",
+   "prompt_tokens": 1740,
+   "tool_call": true,
+   "name": "get_financial_fact",
+   "arguments": "{\"ticker\": \"PFE\", \"metric\": \"revenue\", \"fiscal_year\": 2025}",
+   "accepted": true,
+   "why": null
+  }
+ ],
+ "calculator": [
+  {
+   "id": "dev-B01",
+   "question": "What was NVIDIA's gross margin in fiscal 2023, in percent?",
+   "expected": [
+    "percent"
+   ],
+   "operation": "percent",
+   "right_operation": true,
+   "tool_call": true,
+   "name": "calculate",
+   "arguments": "{\"operation\": \"percent\", \"inputs\": [15356.0, 26974.0], \"unit\": \"USD millions\"}",
+   "accepted": false,
+   "why": "unit is only for difference and sum; percent returns '%'"
+  },
+  {
+   "id": "dev-B02",
+   "question": "What was Procter & Gamble's operating margin in fiscal 2023?",
+   "expected": [
+    "percent"
+   ],
+   "operation": "ratio",
+   "right_operation": false,
+   "tool_call": true,
+   "name": "calculate",
+   "arguments": "{\"operation\": \"ratio\", \"inputs\": [18134.0, 82006.0], \"unit\": \"ratio\"}",
+   "accepted": false,
+   "why": "unit is only for difference and sum; ratio returns 'ratio'"
+  },
+  {
+   "id": "dev-C01",
+   "question": "By what percentage did Goldman Sachs' net earnings change from fiscal 2023 to fiscal 2024?",
+   "expected": [
+    "cagr",
+    "growth"
+   ],
+   "operation": "growth",
+   "right_operation": true,
+   "tool_call": true,
+   "name": "calculate",
+   "arguments": "{\"operation\": \"growth\", \"inputs\": [8516.0, 14276.0], \"unit\": \"USD millions\"}",
+   "accepted": false,
+   "why": "unit is only for difference and sum; growth returns '%'"
+  },
+  {
+   "id": "dev-C02",
+   "question": "What was the percentage change in Citigroup's net income between fiscal 2023 and fiscal 2024?",
+   "expected": [
+    "cagr",
+    "growth"
+   ],
+   "operation": "growth",
+   "right_operation": true,
+   "tool_call": true,
+   "name": "calculate",
+   "arguments": "{\"operation\": \"growth\", \"inputs\": [9228.0, 12682.0], \"unit\": \"USD millions\"}",
+   "accepted": false,
+   "why": "unit is only for difference and sum; growth returns '%'"
+  },
+  {
+   "id": "pdev-25",
+   "skipped": "a planned figure could not be fetched"
+  }
+ ],
+ "summary": {
+  "questions": 31,
+  "tool_calls": 31,
+  "accepted": 24,
+  "with_reference": 31,
+  "matches_plan": 23,
+  "calc_cases": 4,
+  "calc_called": 4,
+  "calc_right_operation": 3,
+  "calc_accepted": 0
+ }
+}
