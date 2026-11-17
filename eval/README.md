@@ -97,9 +97,9 @@ The grading workflow (copies, handout, merge, examples) and the graders' instruc
 
 ## Planner (W2-02)
 ```bash
-python eval/run_planner.py --run P8        # 49 development questions; cached replies cost nothing
+python eval/run_planner.py --run P9        # 49 development questions; cached replies cost nothing
 ```
-Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers the prompt, the decoding schema, the message templates and the rule patterns; tests/test_planner.py checks it). The pinned configuration was measured in P7.
+Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs were measured live in P7 and with the final rules in P8 (replayed from the cache).
 
 ## Prompting baselines S1/S2/S3 (W1-09)
 ```bash

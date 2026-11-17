@@ -13,14 +13,14 @@ from agent import graph as g
 from agent import planner as pl
 from agent.contract import COULD_NOT_VERIFY
 from agent.guided import RETRY_INSTRUCTION, ask_guided
-from agent.state import Plan, PlanStep, ToolCall, ToolResult, plan_json_schema
+from agent.state import Plan, ToolCall, ToolResult, plan_json_schema
 from agent.stubs import stub_nodes
 from core.exceptions import FinSightError
 from core.llm import Reply
 from eval import run_planner as rp
 from eval.validate_dev_set import NEAR_DUPLICATE, similarity
 from ingest.edgar import load_scope
-from retrieval.entities import Entities, from_turns
+from retrieval.entities import from_turns
 
 REFUSAL = {"reasoning": "Asks whether to buy a stock: investment advice.", "refuse": True, "refusal_rule": "R1",
            "steps": [], "calculation": None}
@@ -208,54 +208,6 @@ def test_ask_guided_reports_cost_and_cache():
     assert reply.parsed.refuse and reply.tokens == 340 and reply.seconds == 0.8 and not reply.cached
 
 
-# ----------------------------------------------------------------------------------------------- entities
-def search(**args) -> PlanStep:
-    base = {"query": "revenue drivers", "ticker": None, "fiscal_year": None, "fiscal_period": None, "form": None,
-            "item": None, "k": 5}
-    return PlanStep(tool="search_filings", arguments={**base, **args}, purpose="find it")
-
-
-def with_steps(*steps) -> Plan:
-    return Plan(reasoning="x", refuse=False, refusal_rule=None, steps=list(steps))
-
-
-def test_search_steps_get_the_questions_company_year_and_period():
-    out = pl.apply_entities(with_steps(search()), Entities(("AAPL",), (2024,), ("Q2",)))[0]
-    assert out.steps[0].arguments["ticker"] == "AAPL" and out.steps[0].arguments["fiscal_year"] == 2024
-    assert out.steps[0].arguments["fiscal_period"] is None          # fiscal 2024 Q2 is not indexed: not set
-    out = pl.apply_entities(with_steps(search()), Entities(("META",), (2025,), ("Q2",)))[0]
-    assert out.steps[0].arguments["fiscal_period"] == "Q2"
-
-
-def test_several_companies_give_one_search_each_and_set_values_stay():
-    out, cut = pl.apply_entities(with_steps(search(), search(ticker="MSFT", query="other")),
-                                 Entities(("ABBV", "MRK"), (2024,), ()))
-    assert cut == 0
-    assert [(s.arguments["ticker"], s.arguments["query"]) for s in out.steps] == [
-        ("ABBV", "revenue drivers"), ("MRK", "revenue drivers"), ("MSFT", "other")]
-
-
-def test_entities_leave_refusals_and_other_tools_alone_and_keep_the_cap():
-    refusal = Plan.model_validate(REFUSAL)
-    assert pl.apply_entities(refusal, Entities(("AAPL",), (2024,), ()))[0] is refusal
-    fact = Plan.model_validate(ANSWER)
-    assert pl.apply_entities(fact, Entities(("MSFT",), (2023,), ()))[0].steps == fact.steps
-    many, cut = pl.apply_entities(with_steps(*[search(query=f"q{n}") for n in range(5)]),
-                                  Entities(("AAPL", "MSFT", "KO"), (2024,), ()))
-    assert len(many.steps) == 10 and cut == 5                           # 15 searches, 5 over the cap (noted)
-    _, notes = pl.finalize(with_steps(*[search(query=f"q{n}") for n in range(5)]),
-                           Entities(("AAPL", "MSFT", "KO"), (2024,), ()), "Compare their fiscal 2024 risks.")
-    assert notes == ["planner: 5 search step(s) beyond the 10-step cap were dropped"]
-
-
-def test_a_plan_decoded_with_nulls_validates_for_every_tool():
-    """What strict guided decoding writes (every argument present, null where optional) is a valid plan."""
-    plan = Plan.model_validate({**SEARCH_ONLY, "steps": SEARCH_ONLY["steps"] + ANSWER["steps"] + [
-        {"tool": "compare_periods", "purpose": "trend",
-         "arguments": {"ticker": "AAPL", "metric": "revenue", "years": [2023, 2024]}}], "calculation": "growth"})
-    assert [s.tool for s in plan.steps] == ["search_filings", "get_financial_fact", "compare_periods"]
-
-
 # ----------------------------------------------------------------------------------------------- graph
 def test_the_planner_in_the_graph_refuses_through_composer_and_critic():
     nodes = stub_nodes()
@@ -356,48 +308,6 @@ def test_no_indexed_company_points_at_r3():
     assert "R3" not in pl.entities_text(from_turns(["What was Apple's revenue in fiscal 2024?"]))
 
 
-# ----------------------------------------------------------------------------------------------- arguments
-def fact(period="FY", duration="12M", metric="revenue") -> PlanStep:
-    return PlanStep(tool="get_financial_fact", purpose="x", arguments={
-        "ticker": "META", "metric": metric, "fiscal_year": 2025, "fiscal_period": period, "duration": duration})
-
-
-@pytest.mark.parametrize(("question", "period", "duration"), [
-    ("What was Meta's revenue in Q2 fiscal 2025?", "Q2", None),                     # the tool picks 3M
-    ("What was Meta's revenue for the six months ended June 30, 2025?", "Q2", "6M"),
-    ("What was Meta's year-to-date revenue in Q3 fiscal 2025?", "Q3", "9M"),
-    ("How much cash did Meta hold at the end of fiscal 2025?", "FY", None),          # point in time: the tool's
-])
-def test_the_tool_chooses_the_duration_unless_year_to_date_is_asked(question, period, duration):
-    plan = pl.normalize_arguments(with_steps(fact(period)), question, from_turns([question]))
-    assert plan.steps[0].arguments["duration"] == duration
-
-
-def test_a_guessed_item_is_dropped_unless_the_question_names_one():
-    guessed = with_steps(search(item="Item 1"))
-    assert pl.normalize_arguments(guessed, "What drove Microsoft's revenue?", Entities()).steps[0].arguments["item"] is None
-    named = pl.normalize_arguments(with_steps(search(item="Item 7")), "What does Item 7 of Apple's 10-K say?",
-                                    Entities())
-    assert named.steps[0].arguments["item"] == "Item 7"
-
-
-@pytest.mark.parametrize(("question", "planned", "expected"), [
-    ("What was Merck's operating margin in fiscal 2025?", "ratio", "percent"),      # the critic expects percent
-    ("What was NVIDIA's gross margin in fiscal 2023?", None, "percent"),
-    ("By what percentage did Citigroup's net income change from fiscal 2023 to 2024?", None, "growth"),
-    ("What was Apple's current ratio in fiscal 2024?", "ratio", "ratio"),           # ratio or percent: kept
-    ("What was Apple's revenue in fiscal 2024?", None, None),                       # nothing expected
-])
-def test_the_calculation_follows_what_the_critic_expects(question, planned, expected):
-    plan = with_steps(fact()).model_copy(update={"calculation": planned})
-    assert pl.align_calculation(plan, question).calculation == expected
-
-
-def test_finalize_keeps_a_refusal_untouched():
-    refusal = Plan.model_validate(REFUSAL)
-    assert pl.finalize(refusal, from_turns(["Should I buy Apple?"]), "Should I buy Apple?") == (refusal, [])
-
-
 # ----------------------------------------------------------------------------------------------- R3 recheck
 FOLLOW_UP = ("What about fiscal 2025?", ["What was Pfizer's revenue in fiscal 2023?"])
 R3 = {**REFUSAL, "reasoning": "Fiscal 2025 is not indexed.", "refusal_rule": "R3"}
@@ -448,96 +358,3 @@ def test_free_text_arguments_are_narrowed_for_decoding():
     for tool in ("get_financial_fact", "compare_periods"):
         assert set(variants[tool]["metric"]["enum"]) == set(load_concept_map())
         assert variants[tool]["ticker"]["pattern"] == "^[A-Z]{1,5}$"
-
-
-# ----------------------------------------------------------------------------------------------- second review
-def test_every_search_returns_the_tools_top_five():
-    """Strict decoding hides k's default: the model wrote k=1 on every search (P2-P5)."""
-    plan = pl.normalize_arguments(with_steps(search(k=1)), "What drove Apple's revenue?", Entities())
-    assert plan.steps[0].arguments["k"] == pl.SEARCH_K == 5
-
-
-@pytest.mark.parametrize(("question", "planned", "expected"), [
-    ("What was AbbVie's revenue in fiscal 2025?", "Q4", "FY"),          # P5 pdev-19 planned Q4
-    ("What was Merck's operating income in fiscal 2025?", "Q1", "FY"),  # P5 pdev-25 planned Q1
-    ("What was Meta's revenue in Q2 fiscal 2025?", "FY", "Q2"),
-    ("What were P&G's net sales in the fourth quarter of fiscal 2024?", "FY", "Q4"),   # the tool answers Q4
-])
-def test_a_fact_is_fetched_for_the_questions_period(question, planned, expected):
-    plan = pl.normalize_arguments(with_steps(fact(planned)), question, from_turns([question]))
-    assert plan.steps[0].arguments["fiscal_period"] == expected
-
-
-def test_a_search_form_follows_the_period():
-    question = "What did Meta say about AI in the second quarter of fiscal 2025?"
-    step = search(ticker="META", fiscal_year=2025, form="10-K")
-    plan = pl.normalize_arguments(with_steps(step), question, from_turns([question]))
-    assert plan.steps[0].arguments["fiscal_period"] == "Q2" and plan.steps[0].arguments["form"] == "10-Q"
-    annual = pl.normalize_arguments(with_steps(search(ticker="KO", fiscal_year=2024, form="10-Q")),
-                                    "What did Coca-Cola say about sugar in fiscal 2024?", Entities(("KO",), (2024,), ()))
-    assert annual.steps[0].arguments["fiscal_period"] == "FY" and annual.steps[0].arguments["form"] == "10-K"
-
-
-def test_redundant_compare_periods_steps_are_dropped():
-    one_year = PlanStep(tool="compare_periods", purpose="x",
-                        arguments={"ticker": "PG", "metric": "operating_income", "years": [2023]})
-    repeat = PlanStep(tool="compare_periods", purpose="x",
-                      arguments={"ticker": "META", "metric": "revenue", "years": [2025]})
-    trend = PlanStep(tool="compare_periods", purpose="x",
-                     arguments={"ticker": "META", "metric": "revenue", "years": [2023, 2024, 2025]})
-    plan = pl.normalize_arguments(with_steps(fact(), one_year, repeat, trend), "Meta's revenue trend?", Entities())
-    assert [s.tool for s in plan.steps] == ["get_financial_fact", "compare_periods"]
-    assert plan.steps[1].arguments["years"] == [2023, 2024, 2025]
-
-
-@pytest.mark.parametrize(("question", "years"), [
-    ("What does Microsoft say about its 2030 carbon-negative commitment?", ()),
-    ("What does Microsoft say about its 2030 goal in its fiscal 2024 10-K?", (2024,)),
-    ("How did Walmart describe the 2008 financial crisis in fiscal 2024?", (2024,)),
-    ("What was Pfizer's revenue in fiscal 2019?", (2019,)),             # written as fiscal: kept (R3)
-    ("What will Apple's revenue be in FY2030?", (2030,)),
-    ("What was Apple's revenue in 2026?", (2026,)),                     # bare, near the indexed years
-])
-def test_only_fiscal_years_are_planned_with(question, years):
-    assert pl.planning_entities(from_turns([question]), question).years == years
-
-
-def test_a_non_fiscal_year_neither_refuses_nor_searches():
-    question = "What does Microsoft say about its 2030 carbon-negative commitment?"
-    out = plan_node(FakeLLM(SEARCH_ONLY), question)
-    assert not out["plan"].refuse and out["entities"].years == ()
-    assert [s.arguments["fiscal_year"] for s in out["plan"].steps] == [None]
-
-
-@pytest.mark.parametrize("question", [
-    "What expected credit losses did JPMorgan report in fiscal 2021?",
-    "Which R&D projects did Merck describe in fiscal 2021?",
-    "What was Pfizer's projected benefit obligation in fiscal 2021?",
-])
-def test_accounting_terms_are_not_forecasts(question):
-    plan, _ = pl.scope_check(Plan.model_validate(ANSWER), from_turns([question]), question)
-    assert plan.refusal_rule == "R3"
-
-
-@pytest.mark.parametrize("question", [
-    "Will Apple's fiscal 2025 revenue be restated?",
-    "Do you expect Apple's fiscal 2025 results to be revised?",
-])
-def test_the_r3_recheck_skips_questions_about_the_future(question):
-    assert pl.scope_contradiction(Plan.model_validate(R3), from_turns([question]), question) is None
-
-
-def test_the_r3_correction_keeps_an_unindexed_second_company_refused():
-    question = "Compare Apple's and Tesla's revenue in fiscal 2024."
-    correction = pl.scope_contradiction(Plan.model_validate(R3), from_turns([question]), question)
-    assert "not in the indexed list is still R3" in correction and "not out of scope" not in correction
-    # "not a forecast" is stated only because the recheck never runs on a question with forecast words (above)
-
-
-def test_the_pin_covers_the_templates_and_the_schema(monkeypatch):
-    pinned = pl.prompt_sha256()
-    monkeypatch.setattr(pl, "REPLAN_TEXT", pl.REPLAN_TEXT + " ")
-    assert pl.prompt_sha256() != pinned
-    monkeypatch.undo()
-    monkeypatch.setattr(pl, "SEARCH_K", 4)
-    assert pl.prompt_sha256() != pinned

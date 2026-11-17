@@ -1,7 +1,7 @@
 """W2-02: run the planner node on the development questions and score its refusal decisions and plans.
 
-    python eval/run_planner.py --run P8                 # all 49: eval/dev_set.jsonl (15) + eval/planner_dev.jsonl (34)
-    python eval/run_planner.py --run P8 --questions pdev --limit 5
+    python eval/run_planner.py --run P9                 # all 49: eval/dev_set.jsonl (15) + eval/planner_dev.jsonl (34)
+    python eval/run_planner.py --run P9 --questions pdev --limit 5
 
 Only development questions: the 15 of the development set and the planner's own tuning questions
 (eval/planner_dev.jsonl: refusals for every rule, partial refusals and answerable controls, written for tuning and
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent.planner import PROMPT_VERSION, plan_question, prompt_sha256  # noqa: E402
+from agent.planner import PROMPT_VERSION, plan_question, prompt_sha256, rules_sha256  # noqa: E402
 from agent.state import Plan, plan_json_schema  # noqa: E402
 from retrieval.entities import from_turns  # noqa: E402
 
@@ -70,12 +70,13 @@ def load_questions(which: str = "all") -> list[dict[str, Any]]:
 
 
 def entity_filters_used(plan: Plan, tickers: tuple[str, ...]) -> bool | None:
-    """Whether every search_filings step searches one of the question's companies (None: no search step or no
-    company named)."""
+    """Whether the plan's searches use only the question's companies AND search every one of them (None: no search
+    step or no company named). Membership alone would pass a plan that searches one of two named companies."""
     searches = [s for s in plan.steps if s.tool == "search_filings"]
     if not searches or not tickers:
         return None
-    return all(s.arguments.get("ticker") in tickers for s in searches)
+    searched = {s.arguments.get("ticker") for s in searches}
+    return searched <= set(tickers) and set(tickers) <= searched
 
 
 async def plan_one(llm: Any, q: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
@@ -135,7 +136,7 @@ def summary(records: list[dict[str, Any]], run_id: str, model: str) -> str:
             lines.append(f"| {kind} | {_pct(sum(r['decision_correct'] for r in by_kind[kind]), len(by_kind[kind]))} |")
     lines += [f"| valid plan (JSON and the Plan rules) | {_pct(sum(r['json_valid'] for r in records), len(records))} |",
               f"| plans that needed the JSON retry | {sum(1 for r in records if r['retries'])} |",
-              f"| plans whose searches all use the question's company | {_pct(sum(with_filters), len(with_filters))} |",
+              f"| plans whose searches cover exactly the question's companies | {_pct(sum(with_filters), len(with_filters))} |",
               f"| tokens per plan, mean | {statistics.mean(tokens):.0f} |" if tokens else "| tokens | - |",
               f"| seconds per plan, median / max | {statistics.median(seconds):.1f} / {seconds[-1]:.1f} |"
               if seconds else "| seconds | - |", "",
@@ -156,7 +157,8 @@ def write(records: list[dict[str, Any]], run_id: str, model: str, runs_dir: Path
           summary_file: Path = SUMMARY_FILE) -> tuple[Path, Path]:
     runs_dir.mkdir(parents=True, exist_ok=True)
     runs = runs_dir / f"{run_id}.jsonl"
-    meta = {"prompt_version": PROMPT_VERSION, "prompt_sha256": prompt_sha256(), "model": model}
+    meta = {"prompt_version": PROMPT_VERSION, "prompt_sha256": prompt_sha256(), "rules_sha256": rules_sha256(),
+            "model": model}
     runs.write_text("".join(json.dumps({**meta, **r}, ensure_ascii=False) + "\n" for r in records),
                     encoding="utf-8", newline="\n")
     summary_file.write_text(summary(records, run_id, model), encoding="utf-8", newline="\n")

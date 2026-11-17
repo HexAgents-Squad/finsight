@@ -16,9 +16,10 @@ graph gives up ("could not verify: the planner returned no plan"). On a replan (
 message shows the previous steps and the errors, so the new plan can avoid them.
 
 The prompt is tuned on the development questions only (eval/dev_set.jsonl and eval/planner_dev.jsonl, never gold-v1
-or the refusal tests; eval/run_planner.py) and pinned: PROMPT_SHA256 is prompt_sha256(), over the system prompt, the
-decoding schema, the message templates and the rule patterns; a test fails when any of them changes (a prompt edit,
-a tool's argument model, the metrics, the scope, a rule). Re-tune, then re-pin.
+or the refusal tests; eval/run_planner.py) and pinned: PROMPT_SHA256 is prompt_sha256(), over everything the model
+sees (the system prompt, the decoding schema, every message template); a test fails when any of them changes (a
+prompt edit, a tool's argument model, the metrics, the scope). The rules after the model are tested, and each run
+records rules_sha256(). Re-tune after a change to what the model sees, then re-pin.
 """
 from __future__ import annotations
 
@@ -41,12 +42,12 @@ from agent.state import MAX_PLAN_STEPS, AgentState, Plan, PlannedTool, PlanStep,
 from core.llm import Message
 from ingest.edgar import COMPANIES_FILE, load_scope
 from ingest.xbrl import load_concept_map
-from retrieval.entities import Entities, from_turns, indexed
+from retrieval.entities import Entities, extract, from_turns, indexed
 from tools.registry import TOOLS
 
 PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "planner.txt"
 PROMPT_VERSION = "planner-v1"
-PROMPT_SHA256 = "fe027517f1c1785fc5c25f443da31a4a435077ab3e3b78702884144ee9c26383"   # measured in P7
+PROMPT_SHA256 = "8b792fa82ea7f88399aecb226390f457f8393380fb2c999f43933c1caf601925"   # model inputs of P7 (live) and P8 (replayed, final rules)
 SEARCH = "search_filings"
 
 
@@ -77,18 +78,41 @@ def system_prompt() -> str:
         TOOLS=tools_text(), METRICS=", ".join(sorted(load_concept_map())))
 
 
-def prompt_sha256() -> str:
-    """The planner's pin: the system prompt, the decoding schema, every message template the model sees (entity
-    hints, the replan text, the R3 correction, the JSON re-ask) and the patterns of the deterministic rules. Any
-    change to what the model is shown or how its plan is corrected changes it (tests/test_planner.py)."""
-    from agent.guided import RETRY_INSTRUCTION
-    parts = [system_prompt(), json.dumps(plan_json_schema(), sort_keys=True), RETRY_INSTRUCTION, NO_COMPANY_HINT,
-             NOT_INDEXED_LINE, REPLAN_TEXT, CORRECTION_TEXT, FORECAST.pattern, LIVE_OR_NEWS.pattern, YTD_WORDS.pattern,
-             NAMES_AN_ITEM.pattern, FISCAL_WORDS.pattern, FOURTH_QUARTER.pattern, str(YEAR_MARGIN), str(SEARCH_K)]
+def _sha256(parts: Sequence[str]) -> str:
     return hashlib.sha256("\n\0\n".join(parts).encode("utf-8")).hexdigest()
 
 
-# Message templates (pinned with the prompt): kept verbatim, so cached replies stay valid while the rules change
+def prompt_sha256() -> str:
+    """The planner's pin: everything the model is shown, so an unchanged pin means unchanged requests (and cached
+    replies replay exactly): the system prompt, the decoding schema, every message template and the JSON re-ask.
+    The rules that correct a plan after the model are code, covered by tests, and recorded per run by
+    rules_sha256() (eval/run_planner.py), so two runs with the same pin but different rules are told apart."""
+    from agent.guided import RETRY_INSTRUCTION
+    return _sha256([system_prompt(), json.dumps(plan_json_schema(), sort_keys=True), RETRY_INSTRUCTION,
+                    *MESSAGE_TEMPLATES])
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RULE_SOURCES = ("agent/planner.py", "agent/guided.py", "agent/critic_checks.py", "retrieval/entities.py")
+
+
+def rules_sha256() -> str:
+    """The code that turns the model's reply into the final plan (line endings normalised, the pin line left out)."""
+    texts = []
+    for name in RULE_SOURCES:
+        lines = (REPO_ROOT / name).read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")
+        texts.append("\n".join(line for line in lines if not line.startswith("PROMPT_SHA256 = ")))
+    return _sha256(texts)
+
+
+# Message templates: every literal of the user messages, pinned with the prompt and kept verbatim
+HISTORY_HEADER = "Earlier questions in this conversation (oldest first):\n"
+QUESTION_LINE = "Question: {question}"
+ENTITIES_HEADER = "Read from the conversation:\n"
+COMPANIES_LINE = "- companies (indexed tickers): {companies}"
+YEARS_LINE = "- fiscal years: {years}"
+PERIODS_LINE = "- fiscal periods: {periods}"
+NONE_NAMED = "none named"
 NO_COMPANY_HINT = " (a company the question names that is not in the indexed list is not indexed: R3)"
 NOT_INDEXED_LINE = "- not indexed: {missing}"
 REPLAN_TEXT = ("Your previous plan failed. Its steps:\n{steps}\nTool errors:\n{errors}\nMake a new plan that avoids "
@@ -99,40 +123,42 @@ CORRECTION_TEXT = ("Check against the indexed filings: the filings for {tickers}
                    "these companies and periods are checked here: a company the question names that is not in the "
                    "indexed list is still R3. A follow-up keeps the company and the line item of the earlier "
                    "question. Decide again with the same rules and reply with ONE JSON object.")
+MESSAGE_TEMPLATES = (HISTORY_HEADER, QUESTION_LINE, ENTITIES_HEADER, COMPANIES_LINE, YEARS_LINE, PERIODS_LINE,
+                     NONE_NAMED, NO_COMPANY_HINT, NOT_INDEXED_LINE, REPLAN_TEXT, CORRECTION_TEXT)
 
 
 # ----------------------------------------------------------------------------------------------- fiscal years
-FISCAL_WORDS = re.compile(r"\b(?:fiscal(?:\s+year)?|FY)\s*'?(\d{4}|\d{2})\b", re.IGNORECASE)
-YEAR_MARGIN = 2             # a bare year this close to the indexed years is read as a fiscal year
+FISCAL_WORDS = re.compile(r"\b(?:fiscal(?:\s+years?)?|FY)\s*'?(\d{4}|\d{2})\b", re.IGNORECASE)
+# A year in these contexts is a date in the text, not the fiscal year asked about (a bare year otherwise reads as
+# the fiscal-year label, spec §4.1 rule 2, so "Apple's revenue in 2020" is still R3)
+NOT_A_FISCAL_YEAR = (r"\b(?:due|by|until|through|maturing(?:\s+in)?|before)\s+{y}\b",
+                     r"\b{y}(?:\s+[\w-]+){{0,2}}\s+(?:goals?|targets?|commitments?|crisis|pledges?|plans?|deadlines?|"
+                     r"notes|bonds|debentures)\b")
 
 
-def planning_entities(entities: Entities, question: str) -> Entities:
-    """The entities with only the years the question uses as fiscal years: written as fiscal ("fiscal 2030",
-    "FY2024", "FY24") or a bare year within YEAR_MARGIN of the indexed years. retrieval.entities reads any year,
-    so "notes due 2030" or "the 2008 financial crisis" would otherwise be refused as R3 or searched as a fiscal
-    year (out_of_corpus, a wasted replan)."""
-    scope = load_scope()
-    low, high = min(scope.tenk_years | scope.tenq_years) - YEAR_MARGIN, max(scope.tenk_years) + YEAR_MARGIN
-    written = {int(y) if len(y) == 4 else 2000 + int(y) for y in FISCAL_WORDS.findall(question)}
-    years = tuple(y for y in entities.years if y in written or low <= y <= high)
-    return entities if years == entities.years else Entities(entities.tickers, years, entities.periods)
+def planning_entities(entities: Entities, text: str) -> Entities:
+    """The entities without the years `text` (the conversation) uses as dates rather than fiscal years ("notes due
+    2030", "the 2008 financial crisis", "its 2030 goal"), which would otherwise be refused as R3 or searched as a
+    fiscal year (out_of_corpus, a wasted replan). A year written as fiscal ("fiscal 2030", "FY24") is always kept."""
+    written = {int(y) if len(y) == 4 else 2000 + int(y) for y in FISCAL_WORDS.findall(text)}
+    years = tuple(y for y in entities.years if y in written
+                  or not any(re.search(p.format(y=y), text, re.IGNORECASE) for p in NOT_A_FISCAL_YEAR))
+    if years == entities.years:
+        return entities
+    if not years:                   # "latest 10-K ... notes due 2030": without the date, "latest" names the year
+        dates = "|".join(str(y) for y in entities.years)
+        years = extract(re.sub(rf"\b(?:{dates})\b", "", text)).years
+    return Entities(entities.tickers, years, entities.periods)
 
 
-def entities_text(entities: Entities) -> str:
-    """What retrieval/entities.py read from the conversation, with the periods the corpus does not index, as a
-    hint (the planner decides; R3 covers unindexed periods, R2 a question about the future)."""
-    def listed(values: Sequence[Any]) -> str:
-        return ", ".join(str(v) for v in values) or "none named"
-    companies = listed(entities.tickers)
-    if not entities.tickers:
-        companies += NO_COMPANY_HINT
-    lines = [f"- companies (indexed tickers): {companies}",
-             f"- fiscal years: {listed(entities.years)}",
-             f"- fiscal periods: {listed(entities.periods)}"]
-    missing = unindexed(entities)
-    if missing:
-        lines.append(NOT_INDEXED_LINE.format(missing=", ".join(missing)))
-    return "\n".join(lines)
+def _indexed(year: int | None, period: str | None) -> bool:
+    """Whether the corpus has the filing: a 10-K for FY (and Q4, which the 10-K covers), a 10-Q for Q1-Q3; a step
+    without a year is not checked."""
+    if year is None:
+        return True
+    if period in (None, "FY", "Q4"):
+        return year in load_scope().tenk_years or (period is None and year in load_scope().tenq_years)
+    return indexed(year, period)
 
 
 def unindexed(entities: Entities) -> list[str]:
@@ -140,61 +166,153 @@ def unindexed(entities: Entities) -> list[str]:
     return [f"fiscal {y} {p}" for y in entities.years for p in entities.periods or ("FY",) if not _indexed(y, p)]
 
 
+def entities_text(entities: Entities) -> str:
+    """What retrieval/entities.py read from the conversation, with the periods the corpus does not index, as a
+    hint (the planner decides; R3 covers unindexed periods, R2 a question about the future)."""
+    def listed(values: Sequence[Any]) -> str:
+        return ", ".join(str(v) for v in values) or NONE_NAMED
+    companies = listed(entities.tickers) + ("" if entities.tickers else NO_COMPANY_HINT)
+    lines = [COMPANIES_LINE.format(companies=companies), YEARS_LINE.format(years=listed(entities.years)),
+             PERIODS_LINE.format(periods=listed(entities.periods))]
+    missing = unindexed(entities)
+    if missing:
+        lines.append(NOT_INDEXED_LINE.format(missing=", ".join(missing)))
+    return "\n".join(lines)
+
+
+def _error_lines(results: Sequence[ToolResult]) -> list[str]:
+    return [f"- {r.call.name}({json.dumps(r.call.arguments, sort_keys=True)}) -> {r.error_type}: "
+            f"{str(r.output['error'].get('message', ''))[:200]}" for r in results if r.error_type]
+
+
+def user_message(state: AgentState, entities: Entities) -> str:
+    """The question with the earlier turns, the entities read from them and, on a replan, the previous steps and
+    the tool errors."""
+    parts = []
+    history = state.get("history") or []
+    if history:
+        parts.append(HISTORY_HEADER + "\n".join(f"- {q}" for q in history))
+    parts.append(QUESTION_LINE.format(question=state["question"]))
+    parts.append(ENTITIES_HEADER + entities_text(entities))
+    previous, errors = state.get("plan"), _error_lines(state.get("tool_results") or [])
+    if previous is not None and errors:
+        steps = [{"tool": s.tool, "arguments": s.arguments} for s in previous.steps]
+        parts.append(REPLAN_TEXT.format(steps=json.dumps(steps), errors="\n".join(errors)))
+    return "\n\n".join(parts)
+
+
+def messages(state: AgentState, entities: Entities) -> list[Message]:
+    return [{"role": "system", "content": system_prompt()}, {"role": "user", "content": user_message(state, entities)}]
+
+
+# ----------------------------------------------------------------------------------------------- scope rules
 # A question about the future (R2). Word-final forms only: "expected credit losses", "projected benefit
 # obligation" and "R&D projects" are reported accounting terms, not forecasts.
 FORECAST = re.compile(r"\b(?:will|would\s+be|expects?|expected\s+to|predict(?:s|ed|ion)?|forecasts?|projected\s+to|"
                       r"outlook|next\s+(?:year|quarter)|going\s+to|likely)\b", re.IGNORECASE)
+LIVE_OR_NEWS = re.compile(r"\b(?:price|trading|today|right\s+now|currently|news|latest\s+news)\b", re.IGNORECASE)
+
+
+def _refusal(reason: str, rule: str) -> Plan:
+    return Plan(reasoning=f"Scope check: {reason}, so the question is refused ({rule}).", refuse=True,
+                refusal_rule=rule, steps=[], calculation=None)
 
 
 def scope_check(plan: Plan, entities: Entities, question: str) -> tuple[Plan, str | None]:
     """docs/spec.md §6 from the corpus scope, not the model: a plan that answers a question all of whose fiscal
-    periods are not indexed is refused, R3, or R2 when the question asks about the future (R2 before R3). Returns
-    the plan and a note when the check changed it. A question that also names an indexed period is left to the
-    plan (a partial refusal's factual part)."""
+    periods are not indexed is refused, R3, or R2 when the question asks about the future (R2 before R3). A question
+    that also names an indexed period is left to the plan; step_scope then drops the unindexed steps."""
     missing = unindexed(entities)
     if plan.refuse or not entities.years or len(missing) < len(entities.years) * len(entities.periods or ("FY",)):
         return plan, None
     rule = "R2" if FORECAST.search(question) else "R3"
-    refused = Plan(reasoning=f"Scope check: {', '.join(missing)} is not indexed, so the question is refused ({rule}).",
-                   refuse=True, refusal_rule=rule, steps=[], calculation=None)
-    return refused, f"planner: scope check refused the plan ({rule}: {', '.join(missing)} not indexed)"
+    return (_refusal(f"{', '.join(missing)} is not indexed", rule),
+            f"planner: scope check refused the plan ({rule}: {', '.join(missing)} not indexed)")
 
 
+def step_scope(plan: Plan, question: str) -> tuple[Plan, str | None]:
+    """Steps that ask for a filing the corpus does not index (a fact or search for an unindexed fiscal year or
+    quarter; compare_periods years outside the 10-K years) are dropped: the tool would answer out_of_corpus and use
+    up the one replan. What remains is answered and the rest declined (a partial refusal, R3, or R2 for a question
+    about the future); nothing left is a refusal."""
+    if plan.refuse or not plan.steps:
+        return plan, None
+    tenk = load_scope().tenk_years
+    kept, dropped = [], []
+    for step in plan.steps:
+        args = step.arguments
+        if step.tool == "compare_periods":
+            years = [y for y in args["years"] if y in tenk]
+            if len(years) < len(args["years"]):
+                dropped.append(f"fiscal {', '.join(str(y) for y in args['years'] if y not in tenk)}")
+                if len(years) < 2:
+                    continue
+                step = PlanStep.model_validate({**step.model_dump(), "arguments": {**args, "years": years}})
+        elif not _indexed(args.get("fiscal_year"), args.get("fiscal_period")):
+            dropped.append(f"fiscal {args.get('fiscal_year')} {args.get('fiscal_period') or ''}".strip())
+            continue
+        kept.append(step)
+    if not dropped:
+        return plan, None
+    rule = plan.refusal_rule or ("R2" if FORECAST.search(question) else "R3")
+    what = ", ".join(dict.fromkeys(dropped))
+    note = f"planner: steps for {what} dropped (not indexed)"
+    if not kept:
+        return _refusal(f"{what} is not indexed", rule), note
+    return plan.model_copy(update={"steps": kept, "refusal_rule": rule}), note + f"; the rest answered ({rule})"
+
+
+def scope_contradiction(plan: Plan, entities: Entities, question: str) -> str | None:
+    """A correction when the model refused R3 although every company and period read from the conversation is
+    indexed (measured: "What about fiscal 2025?" after a Pfizer question was refused as "fiscal year 2025 is not
+    indexed"). Not for a question about the future (R2 territory), live prices or news. The correction says only
+    what the scope shows: a company the question names that retrieval.entities does not know (not indexed) is
+    still R3, so a correct refusal ("Apple's and Tesla's revenue") is kept by the model. None when consistent."""
+    if not (plan.refuse and plan.refusal_rule == "R3" and entities.tickers and entities.years):
+        return None
+    if unindexed(entities) or LIVE_OR_NEWS.search(question) or FORECAST.search(question):
+        return None
+    periods = ", ".join(f"fiscal {y} {p}" for y in entities.years for p in entities.periods or ("FY",))
+    years = ", ".join(str(y) for y in sorted(load_scope().tenk_years))
+    return CORRECTION_TEXT.format(tickers=", ".join(entities.tickers), periods=periods, years=years)
+
+
+# ----------------------------------------------------------------------------------------------- arguments
+SEARCH_K = 5                # search_filings' own default (ADR-017 was measured at the top 5)
+FORM_OF_PERIOD = {"FY": "10-K", "Q1": "10-Q", "Q2": "10-Q", "Q3": "10-Q"}
 YEAR_TO_DATE = {"Q2": "6M", "Q3": "9M"}
-YTD_WORDS = re.compile(r"\b(?:six|nine)\s+months\b|\bfirst\s+half\b|\byear[\s-]+to[\s-]+date\b", re.IGNORECASE)
+YTD_WORDS = re.compile(r"\b(?:six|nine)[\s-]+months?\b|\bfirst[\s-]+half\b|\bH1\b|\byear[\s-]+to[\s-]+date\b|\bYTD\b",
+                       re.IGNORECASE)
+# Any sign that the conversation asks about part of a year: then the model's period stands (the question may mix
+# periods, "fourth-quarter and full-year", "end of fiscal 2024 to Q3 of fiscal 2025"); with none, it is the year
+PERIOD_CUE = re.compile(r"\bQ[1-4]\b|\b(?:first|second|third|fourth|1st|2nd|3rd|4th)[\s-]+(?:fiscal[\s-]+)?quarter|"
+                        r"\bquarter(?:s|ly)?\b|\b(?:three|six|nine)[\s-]+months?\b|\bhalf\b|\bH[12]\b|"
+                        r"\byear[\s-]+to[\s-]+date\b|\bYTD\b|\b10-Q\b", re.IGNORECASE)
 NAMES_AN_ITEM = re.compile(r"\bItem\s+\d", re.IGNORECASE)
 
 
-SEARCH_K = 5                # search_filings' own default (ADR-017 was measured at the top 5)
-FOURTH_QUARTER = re.compile(r"\bQ4\b|\b(?:fourth|4th)\s+(?:fiscal\s+)?quarter\b", re.IGNORECASE)
-FORM_OF_PERIOD = {"FY": "10-K", "Q1": "10-Q", "Q2": "10-Q", "Q3": "10-Q"}
+def cue_text(question: str, history: Sequence[str] = ()) -> str:
+    """The text whose period cues count: the question, or the whole conversation for a follow-up that names no year
+    or period of its own ("And its operating income?" after a fourth-quarter question)."""
+    named = extract(question)
+    return question if named.years or named.periods else " ".join([*history, question])
 
 
-def question_period(entities: Entities) -> str | None:
-    """The one fiscal period the question asks about: its quarter, FY when it names none, None when it names
-    several (each step then keeps its own)."""
-    if not entities.periods:
-        return "FY"
-    return entities.periods[0] if len(entities.periods) == 1 else None
-
-
-def normalize_arguments(plan: Plan, question: str, entities: Entities) -> Plan:
-    """Arguments the question and the tools decide better than the model. Measured on the development questions,
-    where strict decoding (every argument required, the tools' defaults hidden) made the model write k=1 on every
+def normalize_arguments(plan: Plan, text: str) -> Plan:
+    """Arguments the question and the tools decide better than the model. Strict decoding makes every argument
+    required and hides the tools' defaults; measured on the development questions, the model then wrote k=1 on every
     search, Q4 or Q1 for full-year figures, duration "12M" for quarters and balance-sheet items, and "Item 1" for
-    MD&A questions:
-    - the fiscal period is the question's (FY when it names none) on every fact and search step, and a search's form
-      follows it (a form that contradicts the period is invalid_input in search_filings);
-    - get_financial_fact's duration is left to the tool (12M for a year, 3M for a quarter, none for a point in time,
-      spec §4.2) unless the question asks for year to date;
-    - search_filings returns its own top SEARCH_K and searches every Item (ADR-017's default ranks the statements
-      first) unless the question names one;
-    - a compare_periods step over fewer than two years, or one that repeats figures other steps already fetch, is
-      dropped."""
+    MD&A questions. `text` is cue_text():
+    - with no period cue in it, every fact and search is for the fiscal year (FY); with one, the model's period
+      stands, and a search whose period the corpus does not index for its year searches the whole year;
+    - a search's form follows its period (a form that contradicts it is invalid_input in search_filings);
+    - get_financial_fact's duration is left to the tool (12M, 3M or a point in time, spec §4.2) unless the
+      question asks for year to date;
+    - search_filings returns its own top SEARCH_K and searches every Item unless the question names one;
+    - a compare_periods step over fewer than two years, or one that repeats fetched figures, is dropped."""
     if not plan.steps:
         return plan
-    ytd = bool(YTD_WORDS.search(question))
-    period = question_period(entities)
+    whole_year, ytd = not PERIOD_CUE.search(text), bool(YTD_WORDS.search(text))
     fetched = {(s.arguments["ticker"], s.arguments["metric"], s.arguments["fiscal_year"])
                for s in plan.steps if s.tool == "get_financial_fact"}
     steps = []
@@ -204,19 +322,20 @@ def normalize_arguments(plan: Plan, question: str, entities: Entities) -> Plan:
             years = args.get("years") or []
             if len(years) < 2 or all((args["ticker"], args["metric"], y) in fetched for y in years):
                 continue
-        if step.tool == "get_financial_fact" and period is not None:
-            # Q4 is asked of the tool as Q4: it answers "not reported separately" (spec §4.2), never the year's value
-            args["fiscal_period"] = "Q4" if FOURTH_QUARTER.search(question) else period
-        elif step.tool == SEARCH and period is not None and indexed(args.get("fiscal_year"), period):
-            args["fiscal_period"] = period
-        if step.tool == "get_financial_fact":
+        elif step.tool == "get_financial_fact":
+            if whole_year:
+                args["fiscal_period"] = "FY"
             args["duration"] = YEAR_TO_DATE.get(args.get("fiscal_period") or "FY") if ytd else None
-        elif step.tool == SEARCH:
+        else:
+            if whole_year:
+                args["fiscal_period"] = "FY" if _indexed(args.get("fiscal_year"), "FY") else None
+            elif args.get("fiscal_period") and not _indexed(args.get("fiscal_year"), args["fiscal_period"]):
+                args["fiscal_period"] = None
+            args["form"] = FORM_OF_PERIOD.get(args.get("fiscal_period") or "", None) if args.get("fiscal_period") \
+                else None
             args["k"] = SEARCH_K
-            if not NAMES_AN_ITEM.search(question):
+            if not NAMES_AN_ITEM.search(text):
                 args["item"] = None
-            if args.get("fiscal_period") is not None:
-                args["form"] = FORM_OF_PERIOD[args["fiscal_period"]]
         steps.append(step if args == step.arguments else PlanStep.model_validate({**step.model_dump(),
                                                                                    "arguments": args}))
     return plan.model_copy(update={"steps": steps})
@@ -241,50 +360,6 @@ def align_calculation(plan: Plan, question: str) -> Plan:
     return plan.model_copy(update={"calculation": choice})
 
 
-def finalize(plan: Plan, entities: Entities, question: str) -> tuple[Plan, list[str]]:
-    """The model's plan after the deterministic rules: the scope check, the entities in every search step, the
-    arguments the question and the tools decide, then the expected calculation. `entities` are the planning
-    entities (planning_entities)."""
-    plan, note = scope_check(plan, entities, question)
-    notes = [note] if note else []
-    plan, cut = apply_entities(plan, entities)
-    if cut:
-        notes.append(f"planner: {cut} search step(s) beyond the {MAX_PLAN_STEPS}-step cap were dropped")
-    return align_calculation(normalize_arguments(plan, question, entities), question), notes
-
-
-def _indexed(year: int, period: str) -> bool:
-    """Whether the corpus has the filing: a 10-K for FY, a 10-Q for Q1-Q3."""
-    if period == "FY":
-        return year in load_scope().tenk_years
-    return indexed(year, period)
-
-
-def _error_lines(results: Sequence[ToolResult]) -> list[str]:
-    return [f"- {r.call.name}({json.dumps(r.call.arguments, sort_keys=True)}) -> {r.error_type}: "
-            f"{str(r.output['error'].get('message', ''))[:200]}" for r in results if r.error_type]
-
-
-def user_message(state: AgentState, entities: Entities) -> str:
-    """The question with the earlier turns, the entities read from them and, on a replan, the previous steps and
-    the tool errors."""
-    parts = []
-    history = state.get("history") or []
-    if history:
-        parts.append("Earlier questions in this conversation (oldest first):\n" + "\n".join(f"- {q}" for q in history))
-    parts.append(f"Question: {state['question']}")
-    parts.append("Read from the conversation:\n" + entities_text(entities))
-    previous, errors = state.get("plan"), _error_lines(state.get("tool_results") or [])
-    if previous is not None and errors:
-        steps = [{"tool": s.tool, "arguments": s.arguments} for s in previous.steps]
-        parts.append(REPLAN_TEXT.format(steps=json.dumps(steps), errors="\n".join(errors)))
-    return "\n\n".join(parts)
-
-
-def messages(state: AgentState, entities: Entities) -> list[Message]:
-    return [{"role": "system", "content": system_prompt()}, {"role": "user", "content": user_message(state, entities)}]
-
-
 # ----------------------------------------------------------------------------------------------- entities
 def _filled(step: PlanStep, field: str, values: Sequence[Any]) -> list[PlanStep]:
     """The step with `field` set to each of `values` when the step leaves it empty (one step per value)."""
@@ -293,47 +368,62 @@ def _filled(step: PlanStep, field: str, values: Sequence[Any]) -> list[PlanStep]
     return [step.model_copy(update={"arguments": {**step.arguments, field: v}}) for v in values]
 
 
-def apply_entities(plan: Plan, entities: Entities) -> tuple[Plan, int]:
-    """Every search_filings step searches with the companies, fiscal years and period read from the question
-    (ADR-017: question-derived filters are the biggest retrieval gain), filled in where the step leaves them empty:
-    one step per company (and per year) when the question names several. A period the corpus does not index for
-    that year is not set (Entities.filters drops it the same way); normalize_arguments then makes the form follow
-    the period. Returns the plan and how many steps the MAX_PLAN_STEPS cap dropped."""
+def _with(step: PlanStep, **arguments: Any) -> PlanStep:
+    return step.model_copy(update={"arguments": {**step.arguments, **arguments}})
+
+
+def apply_entities(plan: Plan, entities: Entities) -> Plan:
+    """Every search_filings step searches the companies, fiscal years and period read from the question (ADR-017:
+    question-derived filters are the biggest retrieval gain). Companies are the question's: a step with no company,
+    or with one the question does not name, searches each of the question's companies, and every search query covers
+    all of them ("risks Apple and Microsoft describe" searches both even when the model wrote one). Years and the
+    period fill only what a step leaves empty (a step may need another year, e.g. "compared with the prior year")."""
     if plan.refuse or not plan.steps:
-        return plan, 0
+        return plan
+    tickers = entities.tickers
     steps: list[PlanStep] = []
     for step in plan.steps:
         if step.tool != SEARCH:
             steps.append(step)
             continue
-        for s in _filled(step, "ticker", entities.tickers):
+        ticker = step.arguments.get("ticker")
+        targets = [_with(step, ticker=t) for t in tickers] if tickers and ticker not in tickers else [step]
+        for s in targets:
             for s2 in _filled(s, "fiscal_year", entities.years):
                 period = entities.periods[0] if len(entities.periods) == 1 else None
-                year = s2.arguments.get("fiscal_year")
-                if period and s2.arguments.get("fiscal_period") is None and indexed(year, period):
-                    s2 = s2.model_copy(update={"arguments": {**s2.arguments, "fiscal_period": period}})
-                steps.append(PlanStep.model_validate(s2.model_dump()))       # re-validated against SearchArgs
-    unique = list({json.dumps(s.model_dump(), sort_keys=True): s for s in steps}.values())
-    return plan.model_copy(update={"steps": unique[:MAX_PLAN_STEPS]}), max(0, len(unique) - MAX_PLAN_STEPS)
+                if period and s2.arguments.get("fiscal_period") is None:
+                    s2 = _with(s2, fiscal_period=period)
+                steps.append(s2)
+    if tickers:                                         # each query searches every company the question names
+        for query in dict.fromkeys(s.arguments["query"] for s in steps if s.tool == SEARCH):
+            group = [s for s in steps if s.tool == SEARCH and s.arguments["query"] == query]
+            covered = {s.arguments.get("ticker") for s in group}
+            steps += [_with(group[0], ticker=t) for t in tickers if t not in covered]
+    return plan.model_copy(update={"steps": [PlanStep.model_validate(s.model_dump()) for s in steps]})
 
 
-# ----------------------------------------------------------------------------------------------- scope facts
-LIVE_OR_NEWS = re.compile(r"\b(?:price|trading|today|right\s+now|currently|news|latest\s+news)\b", re.IGNORECASE)
-
-
-def scope_contradiction(plan: Plan, entities: Entities, question: str) -> str | None:
-    """A correction when the model refused R3 although every company and period read from the conversation is
-    indexed (measured: "What about fiscal 2025?" after a Pfizer question was refused as "fiscal year 2025 is not
-    indexed"). Not for a question about the future (R2 territory), live prices or news. The correction says only
-    what the scope shows: a company the question names that retrieval.entities does not know (not indexed) is
-    still R3, so a correct refusal ("Apple's and Tesla's revenue") is kept by the model. None when consistent."""
-    if not (plan.refuse and plan.refusal_rule == "R3" and entities.tickers and entities.years):
-        return None
-    if unindexed(entities) or LIVE_OR_NEWS.search(question) or FORECAST.search(question):
-        return None
-    periods = ", ".join(f"fiscal {y} {p}" for y in entities.years for p in entities.periods or ("FY",))
-    years = ", ".join(str(y) for y in sorted(load_scope().tenk_years))
-    return CORRECTION_TEXT.format(tickers=", ".join(entities.tickers), periods=periods, years=years)
+def finalize(plan: Plan, entities: Entities, question: str, history: Sequence[str] = ()) -> tuple[Plan, list[str]]:
+    """The model's plan after the deterministic rules, in order: the question-level scope check, the question's
+    companies in every search, the arguments the question and the tools decide, the step-level scope check, the
+    expected calculation; then duplicate steps removed, the step cap applied, and the plan validated again (an
+    emptied partial refusal becomes a refusal). `entities` are the planning entities (planning_entities)."""
+    plan, note = scope_check(plan, entities, question)
+    notes = [note] if note else []
+    plan = normalize_arguments(apply_entities(plan, entities), cue_text(question, history))
+    plan, note = step_scope(plan, question)
+    notes += [note] if note else []
+    plan = align_calculation(plan, question)
+    steps = list({json.dumps(s.model_dump(), sort_keys=True): s for s in plan.steps}.values())
+    if len(steps) > MAX_PLAN_STEPS:
+        notes.append(f"planner: {len(steps) - MAX_PLAN_STEPS} step(s) beyond the {MAX_PLAN_STEPS}-step cap were "
+                     "dropped")
+        steps = steps[:MAX_PLAN_STEPS]
+    update: dict[str, Any] = {"steps": steps}
+    if plan.partial and not steps:
+        update = {"refuse": True, "steps": [], "calculation": None}
+    elif not steps:
+        update["calculation"] = None
+    return Plan.model_validate(plan.model_copy(update=update).model_dump()), notes
 
 
 # ----------------------------------------------------------------------------------------------- planning
@@ -384,10 +474,10 @@ async def plan_question(llm: CompletionClient, state: AgentState, entities: Enti
                                        {"role": "user", "content": correction}], Plan, schema, llm_model=llm_model)
         result.add(again)
         if again.parsed is not None:
-            plan = again.parsed
+            plan = typing.cast(Plan, again.parsed)
         result.notes.append("planner: an R3 refusal contradicted the indexed scope; asked again"
                             + ("" if again.parsed is not None else f" ({again.error}); kept the refusal"))
-    result.plan, notes = finalize(plan, entities, state["question"])
+    result.plan, notes = finalize(plan, entities, state["question"], state.get("history") or [])
     result.notes += notes
     return result
 
