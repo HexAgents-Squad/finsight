@@ -59,11 +59,6 @@ class CompareArgs(ToolArgs):
     def _upper(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
 
-    @field_validator("metric", mode="before")
-    @classmethod
-    def _lower(cls, value: Any) -> Any:
-        return value.strip().lower() if isinstance(value, str) else value
-
 
 def _row(store: FactStore, ticker: str, metric: str, year: int) -> dict[str, Any]:
     try:

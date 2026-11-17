@@ -94,7 +94,7 @@ Metric = Literal["capex", "cash", "eps_diluted", "gross_profit", "long_term_debt
 METRICS: tuple[str, ...] = get_args(Metric)
 METRIC_HELP = (
     "One of the 13 mapped metrics. A company's own name for the same line uses the metric: revenue = total revenue "
-    "under any label (net sales, net revenues, sales), but not a segment or product sales line inside it; "
+    "under any label (net sales, net revenues, sales); "
     "net_income = net income or net earnings attributable to the company; capex = capital expenditures (purchases of "
     "property and equipment); cash = cash and cash equivalents; rd_expense = research and development. Any other line "
     "item (e.g. stock-based compensation): use search_filings, never another metric.")

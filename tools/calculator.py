@@ -71,7 +71,7 @@ DERIVED_UNITS = frozenset(RESULT_UNIT.values())
 
 class CalculateArgs(ToolArgs):
     operation: Operation = Field(description=(
-        "ratio: a / b, e.g. current assets / current liabilities. "
+        "ratio: a / b, e.g. total liabilities / stockholders' equity. "
         "percent: a part as a % of a whole, e.g. a margin = operating income / revenue. "
         "growth: % change over time, e.g. revenue from fiscal 2023 to 2024. "
         "difference: how much more or less, new - old, in the inputs' unit. "

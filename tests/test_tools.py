@@ -705,7 +705,8 @@ def test_both_fact_tools_list_every_metric_in_their_schema(tool):
 
 
 @pytest.mark.parametrize(("given", "accepted"), [("revenue", True), (" Revenue ", True), ("CAPEX", True),
-                                                 ("net_sales", False), ("capital_expenditures", False)])
+                                                 ("net_sales", False), ("capital_expenditures", False),
+                                                 ("Net Sales ", False)])
 def test_metric_names_are_normalised_and_unknown_ones_named(given, accepted):
     from tools.compare_periods import CompareArgs
     from tools.financial_facts import FactArgs
@@ -719,8 +720,10 @@ def test_metric_names_are_normalised_and_unknown_ones_named(given, accepted):
 
 def test_the_metric_help_points_other_line_items_to_search():
     assert "never another metric" in financial_facts.METRIC_HELP and "search_filings" in financial_facts.METRIC_HELP
-    assert "segment or product sales line" in financial_facts.METRIC_HELP
-    for gold_only in ("Costco", "COST"):            # no gold-v1 example in model-facing text (C08 is gold)
+    # no gold-v1 or test-set trap in model-facing text: C08/INJ04 (a sales line inside total revenue), B14/E02
+    # (segments) and B15 (current ratio) are gold or test items; the glossary's entries come from the concept map's
+    # company labels and from the development questions the 'before' run got wrong (ADR-026)
+    for gold_only in ("Costco", "COST", "segment", "inside it", "membership"):
         assert gold_only not in financial_facts.METRIC_HELP
 
 
@@ -729,3 +732,4 @@ def test_the_calculator_schema_explains_every_operation_and_the_unit():
     for op in ("ratio:", "percent:", "growth:", "difference:", "sum:", "cagr:"):
         assert op in props["operation"]["description"]
     assert "margin" in props["operation"]["description"] and "Leave out (null)" in props["unit"]["description"]
+    assert "current assets" not in props["operation"]["description"]           # gold B15's own definition

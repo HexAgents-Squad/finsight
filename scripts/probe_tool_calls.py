@@ -160,6 +160,8 @@ def matches_plan(call: dict[str, Any], reference: Reference | None) -> bool | No
     tool, planned = reference
     if call["name"] != tool or not isinstance(args, dict):
         return False
+    if isinstance(args.get("metric"), str):           # the tools accept any case: so does the comparison
+        args = {**args, "metric": args["metric"].strip().lower()}
     if tool == "get_financial_fact":
         keys, args = ("ticker", "metric", "fiscal_year"), {**args, "fiscal_period": args.get("fiscal_period") or "FY"}
         return all(args.get(k) == planned.get(k) for k in keys) and args["fiscal_period"] == planned["fiscal_period"]
@@ -251,6 +253,12 @@ def markdown(runs: dict[str, dict[str, Any]]) -> str:
                or matches_plan(f, references.get(f["id"])) is False]
         bad_calc = [c for c in run["calculator"] if "skipped" not in c and not (c["right_operation"] and c.get("accepted"))]
         lines += ["", f"## {label} ({run['model']}, {run['date']})", ""]
+        if run.get("rescored_from"):
+            lines.append(f"- re-scored from the run '{run['rescored_from']}': the same recorded calls checked against "
+                         "the tools as they are now, no request sent")
+        if run.get("note"):
+            lines.append(f"- note: {run['note']}")
+        lines += [f"- calculator, {c['id']}: skipped ({c['skipped']})" for c in run["calculator"] if "skipped" in c]
         lines += [f"- first call, {f['id']}: {f.get('name') or '-'} {f.get('arguments') or ''} -> "
                   f"{f.get('why') or 'accepted, but not what the reviewed plan fetches: ' + plan_text(references.get(f['id']))}"
                   for f in bad] or ["- every first call accepted and as planned"]
