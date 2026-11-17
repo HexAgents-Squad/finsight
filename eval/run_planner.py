@@ -1,7 +1,7 @@
 """W2-02: run the planner node on the development questions and score its refusal decisions and plans.
 
-    python eval/run_planner.py --run P1                 # all 49: eval/dev_set.jsonl (15) + eval/planner_dev.jsonl (34)
-    python eval/run_planner.py --run P1 --questions pdev --limit 5
+    python eval/run_planner.py --run P8                 # all 49: eval/dev_set.jsonl (15) + eval/planner_dev.jsonl (34)
+    python eval/run_planner.py --run P8 --questions pdev --limit 5
 
 Only development questions: the 15 of the development set and the planner's own tuning questions
 (eval/planner_dev.jsonl: refusals for every rule, partial refusals and answerable controls, written for tuning and
@@ -82,7 +82,7 @@ async def plan_one(llm: Any, q: dict[str, Any], schema: dict[str, Any]) -> dict[
     state = {"question": q["question"], "history": q["history"], "plan": None, "tool_results": []}
     entities = from_turns([*q["history"], q["question"]])
     result = await plan_question(llm, state, entities, schema=schema)
-    plan = result.plan
+    plan, entities = result.plan, result.entities
     record = {**q, "entities": {"tickers": list(entities.tickers), "years": list(entities.years),
                                 "periods": list(entities.periods)},
               "plan": plan.model_dump() if plan else None, "json_valid": plan is not None, "retries": result.retries,
@@ -135,7 +135,7 @@ def summary(records: list[dict[str, Any]], run_id: str, model: str) -> str:
             lines.append(f"| {kind} | {_pct(sum(r['decision_correct'] for r in by_kind[kind]), len(by_kind[kind]))} |")
     lines += [f"| valid plan (JSON and the Plan rules) | {_pct(sum(r['json_valid'] for r in records), len(records))} |",
               f"| plans that needed the JSON retry | {sum(1 for r in records if r['retries'])} |",
-              f"| search steps with the question's company | {_pct(sum(with_filters), len(with_filters))} |",
+              f"| plans whose searches all use the question's company | {_pct(sum(with_filters), len(with_filters))} |",
               f"| tokens per plan, mean | {statistics.mean(tokens):.0f} |" if tokens else "| tokens | - |",
               f"| seconds per plan, median / max | {statistics.median(seconds):.1f} / {seconds[-1]:.1f} |"
               if seconds else "| seconds | - |", "",

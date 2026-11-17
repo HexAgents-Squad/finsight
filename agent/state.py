@@ -124,7 +124,7 @@ def _narrowed(arguments: dict[str, Any]) -> dict[str, Any]:
     """A tool's argument schema with its free strings narrowed for decoding: `item` to the spec's exact Item names
     (core.spec), `metric` to the mapped metrics (config/concept_map.yaml), `ticker` to a ticker's shape and
     `query` to MAX_QUERY_CHARS. The tools validate the same arguments as before (W2-03 owns their schemas)."""
-    from ingest.xbrl import load_concept_map  # reads config/concept_map.yaml: only when a schema is built
+    from ingest.xbrl import load_concept_map  # tools.registry has imported it already; here for clarity
     props = arguments["properties"]
     narrowed = {
         "item": {"enum": sorted(ITEMS_OF_FORM["10-K"] | ITEMS_OF_FORM["10-Q"]), "type": "string"},
