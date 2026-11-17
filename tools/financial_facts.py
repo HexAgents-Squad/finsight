@@ -31,7 +31,7 @@ from __future__ import annotations
 import functools
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import yaml
 from pydantic import Field, field_validator
@@ -85,9 +85,33 @@ OUTSIDE_CORPUS_NOTE = ("cited from a {form} filed {filed} that is not in the ind
 SETUP_ERRORS = (OSError, ValueError, KeyError, TypeError, yaml.YAMLError)
 
 
+# The 13 metrics of config/concept_map.yaml (tests/test_tools.py keeps the two in sync). An enum in the tool's
+# schema, so the model sees every valid name and guided decoding cannot write another (W2-03: measured, the model
+# wrote capital_expenditures, cash_and_cash_equivalents, net_sales, ... for the 13 names).
+Metric = Literal["capex", "cash", "eps_diluted", "gross_profit", "long_term_debt", "net_income", "operating_cash_flow",
+                 "operating_income", "rd_expense", "revenue", "stockholders_equity", "total_assets", "total_liabilities"]
+METRICS: tuple[str, ...] = get_args(Metric)
+METRIC_HELP = (
+    "One of the 13 mapped metrics. A company's own name for the same line uses the metric: revenue = total revenue "
+    "under any label (net sales, net revenues, sales), but not a sales line inside it such as Costco's net sales; "
+    "net_income = net income or net earnings attributable to the company; capex = capital expenditures (purchases of "
+    "property and equipment); cash = cash and cash equivalents; rd_expense = research and development. Any other line "
+    "item (e.g. stock-based compensation): use search_filings, never another metric.")
+
+
+def metric_name(value: Any) -> Any:
+    """'Revenue ' -> 'revenue'; an unknown name is invalid_input with the valid ones (as the store says it)."""
+    if not isinstance(value, str):
+        return value
+    name = value.strip().lower()
+    if name not in METRICS:
+        raise ValueError(f"unknown metric {value!r}; use one of {sorted(METRICS)}")
+    return name
+
+
 class FactArgs(ToolArgs):
     ticker: str = Field(min_length=1, max_length=10, description="Ticker of one of the 20 companies, e.g. AAPL")
-    metric: str = Field(min_length=1, description="Metric name from config/concept_map.yaml, e.g. revenue")
+    metric: Metric = Field(description=METRIC_HELP)
     fiscal_year: int = Field(description="The company's own fiscal-year label (FY2025 -> 2025), not calendar year")
     fiscal_period: FiscalPeriod = Field(default="FY", description=(
         "FY, or a fiscal quarter Q1-Q3; Q4 is never reported separately (returns not_reported)"))
@@ -102,8 +126,8 @@ class FactArgs(ToolArgs):
 
     @field_validator("metric", mode="before")
     @classmethod
-    def _lower(cls, value: Any) -> Any:
-        return value.strip().lower() if isinstance(value, str) else value
+    def _metric(cls, value: Any) -> Any:
+        return metric_name(value)
 
 
 def period_text(fiscal_year: int, fiscal_period: str) -> str:

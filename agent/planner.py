@@ -23,6 +23,7 @@ records rules_sha256(). Re-tune after a change to what the model sees, then re-p
 """
 from __future__ import annotations
 
+import ast
 import functools
 import hashlib
 import json
@@ -96,13 +97,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RULE_SOURCES = ("agent/planner.py", "agent/guided.py", "agent/critic_checks.py", "retrieval/entities.py")
 
 
+def _code(source: str) -> str:
+    """The source's code without docstrings, comments, layout or the pin's value: its syntax tree, so editing a
+    docstring or a comment does not change rules_sha256 (it did once, between run P8 and the merge)."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr) \
+                and isinstance(getattr(body[0], "value", None), ast.Constant) and isinstance(body[0].value.value, str):
+            node.body = body[1:] or [ast.Pass()]
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PROMPT_SHA256" for t in node.targets):
+            node.value = ast.Constant("")
+    return ast.dump(tree, include_attributes=False)
+
+
 def rules_sha256() -> str:
-    """The code that turns the model's reply into the final plan (line endings normalised, the pin line left out)."""
-    texts = []
-    for name in RULE_SOURCES:
-        lines = (REPO_ROOT / name).read_text(encoding="utf-8").replace("\r\n", "\n").split("\n")
-        texts.append("\n".join(line for line in lines if not line.startswith("PROMPT_SHA256 = ")))
-    return _sha256(texts)
+    """The code that turns the model's reply into the final plan (RULE_SOURCES' syntax trees, see _code)."""
+    return _sha256([_code((REPO_ROOT / name).read_text(encoding="utf-8")) for name in RULE_SOURCES])
 
 
 # Message templates: every literal of the user messages, pinned with the prompt and kept verbatim

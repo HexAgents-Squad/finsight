@@ -235,15 +235,30 @@ def test_the_pin_follows_the_messages_and_the_schema(monkeypatch):
     assert pl.prompt_sha256() != pinned
 
 
-def test_the_rules_hash_ignores_line_endings_and_the_pin_line(tmp_path, monkeypatch):
+def _copy_sources(tmp_path, edit):
     for name in pl.RULE_SOURCES:
-        text = (pl.REPO_ROOT / name).read_text(encoding="utf-8").replace("\n", "\r\n")
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(re.sub(r'(?m)^PROMPT_SHA256 = "', 'PROMPT_SHA256 = "other', text).encode("utf-8"))
+        target.write_bytes(edit(name, (pl.REPO_ROOT / name).read_text(encoding="utf-8")).encode("utf-8"))
+
+
+def test_the_rules_hash_ignores_layout_docstrings_comments_and_the_pin(tmp_path, monkeypatch):
     original = pl.rules_sha256()
+
+    def cosmetic(name, text):
+        text = re.sub(r'(?m)^PROMPT_SHA256 = "', 'PROMPT_SHA256 = "other', text)
+        text = text.replace('"""The entities without', '"""Reworded. The entities without')
+        return text.replace("\n", "  # a comment\n", 3).replace("\n", "\r\n")
+    _copy_sources(tmp_path, cosmetic)
     monkeypatch.setattr(pl, "REPO_ROOT", Path(tmp_path))
     assert pl.rules_sha256() == original
+
+
+def test_the_rules_hash_changes_with_the_code(tmp_path, monkeypatch):
+    original = pl.rules_sha256()
+    _copy_sources(tmp_path, lambda name, text: text.replace("SEARCH_K = 5", "SEARCH_K = 4"))
+    monkeypatch.setattr(pl, "REPO_ROOT", Path(tmp_path))
+    assert pl.rules_sha256() != original
 
 
 def test_no_control_characters_in_the_planner_sources():

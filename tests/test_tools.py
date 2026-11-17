@@ -83,6 +83,19 @@ def test_exact_halfway_results_round_up(operation, inputs, result):
     assert calculate(operation, inputs)["result"] == result
 
 
+@pytest.mark.parametrize(("operation", "unit", "result_unit"), [
+    ("growth", "USD millions", "%"), ("percent", "USD millions", "%"), ("ratio", "ratio", "ratio"), ("cagr", "%", "%")])
+def test_a_unit_given_to_an_operation_that_sets_its_own_is_not_used(operation, unit, result_unit):
+    """W2-03: the model passes the inputs' unit with growth/percent; the result is unchanged and the unit noted."""
+    years = {"years": 2} if operation == "cagr" else {}
+    with_unit = calculate(operation, [100.0, 121.0], unit=unit, **years)
+    without = calculate(operation, [100.0, 121.0], **years)
+    assert with_unit["result"] == without["result"] and with_unit["unit"] == result_unit
+    noted = [n for n in with_unit["notes"] if "is not used" in n]
+    assert noted == ([] if unit == result_unit else [f"the given unit {unit!r} is not used: {operation} returns "
+                                                     f"{result_unit!r}"])
+
+
 def test_difference_and_sum_without_a_unit_keep_the_inputs_unit():
     out = calculate("difference", [383285, 391035])                  # the week0 §2.3 call, without `unit`
     assert (out["result"], out["unit"], out["notes"]) == (7750.0, None,
@@ -125,7 +138,6 @@ def test_an_overflowing_result_is_undefined_not_a_crash(kwargs):
     ({"operation": "sum", "inputs": [10 ** 400, 1], "unit": "USD"}, "inputs.0: Input should be"),
     ({"operation": "cagr", "inputs": [1, 2]}, "years is required for cagr"),
     ({"operation": "growth", "inputs": [1, 2], "years": 1}, "years is required for cagr"),
-    ({"operation": "ratio", "inputs": [1, 2], "unit": "USD millions"}, "unit is only for difference and sum"),
     ({"operation": "sum", "inputs": [1, 2], "unit": "dollars"}, "unit: Input should be"),
     ({"operation": "pow", "inputs": [1, 2]}, "operation: Input should be"),
     ({"operation": "ratio", "inputs": ["1", 2]}, "inputs.0: Input should be a valid number"),
@@ -675,3 +687,40 @@ def test_a_missing_reranker_model_is_a_data_missing_error(monkeypatch):
 def test_reranking_is_off_by_default():
     from core.settings import Settings
     assert Settings.model_fields["RETRIEVAL_RERANK"].default is False
+
+
+# --------------------------------------------------------------------------------------------- W2-03 schemas
+def test_the_metric_enum_is_the_concept_maps_metrics():
+    from ingest.xbrl import load_concept_map
+    assert set(financial_facts.METRICS) == set(load_concept_map())
+
+
+@pytest.mark.parametrize("tool", ["get_financial_fact", "compare_periods"])
+def test_both_fact_tools_list_every_metric_in_their_schema(tool):
+    schema = next(s for s in registry.SCHEMAS if s["name"] == tool)
+    assert set(schema["parameters"]["properties"]["metric"]["enum"]) == set(financial_facts.METRICS)
+
+
+@pytest.mark.parametrize(("given", "accepted"), [("revenue", True), (" Revenue ", True), ("CAPEX", True),
+                                                 ("net_sales", False), ("capital_expenditures", False)])
+def test_metric_names_are_normalised_and_unknown_ones_named(given, accepted):
+    from tools.compare_periods import CompareArgs
+    from tools.financial_facts import FactArgs
+    for model, extra in ((FactArgs, {"fiscal_year": 2024}), (CompareArgs, {"years": [2023, 2024]})):
+        if accepted:
+            assert model(ticker="AAPL", metric=given, **extra).metric == given.strip().lower()
+        else:
+            with pytest.raises(ValueError, match=f"unknown metric '{given}'; use one of"):
+                model(ticker="AAPL", metric=given, **extra)
+
+
+def test_the_metric_help_points_other_line_items_to_search():
+    assert "never another metric" in financial_facts.METRIC_HELP and "search_filings" in financial_facts.METRIC_HELP
+    assert "Costco" in financial_facts.METRIC_HELP                  # a sales line inside revenue is not revenue
+
+
+def test_the_calculator_schema_explains_every_operation_and_the_unit():
+    props = next(s for s in registry.SCHEMAS if s["name"] == "calculate")["parameters"]["properties"]
+    for op in ("ratio:", "percent:", "growth:", "difference:", "sum:", "cagr:"):
+        assert op in props["operation"]["description"]
+    assert "margin" in props["operation"]["description"] and "Leave out (null)" in props["unit"]["description"]

@@ -61,18 +61,28 @@ POWER_PRECISION = 50
 HUNDRED = Decimal(100)
 NEGATIVE_BASE_NOTE = "the base (old value) is negative, so growth is measured against its absolute value"
 NO_UNIT_NOTE = "no unit given: the result is in the inputs' unit"
+# W2-03, measured: Qwen3-8B passes the inputs' unit ("USD millions") with growth and percent even when the schema says
+# to leave it out. The unit cannot change those results (the operation sets its own), so it is ignored and noted
+# instead of failing the call (a failed call costs a replan); difference and sum still use it.
+IGNORED_UNIT_NOTE = "the given unit {given!r} is not used: {op} returns {unit!r}"
 
 
 class CalculateArgs(ToolArgs):
-    operation: Operation = Field(description="ratio | percent | growth | difference | sum | cagr")
+    operation: Operation = Field(description=(
+        "ratio: a / b, e.g. current assets / current liabilities. "
+        "percent: a part as a % of a whole, e.g. a margin = operating income / revenue. "
+        "growth: % change over time, e.g. revenue from fiscal 2023 to 2024. "
+        "difference: how much more or less, new - old, in the inputs' unit. "
+        "sum: a total of two or more values. "
+        "cagr: compound annual growth rate over several years."))
     inputs: list[Annotated[float, Field(ge=-MAX_ABS_INPUT, le=MAX_ABS_INPUT)]] = Field(
         min_length=MIN_INPUTS, max_length=MAX_INPUTS, description=(
-            "Numbers exactly as returned by get_financial_fact. ratio/percent: [a, b] for a / b. "
-            "growth/difference: [old, new]. cagr: [start, end]. sum: two or more values."))
+            "Numbers exactly as returned by get_financial_fact. ratio/percent: [a, b] for a / b (the part first, "
+            "then the whole). growth/difference: [old, new]. cagr: [start, end]. sum: two or more values."))
     years: float | None = Field(default=None, description="cagr only: number of years between start and end")
     unit: Unit | None = Field(default=None, description=(
-        "difference and sum only (optional): the unit the inputs share, e.g. 'USD millions', returned as the "
-        "result's unit; other operations set their unit themselves"))
+        "Leave out (null) for ratio, percent, growth and cagr: they set their own unit. Only for difference and "
+        "sum: the unit the inputs share, e.g. 'USD millions'."))
 
 
 def _dec(x: float) -> Decimal:
@@ -139,17 +149,16 @@ def _evaluate(op: str, xs: list[float], years: float | None) -> tuple[Decimal, s
 
 def compute(operation: str, inputs: list[float], years: float | None = None, unit: str | None = None) -> dict:
     """The calculation result. Raises pydantic ValidationError for wrong argument types, ToolError (invalid_input)
-    for a wrong number of inputs or a misplaced years/unit, CalculationError (undefined) for spec §7.2's undefined
-    cases. The critic calls this directly to recompute a calculation."""
+    for a wrong number of inputs or a misplaced years, CalculationError (undefined) for spec §7.2's undefined cases.
+    A unit given to an operation that sets its own (ratio, percent, growth, cagr) is not used and is noted. The
+    critic calls this directly to recompute a calculation."""
     args = CalculateArgs(operation=operation, inputs=inputs, years=years, unit=unit)
     op, xs = args.operation, args.inputs
     _check_arity(op, xs)
     if (args.years is not None) != (op == "cagr"):
         raise ToolError(INVALID_INPUT, "years is required for cagr and not allowed for other operations")
-    if args.unit is not None and op not in UNIT_FROM_ARGUMENT:
-        raise ToolError(INVALID_INPUT, f"unit is only for difference and sum; {op} returns "
-                                       f"{RESULT_UNIT[op]!r}")
     result_unit = args.unit if op in UNIT_FROM_ARGUMENT else RESULT_UNIT[op]
+    ignored = args.unit is not None and op not in UNIT_FROM_ARGUMENT and args.unit != result_unit
     try:
         with localcontext() as ctx:
             ctx.prec = PRECISION
@@ -161,6 +170,8 @@ def compute(operation: str, inputs: list[float], years: float | None = None, uni
         raise CalculationError(UNDEFINED, f"{op} result is not a finite number", inputs=xs)
     if op in UNIT_FROM_ARGUMENT and result_unit is None:
         notes.append(NO_UNIT_NOTE)
+    if ignored:
+        notes.append(IGNORED_UNIT_NOTE.format(given=args.unit, op=op, unit=result_unit))
     # years is returned (null except for cagr) so a calculation copied into the answer can be recomputed
     # (agent/contract.py Calculation, spec §8 invariant 3)
     return {"operation": op, "inputs": xs, "years": args.years, "result": result, "unit": result_unit,

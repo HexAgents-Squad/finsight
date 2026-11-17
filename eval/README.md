@@ -11,6 +11,7 @@
 | `retrieval_eval.py` | recall@1/5/10 and MRR of a retrieval run against the gold set (contract with WP5 in the file header) |
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
 | `planner_dev.jsonl` | W2-02: 34 tuning questions for the planner (`pdev-` ids: refusals for every rule R1-R7, partial refusals, answerable controls, one follow-up), written for tuning and kept apart from gold-v1 and the test sets (tests/test_planner.py) |
+| `results/tool_calls.md` | W2-03: native tool calling before/after the schema change (scripts/probe_tool_calls.py, ADR-026) |
 | `run_planner.py` | W2-02: the planner node on the development questions only (dev set + `planner_dev.jsonl`) -> `results/planner_runs/<run>.jsonl` and `results/planner_dev.md` (refusal decisions by rule, valid plans, tokens, seconds) |
 | `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json`; W1-09: `--run S1/S2/S3` runs a prompting strategy instead |
 | `strategies.py` | W1-09: the prompting strategies S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition (prompts in `agent/prompts/s*`, frozen) |
