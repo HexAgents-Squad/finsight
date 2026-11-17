@@ -19,20 +19,26 @@ before it, even on a checkpointer thread that keeps the conversation (W2-06).
 """
 from __future__ import annotations
 
+import typing
 from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agent.contract import AnswerContract, NonBlank, decoding_schema
 from agent.critic_checks import Violation
-from core.spec import RefusalRule
+from core.spec import ITEMS_OF_FORM, RefusalRule
 from retrieval.entities import Entities
 from tools.base import validation_message
+from tools.calculator import Operation
 from tools.registry import TOOLS
 
 STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 ToolName = Literal["search_filings", "get_financial_fact", "calculate", "compare_periods"]   # tools.registry.TOOLS
+# The tools a plan lists. `calculate` needs the fetched figures as inputs, which no plan has yet: a plan names the
+# calculation the answer needs (Plan.calculation) and the executor runs it on the fetched figures (W2-04).
+PlannedTool = Literal["search_filings", "get_financial_fact", "compare_periods"]
 MAX_PLAN_STEPS = 10         # = the default MAX_AGENT_STEPS; the executor also stops at the configured cap
+MAX_REASONING_CHARS = 600   # a few sentences: the reasoning is for the decision, not an essay (tokens, ADR-016)
 
 
 class PlanStep(BaseModel):
@@ -40,15 +46,15 @@ class PlanStep(BaseModel):
     (validated against the tool's model below); the executor runs them, or replans after a typed tool error."""
     model_config = STRICT
 
-    tool: ToolName
+    tool: PlannedTool
     arguments: dict[str, Any]
-    purpose: NonBlank
+    purpose: NonBlank = Field(max_length=200)
 
     @model_validator(mode="after")
     def _arguments_fit_the_tool(self) -> PlanStep:
         """The arguments validated against the tool's own model (tools.registry), so a misspelt or missing
         argument is a validation error chat_json can re-prompt with, not a tool error after the plan is made.
-        (Guided decoding sees `arguments` as a free object; per-tool variants are W2-02/W2-03's.)"""
+        (plan_json_schema gives guided decoding one variant per tool with that tool's own argument schema.)"""
         try:
             TOOLS[self.tool][1].model_validate(self.arguments)
         except ValidationError as err:
@@ -58,30 +64,80 @@ class PlanStep(BaseModel):
 
 class Plan(BaseModel):
     """The planner's decision. `reasoning` comes first, so guided decoding writes it before the decision (ADR-018:
-    a reasoning field before a figure cut ungrounded numbers 20/74 -> 4/85). A refusal (R1-R7, docs/spec.md §6) is
-    decided before any step and has no steps (ADR-018: strategies that started extracting under-refused)."""
+    a reasoning field before a figure cut ungrounded numbers 20/74 -> 4/85). Three kinds (docs/spec.md §6):
+    - a refusal: refuse true, the rule (R1-R7), no steps: refusal is decided before any extraction (ADR-018:
+      strategies that started extracting under-refused);
+    - a partial refusal: refuse false, the rule of the refused part, and steps for the factual part;
+    - an answer: refuse false, no rule, the steps (none only when nothing in the filings can answer it, which the
+      composer then states). `calculation` is the operation the answer needs on the fetched figures, or None."""
     model_config = STRICT
 
-    reasoning: NonBlank
+    reasoning: NonBlank = Field(max_length=MAX_REASONING_CHARS)
     refuse: bool
     refusal_rule: RefusalRule | None
     steps: list[PlanStep] = Field(max_length=MAX_PLAN_STEPS)
+    calculation: Operation | None = None
 
     @model_validator(mode="after")
     def _refusal_is_consistent(self) -> Plan:
         if self.refuse and self.refusal_rule is None:
             raise ValueError("a refusal names its rule (R1-R7)")
-        if not self.refuse and self.refusal_rule is not None:
-            raise ValueError("refusal_rule is set only when refuse is true")
-        if self.refuse and self.steps:
-            raise ValueError("a refusal has no tool steps (refusal is decided before any extraction)")
+        if self.refuse and (self.steps or self.calculation is not None):
+            raise ValueError("a refusal has no tool steps or calculation (refusal is decided before any extraction)")
+        if not self.refuse and self.refusal_rule is not None and not self.steps:
+            raise ValueError("a partial refusal answers the factual part, so it has steps (else refuse is true)")
         return self
+
+    @property
+    def partial(self) -> bool:
+        """A partial refusal: the factual part is answered, the refused part declined in one sentence."""
+        return not self.refuse and self.refusal_rule is not None
 
 
 def plan_json_schema() -> dict[str, Any]:
-    """The Plan's JSON schema for response_format json_schema with guided decoding (every field required,
-    nullable where optional; the cross-field rules are checked after parsing)."""
-    return decoding_schema(Plan)
+    """The Plan's JSON schema for response_format json_schema with strict guided decoding: every field required,
+    nullable where optional, and one PlanStep variant per planned tool whose `arguments` is that tool's own argument
+    schema (tools.registry), so the decoder cannot misspell or leave out an argument. The cross-field rules (a
+    refusal has no steps, ...) are checked after parsing. The free-text arguments are narrowed for decoding only
+    (_narrowed): measured on the development questions, an unconstrained `item` let the model write a 1,024-token
+    run of "or cyber attack or cyber incident ..." until the reply cap."""
+    schema = decoding_schema(Plan)
+    purpose = schema["$defs"]["PlanStep"]["properties"]["purpose"]
+    variants = []
+    for name in typing.get_args(PlannedTool):
+        arguments = _narrowed(decoding_schema(TOOLS[name][1]))
+        for key, definition in arguments.pop("$defs", {}).items():
+            if schema["$defs"].setdefault(key, definition) != definition:
+                raise ValueError(f"tool argument schemas define {key!r} differently")
+        properties = {"tool": {"const": name, "type": "string"}, "arguments": arguments, "purpose": purpose}
+        variants.append({"type": "object", "additionalProperties": False, "properties": properties,
+                         "required": list(properties)})
+    schema["$defs"]["PlanStep"] = {"anyOf": variants}
+    return schema
+
+
+MAX_QUERY_CHARS = 300          # a search query is a few words; the tool itself allows 2,000
+TICKER = {"type": "string", "pattern": "^[A-Z]{1,5}$"}       # agent/contract.py TICKER_PATTERN
+
+
+def _narrowed(arguments: dict[str, Any]) -> dict[str, Any]:
+    """A tool's argument schema with its free strings narrowed for decoding: `item` to the spec's exact Item names
+    (core.spec), `metric` to the mapped metrics (config/concept_map.yaml), `ticker` to a ticker's shape and
+    `query` to MAX_QUERY_CHARS. The tools validate the same arguments as before (W2-03 owns their schemas)."""
+    from ingest.xbrl import load_concept_map  # tools.registry has imported it already; here for clarity
+    props = arguments["properties"]
+    narrowed = {
+        "item": {"enum": sorted(ITEMS_OF_FORM["10-K"] | ITEMS_OF_FORM["10-Q"]), "type": "string"},
+        "metric": {"enum": sorted(load_concept_map()), "type": "string"},
+        "ticker": TICKER,
+        "query": {**props.get("query", {}), "maxLength": MAX_QUERY_CHARS},
+    }
+    for key, constraint in narrowed.items():
+        if key not in props:
+            continue
+        nullable = any(v.get("type") == "null" for v in props[key].get("anyOf", []))
+        props[key] = {"anyOf": [constraint, {"type": "null"}]} if nullable else constraint
+    return arguments
 
 
 class ToolCall(BaseModel):

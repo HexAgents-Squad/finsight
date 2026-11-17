@@ -69,10 +69,14 @@ def test_plan_refusal_rules():
     assert plan(refuse=True, rule="R1", steps=0).refusal_rule == "R1"
     with pytest.raises(ValidationError, match="names its rule"):
         plan(refuse=True, rule=None, steps=0)
-    with pytest.raises(ValidationError, match="only when refuse"):
-        plan(refuse=False, rule="R1")
+    partial = plan(refuse=False, rule="R1")                 # spec §6: the factual part answered, the rest declined
+    assert partial.partial and not plan().partial and not plan(refuse=True, rule="R1", steps=0).partial
+    with pytest.raises(ValidationError, match="partial refusal answers the factual part"):
+        plan(refuse=False, rule="R1", steps=0)
     with pytest.raises(ValidationError, match="no tool steps"):
         plan(refuse=True, rule="R2", steps=1)
+    with pytest.raises(ValidationError, match="no tool steps or calculation"):
+        Plan(reasoning="x", refuse=True, refusal_rule="R1", steps=[], calculation="growth")
 
 
 def test_plan_is_strict_and_capped():
@@ -90,13 +94,18 @@ def test_plan_is_strict_and_capped():
 
 def test_plan_schema_for_guided_decoding():
     schema = plan_json_schema()
-    assert list(schema["properties"]) == ["reasoning", "refuse", "refusal_rule", "steps"]     # reasoning first
-    assert schema["required"] == list(schema["properties"])
+    assert list(schema["properties"]) == ["reasoning", "refuse", "refusal_rule", "steps", "calculation"]
+    assert schema["required"] == list(schema["properties"])                                  # reasoning first
     assert schema["additionalProperties"] is False
-    step = schema["$defs"]["PlanStep"]
-    assert step["required"] == ["tool", "arguments", "purpose"]
-    assert set(step["properties"]["tool"]["enum"]) == set(TOOLS)
-    assert "title" not in schema and "default" not in str(schema)
+    variants = schema["$defs"]["PlanStep"]["anyOf"]           # one per planned tool, with its own arguments
+    assert [v["properties"]["tool"]["const"] for v in variants] == ["search_filings", "get_financial_fact",
+                                                                    "compare_periods"]
+    for variant in variants:
+        assert variant["required"] == ["tool", "arguments", "purpose"]
+        arguments = variant["properties"]["arguments"]
+        assert arguments["additionalProperties"] is False
+        assert arguments["required"] == list(TOOLS[variant["properties"]["tool"]["const"]][1].model_fields)
+    assert "title" not in schema and "'default'" not in str(schema)
 
 
 def test_tool_names_match_the_registry():
@@ -415,7 +424,10 @@ def test_plan_step_arguments_are_validated_against_the_tool():
         PlanStep(tool="search_filings", arguments={"querry": "revenue"}, purpose="typo")
     with pytest.raises(ValidationError, match="get_financial_fact arguments"):
         PlanStep(tool="get_financial_fact", arguments={"ticker": "AAPL"}, purpose="missing fields")
-    assert PlanStep(tool="calculate", arguments={"operation": "growth", "inputs": [1.0, 2.0]}, purpose="x")
+    assert PlanStep(tool="compare_periods", arguments={"ticker": "AAPL", "metric": "revenue", "years": [2023, 2024]},
+                    purpose="x")
+    with pytest.raises(ValidationError):                     # a plan has no figures yet: Plan.calculation instead
+        PlanStep(tool="calculate", arguments={"operation": "growth", "inputs": [1.0, 2.0]}, purpose="x")
 
 
 def test_finish_without_a_verdict_is_unverified():
