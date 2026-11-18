@@ -32,7 +32,6 @@ from agent.critic_checks import (
 )
 from agent.state import AgentState, ToolResult, Verdict
 from ingest.xbrl import load_concept_map
-from tools.financial_facts import METRICS
 
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
 # Line items that are not among the 13 metrics: any XBRL fact used in the draft is a forbidden substitute.
@@ -54,8 +53,11 @@ CASH_BARE = re.compile(
     re.IGNORECASE,
 )
 # Non-contiguous cash-flow wording ("cash did X generate from operating activities").
+# Stop at a clause boundary so "cash used in investing … and operating income" is not stolen.
 OPERATING_CASH_LOOSE = re.compile(
-    r"\bcash\b.{0,60}?\b(?:flow|flows|generate|generated|used|provided)\b.{0,40}?\boperat\w*",
+    r"\bcash\b(?:(?![,;?]|\band\b).){0,60}?"
+    r"\b(?:flow|flows|generate|generated|used|provided)\b"
+    r"(?:\s+(?:from|by|in))?\s+operat\w*",
     re.IGNORECASE,
 )
 OPERATING_CASH_PHRASES = (
@@ -181,13 +183,9 @@ def check_units_against_tools(contract: AnswerContract, results: list[ToolResult
             ))
             continue
         else:
-            # Company line-item name that isn't a mapped metric key: still catch a unique same-period fact.
-            if value.name in METRICS:
-                continue
-            peers = [row for row in rows if _same_period(value, row)]
-            if len(peers) != 1:
-                continue
-            fact = peers[0]
+            # No metric/label match: a filing-text figure next to an unrelated fact must not be compared
+            # (mixed answers). Company line-item names are covered by the label match above.
+            continue
         fact_unit = fact.get("unit")
         if not isinstance(fact_unit, str) or fact_unit not in UNIT_SCALE or value.unit not in UNIT_SCALE:
             continue

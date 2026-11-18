@@ -102,14 +102,42 @@ def test_units_flag_value_not_in_filing_units():
     assert "filing units" in violations[0].message
 
 
-def test_units_match_company_line_item_label_not_only_metric_key():
-    """Spec §7.5: values may use the company's line item name ('Total net sales')."""
+def test_units_label_match_alone_catches_wrong_scale():
+    """Spec §7.5: company line-item names match the tool label (no peer-row fallback)."""
     bad = apple_revenue_draft(value=391_035_000_000, unit="USD", name="Total net sales")
     tool = fact_result(metric="revenue", value=391035, unit="USD millions", ticker="AAPL",
                        label="Total net sales",
                        concept="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax")
+    assert cr._name_matches_row(bad.values[0], tool.output)
+    assert cr._matching_fact(bad.values[0], cr._fact_rows([tool])) is tool.output
     violations = cr.check_units_against_tools(bad, [tool])
     assert rules(violations) == ["units"] and "filing units" in violations[0].message
+
+
+def test_units_filing_text_value_next_to_unrelated_fact_is_not_flagged():
+    """A passage figure next to a same-period revenue fact must not be compared to that fact."""
+    period = {"ticker": "AAPL", "fiscal_year": 2024, "fiscal_period": "FY"}
+    contract = AnswerContract(
+        answer="Revenue was 391035 USD millions; stock-based compensation was 11688 USD millions.",
+        values=[
+            Value(name="revenue", value=391035, unit="USD millions", **period, duration="12M",
+                  period_end="2024-09-28"),
+            Value(name="stock-based compensation", value=11688, unit="USD millions", **period,
+                  duration="12M", period_end="2024-09-28"),
+        ],
+        citations=[
+            Citation(source_type="xbrl", form="10-K", **period,
+                     concept="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                     accession_no="0000320193-24-000123",
+                     url="https://www.sec.gov/Archives/edgar/data/320193/"),
+            Citation(**with_(FILING, **period, chunk_id="AAPL_10-K_2024_Item8_C3_0001",
+                             url="https://www.sec.gov/Archives/edgar/data/320193/a.htm")),
+        ],
+        calculations=[], verified=False, refused=False, refusal_rule=None, notes=[],
+    )
+    tool = fact_result(metric="revenue", value=391035, ticker="AAPL",
+                       concept="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax")
+    assert cr.check_units_against_tools(contract, [tool]) == []
 
 
 def test_units_distinguish_quarter_duration():
@@ -191,6 +219,9 @@ def test_cash_flow_wording_maps_to_operating_cash_flow_not_cash():
     assert "cash" not in cr.named_metrics("What was free cash flow in fiscal 2024?")
     assert "cash" in cr.named_metrics("How much cash did Apple hold at fiscal year end 2024?")
     assert "cash" in cr.named_metrics("What was Apple's cash and cash equivalents in fiscal 2024?")
+    # Must not cross a clause into "operating income".
+    crossed = "How much cash was used in investing activities and what was operating income?"
+    assert "operating_cash_flow" not in cr.named_metrics(crossed)
 
 
 def test_named_metrics_does_not_take_cost_of_revenue_or_noncontrolling_income():
