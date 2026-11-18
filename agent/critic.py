@@ -25,6 +25,7 @@ from agent.critic_checks import (
     QuestionScope,
     Violation,
     check_contract,
+    expected_operations,
     same_number,
 )
 from agent.state import AgentState, ToolResult, Verdict
@@ -63,8 +64,9 @@ def _fact_rows(results: list[ToolResult]) -> list[dict[str, Any]]:
         if isinstance(out, dict) and "value" in out and "metric" in out:
             rows.append(out)
         elif isinstance(out, list):
+            # compare_periods always sets missing: None on success, an error type when the year has no value
             rows.extend(row for row in out if isinstance(row, dict) and row.get("value") is not None
-                        and row.get("metric") is not None and "missing" not in row)
+                        and row.get("metric") is not None and not row.get("missing"))
     return rows
 
 
@@ -126,7 +128,8 @@ def _metric_phrases() -> tuple[tuple[str, str], ...]:
                     phrases.add(text)
         # Glossary aliases used in the tool schema (ADR-026), not every synonym.
         if name == "revenue":
-            phrases.update({"total revenue", "net sales", "net revenues", "total net sales", "total revenues"})
+            phrases.update({"total revenue", "net sales", "net revenues", "total net sales", "total revenues",
+                            "revenues", "total sales"})
         elif name == "net_income":
             phrases.update({"net earnings", "net income"})
         elif name == "capex":
@@ -134,7 +137,7 @@ def _metric_phrases() -> tuple[tuple[str, str], ...]:
         elif name == "cash":
             phrases.update({"cash and cash equivalents", "cash"})
         elif name == "rd_expense":
-            phrases.update({"research and development", "r&d", "r & d", "rd expense"})
+            phrases.update({"research and development", "r&d", "r & d", "rd expense", "r&d expense"})
         elif name == "operating_income":
             phrases.update({"operating income", "operating earnings"})
         elif name == "gross_profit":
@@ -188,7 +191,13 @@ def search_only_line_item(question: str) -> str | None:
 
 
 def check_metric_matches_question(question: str, results: list[ToolResult]) -> list[Violation]:
-    """A fetched metric must be one the question named; search-only line items may not use XBRL facts."""
+    """Fetched metrics must fit the question; search-only line items may not use XBRL facts.
+
+    Fact lookups: every returned metric must be one the question named. Ratio / percent / growth (and other
+    calculator) questions may fetch companion inputs the wording does not name (e.g. revenue with R&D); those
+    extras are allowed when at least one named metric was fetched. A wholly wrong set (none of the named
+    metrics) is still a violation.
+    """
     rows = _fact_rows(results)
     if not rows:
         return []
@@ -203,13 +212,17 @@ def check_metric_matches_question(question: str, results: list[ToolResult]) -> l
     wanted = named_metrics(question)
     if not wanted:
         return []
+    fetched = {row["metric"] for row in rows}
+    if expected_operations(question):
+        if wanted & fetched:
+            return []
+        return [Violation(
+            "metric",
+            f"the question names {', '.join(sorted(wanted))}, but the tools returned "
+            f"{', '.join(sorted(fetched))}",
+        )]
     out: list[Violation] = []
-    seen: set[str] = set()
-    for row in rows:
-        metric = row["metric"]
-        if metric in wanted or metric in seen:
-            continue
-        seen.add(metric)
+    for metric in sorted(fetched - wanted):
         out.append(Violation(
             "metric",
             f"the question names {', '.join(sorted(wanted))}, but a tool returned {metric}",

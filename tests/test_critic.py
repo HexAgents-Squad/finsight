@@ -90,13 +90,29 @@ def test_units_ignore_derived_values_and_missing_tools():
 
 
 def test_units_read_compare_periods_rows():
+    # Production rows always include missing: None on success (tools/compare_periods.py).
     row = {"value": 245122, "unit": "USD millions", "ticker": "MSFT", "fiscal_year": 2024,
-           "fiscal_period": "FY", "metric": "revenue"}
+           "fiscal_period": "FY", "metric": "revenue", "missing": None}
     results = [ToolResult(call=ToolCall(name="compare_periods",
                                         arguments={"ticker": "MSFT", "metric": "revenue", "years": [2024]}),
                           output=[row])]
     bad = draft(values=[with_(VALUE, value=245_122_000_000, unit="USD")])
     assert rules(cr.check_units_against_tools(bad, results)) == ["units"]
+
+
+def test_compare_periods_missing_year_is_skipped():
+    rows = [
+        {"value": None, "unit": "USD millions", "ticker": "MSFT", "fiscal_year": 2023,
+         "fiscal_period": "FY", "metric": "revenue", "missing": "not_reported"},
+        {"value": 245122, "unit": "USD millions", "ticker": "MSFT", "fiscal_year": 2024,
+         "fiscal_period": "FY", "metric": "revenue", "missing": None},
+    ]
+    results = [ToolResult(call=ToolCall(name="compare_periods",
+                                        arguments={"ticker": "MSFT", "metric": "revenue",
+                                                    "years": [2023, 2024]}),
+                          output=rows)]
+    assert len(cr._fact_rows(results)) == 1
+    assert cr._fact_rows(results)[0]["fiscal_year"] == 2024
 
 
 # ----------------------------------------------------------------------------------------------- metric
@@ -129,8 +145,25 @@ def test_metric_skips_when_question_names_no_mapped_line_item():
     assert cr.check_metric_matches_question(QUESTION, [fact_result(), revenue_fact()]) == []
 
 
+def test_metric_allows_companion_revenue_on_ratio_worded_with_revenues():
+    """'revenues' maps to revenue; extras on a % question must not false-reject."""
+    question = "What was Apple's R&D as a percentage of revenues?"
+    assert "revenue" in cr.named_metrics(question) and "rd_expense" in cr.named_metrics(question)
+    results = [fact_result(metric="rd_expense", value=1841, ticker="AAPL"),
+               fact_result(metric="revenue", value=391035, ticker="AAPL")]
+    assert cr.check_metric_matches_question(question, results) == []
+
+
+def test_metric_ratio_rejects_when_no_named_metric_was_fetched():
+    question = "What was Apple's R&D as a percentage of revenues?"
+    results = [fact_result(metric="operating_income", value=1, ticker="AAPL")]
+    violations = cr.check_metric_matches_question(question, results)
+    assert rules(violations) == ["metric"] and "operating_income" in violations[0].message
+
+
 def test_named_metrics_reads_concept_map_labels():
     assert "revenue" in cr.named_metrics("What were Apple's net sales in fiscal 2024?")
+    assert "revenue" in cr.named_metrics("as a percentage of revenues")
     assert "capex" in cr.named_metrics("How much were capital expenditures in fiscal 2024?")
 
 
