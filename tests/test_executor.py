@@ -22,6 +22,19 @@ VALUES = {("PG", "operating_income", 2023): 18134.0, ("PG", "revenue", 2023): 82
           ("AAPL", "revenue", 2023): 383285.0, ("AAPL", "revenue", 2025): 416161.0}
 
 
+INSTANT_METRICS = {"total_assets", "total_liabilities", "stockholders_equity", "cash", "long_term_debt"}
+
+
+def fact_row(ticker, metric, year, period, value) -> dict:
+    """The real tools' fact shape (tools.financial_facts.FACT_FIELDS): duration 12M for FY, 3M for a quarter, null
+    for a balance-sheet value (ingest/xbrl.py VALID_DURATIONS)."""
+    duration = None if metric in INSTANT_METRICS else ("12M" if period == "FY" else "3M")
+    return {"value": value, "unit": "USD millions", "ticker": ticker, "fiscal_year": year, "fiscal_period": period,
+            "duration": duration, "period_start": None, "period_end": f"{year}-12-31", "concept": "us-gaap:X",
+            "accession_no": "0000000000-00-000000", "metric": metric, "label": metric, "form": "10-K",
+            "url": "https://www.sec.gov/x", "notes": []}
+
+
 class FakeTools:
     """call_tool_async's stand-in: facts from VALUES, Q4 as not_reported, a calculator, scripted overrides."""
 
@@ -38,17 +51,16 @@ class FakeTools:
                 raise out
             return out
         if name == "get_financial_fact":
-            if arguments.get("fiscal_period") == "Q4":
+            period = arguments.get("fiscal_period") or "FY"
+            if period == "Q4":
                 return {"error": {"type": "not_reported", "message": "Q4 is not reported separately"}}
             value = VALUES.get((arguments["ticker"], arguments["metric"], arguments["fiscal_year"]))
             if value is None:
                 return {"error": {"type": "data_missing", "message": "no fact"}}
-            return {"value": value, "unit": "USD millions", "ticker": arguments["ticker"],
-                    "metric": arguments["metric"], "fiscal_year": arguments["fiscal_year"], "fiscal_period": "FY"}
+            return fact_row(arguments["ticker"], arguments["metric"], arguments["fiscal_year"], period, value)
         if name == "compare_periods":
-            return [{"value": VALUES.get((arguments["ticker"], arguments["metric"], y)), "unit": "USD millions",
-                     "fiscal_year": y, "ticker": arguments["ticker"], "metric": arguments["metric"]}
-                    for y in arguments["years"]]
+            return [fact_row(arguments["ticker"], arguments["metric"], y, "FY",
+                             VALUES.get((arguments["ticker"], arguments["metric"], y))) for y in arguments["years"]]
         if name == "calculate":
             from tools.calculator import calculate
             return calculate(**arguments)
@@ -174,6 +186,16 @@ def test_the_loop_guard_ignores_argument_order():
                      {"error": {"type": "no_results", "message": "x"}})
     out, tools = run(plan(fact()), results=[reordered])
     assert tools.calls == [] and out["errors"][0].startswith("executor: not sent again, failed before (no_results)")
+
+
+def test_a_service_unavailable_call_is_retried_once_never_twice():
+    """tools/base.py: service_unavailable means 'retry later'; any other failed call is never sent again."""
+    down = {"error": {"type": "service_unavailable", "message": "endpoint down"}}
+    once = done("search_filings", search().arguments, down)
+    out, tools = run(plan(search()), results=[once])
+    assert [n for n, _ in tools.calls] == ["search_filings"] and out["tool_error"] is None
+    out, tools = run(plan(search()), results=[once, once])                 # sent twice already
+    assert tools.calls == [] and "failed before (service_unavailable)" in out["errors"][0]
 
 
 # ----------------------------------------------------------------------------------------------- errors
@@ -337,6 +359,36 @@ def test_a_percent_takes_revenue_as_the_whole_whichever_comes_first():
     assert call.arguments["inputs"] == [200.0, 1000.0]
     call, _ = ex.calculation_call("ratio", [fetched(row(1000.0)), fetched(row(200.0, metric="operating_income"))])
     assert call.arguments["inputs"] == [1000.0, 200.0]                    # a ratio keeps the plan's order
+    call, _ = ex.calculation_call("percent", [fetched(row(1000.0, ticker="AAA")),
+                                              fetched(row(200.0, ticker="BBB", metric="operating_income"))])
+    assert call.arguments["inputs"] == [1000.0, 200.0]                    # another company's revenue: plan order
+
+
+def not_reported(ticker="AAPL", metric="revenue", year=2024, period="FY") -> ToolResult:
+    return done("get_financial_fact", {"ticker": ticker, "metric": metric, "fiscal_year": year,
+                                       "fiscal_period": period}, {"error": {"type": "not_reported", "message": "x"}})
+
+
+def test_a_missing_planned_figure_never_leaves_a_guessed_pair():
+    """Three planned figures with one not reported must not become a two-figure calculation of the other two."""
+    three = [fetched(row(100.0, ticker="AAPL")), not_reported("MSFT"), fetched(row(300.0, ticker="GOOGL"))]
+    assert ex.calculation_call("difference", three) == (None, "no value for MSFT revenue FY 2024")
+    debt_to_equity = [not_reported("JPM", "long_term_debt"), fetched(row(10.0, ticker="JPM", metric="total_liabilities")),
+                      fetched(row(5.0, ticker="JPM", metric="stockholders_equity"))]
+    assert ex.calculation_call("ratio", debt_to_equity) == (None, "no value for JPM long_term_debt FY 2024")
+    margin = [not_reported("MRK", "operating_income", 2025), fetched(row(65011.0, ticker="MRK", year=2025))]
+    assert ex.calculation_call("percent", margin) == (None, "no value for MRK operating_income FY 2025")
+    other_series = [fetched(row(100.0, year=2023)), fetched(row(110.0)), not_reported(metric="operating_income")]
+    assert ex.calculation_call("growth", other_series) == (None, "no value for AAPL operating_income FY 2024")
+
+
+def test_a_sum_of_balance_sheet_values_needs_one_date():
+    year_end = {**row(1932468.0, ticker="WFC", metric="total_assets", year=2023), "duration": None}
+    quarter_end = {**row(1940122.0, ticker="WFC", metric="total_assets", period="Q2"), "duration": None}
+    call, why = ex.calculation_call("sum", [fetched(year_end), fetched(quarter_end)])
+    assert call is None and why.startswith("balance-sheet values at different dates")
+    two_banks = [fetched(year_end), fetched({**year_end, "ticker": "JPM", "value": 3875393.0})]
+    assert ex.calculation_call("sum", two_banks)[0].arguments["inputs"] == [1932468.0, 3875393.0]
 
 
 def test_a_percent_of_three_figures_is_ambiguous():
@@ -370,7 +422,7 @@ def with_duration(figure_row: dict, duration) -> dict:
      "the figures are for different periods (AAPL gross_profit FY 2023, AAPL revenue FY 2024)"),
     ("difference", [row(4.0, ticker="AAA", year=2023), row(9.0, ticker="BBB", year=2024)],
      "the figures are for different periods (AAA revenue FY 2023, BBB revenue FY 2024)"),
-    ("growth", [with_duration(row(1.0, period="Q1"), "12M"), row(4.0)], "the figures mix full-year and quarterly periods"),
+    ("growth", [row(1.0, period="Q1"), row(4.0)], "the figures cover different durations (12M, 3M)"),   # Q1 to FY
     ("cagr", [row(1.0, year=2023, period="Q1"), row(2.0, year=2024, period="Q3")],
      "cagr needs the same period each year (Q1, Q3 fetched)"),
 ])

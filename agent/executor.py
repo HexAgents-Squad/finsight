@@ -2,7 +2,7 @@
 
     make_executor(call_tool=None, count_tokens=None)   -> the node for agent.graph.Nodes(executor=...)
     execute(state, call_tool, count_tokens=None)       the work (tests pass a fake call_tool and counter)
-    calculation_call(op, results)                      the calculate call ADR-025 asks for, from the fetched figures
+    calculation_call(op, results)                      the calculate call ADR-025 asks for (fetched figures)
 
 Each step of the plan (search_filings, get_financial_fact, compare_periods; ADR-025) runs in order through
 tools.registry.call_tool_async, the agent's single entry point, which returns a typed error instead of raising
@@ -25,8 +25,9 @@ the whole run in agent.graph.run):
   If the earlier one succeeded, its result is reused, so a send-back or a replan that keeps a step costs no step;
   if it failed, it is skipped with a note and the plan's other steps run (a replan's fallback search still runs),
   and no calculation is made when any of the plan's fact steps failed before (conservative: its figure may be an
-  input). Only a new error sets `tool_error`, so the graph's own bound
-  applies: one replan, then the composer answers "not found" (W2-01).
+  input). Only a new error sets `tool_error`, so the graph's own bound applies: one replan, then the composer
+  answers "not found" (W2-01). The one exception is `service_unavailable` (tools/base.py: "retry later"): a
+  repeat of such a call is sent once more, never a third time.
 
 A typed tool error stops the round and sets `tool_error`, so the graph replans once (W2-01). `not_reported` and
 the calculator's `undefined` are answers, not errors (spec §4.2, §7.2, §7.5: the answer says "not reported" or that
@@ -36,16 +37,18 @@ way. An exception from the tool caller (a bug: call_tool_async does not raise) b
 The calculation (ADR-025): a plan has no numbers, so when `plan.calculation` is set the executor builds the
 calculate call from the figures the plan's fact steps fetched (each figure keeps its company, metric, period and
 duration; the same figure fetched twice counts once; a not_reported fact is a planned figure with no value):
-- all operations: one unit and one duration (a balance-sheet instant has none, so it pairs with any);
-- growth and cagr: one series (one company and metric), oldest to newest by fiscal year then quarter, never
-  full-year and quarterly flows mixed (balance-sheet instants compare at any date; cagr: the same period each year, so `years` = last minus first fiscal
-  year is right); a longer series (a compare_periods trend) uses its first and last period, and a period the
-  series asked for but has no value for at either end means no calculation;
-- percent and ratio: two figures for the same fiscal year and period; percent is [part, whole] with revenue as
-  the whole whichever comes first (the planner fetches the line item, then revenue); ratio keeps step order;
+- all operations: one unit and one duration (a balance-sheet instant has none, so it pairs with any; full-year
+  flows are 12M and quarterly ones 3M/6M/9M, so the two are never mixed), and no missing planned figure, except
+  a gap inside a series (a compare_periods trend keeps its first and last period);
+- growth and cagr: one series (one company and metric), oldest to newest by fiscal year then quarter; a longer
+  series uses its first and last period; cagr needs the same period each year, so `years` = last minus first
+  fiscal year is right;
+- percent and ratio: two figures for the same fiscal year and period; percent is [part, whole] with the
+  company's revenue as the whole whichever comes first (the planner fetches the line item, then revenue); ratio
+  keeps step order;
 - difference: one series as for growth, or two companies (or metrics) for the same period in step order (second
-  minus first: the composer states which is which); sum: every planned figure, none missing, with the shared unit
-  (also for difference).
+  minus first: the composer states which is which); sum: every planned figure, balance-sheet values all at one
+  date; difference and sum pass the shared unit.
 Anything else (too few figures, several series for growth, a count or mix the operation cannot take) means no
 calculation and a note in `errors`, never a guessed pair: the composer then answers from the fetched figures.
 """
@@ -53,12 +56,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from agent.state import AgentState, Plan, ToolCall, ToolResult
-from tools.base import INTERNAL_ERROR, NOT_REPORTED, UNDEFINED, error_result
+from tools.base import INTERNAL_ERROR, NOT_REPORTED, SERVICE_UNAVAILABLE, UNDEFINED, error_result
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +70,7 @@ ToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 TokenCounter = Callable[[str], int]
 CHARS_PER_TOKEN_FLOOR = 2       # core/tokens.py: filing tables run at 2.2 characters per token, prose at 4.6
 ANSWERS = frozenset({NOT_REPORTED, UNDEFINED})       # typed results that answer the question: no replan
+TRANSIENT = frozenset({SERVICE_UNAVAILABLE})         # tools/base.py: "retry later": a repeat is sent once more
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
 PAIR_OPERATIONS = frozenset({"ratio", "percent", "growth", "difference", "cagr"})   # tools.calculator: two inputs
 OVER_TIME = frozenset({"growth", "cagr"})            # one series, always chronological
@@ -175,27 +180,28 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
     """The calculate call for `operation` over the fetched figures, or (None, why not)."""
     fetched = _figures(results)
     figures = [f for f in fetched if f.value is not None and f.unit is not None]
+    missing = [f for f in fetched if f.value is None]        # planned, but not reported or null
     if len(figures) < 2:
-        return None, f"needs two figures, {len(figures)} fetched"
+        return None, f"no value for {missing[0].label()}" if missing else f"needs two figures, {len(figures)} fetched"
     units = {f.unit for f in figures}
     if len(units) > 1:
         return None, f"the figures are in different units ({', '.join(sorted(units))})"
     unit = units.pop()
-    missing = [f for f in fetched if f.value is None]
-    if operation == "sum" and missing:
-        return None, f"no value for {missing[0].label()}"
-    durations = {f.duration for f in figures if f.duration is not None}   # None: a balance-sheet instant
+    # One duration (a balance-sheet instant has none, so it pairs with any). Real full-year flows are 12M and
+    # quarterly ones 3M/6M/9M (ingest/xbrl.py), so this also keeps full-year and quarterly flows apart.
+    durations = {f.duration for f in figures if f.duration is not None}
     if len(durations) > 1:
         return None, f"the figures cover different durations ({', '.join(sorted(durations))})"
     series = list(dict.fromkeys(f.series for f in figures))
     over_time = operation in OVER_TIME or (operation == "difference" and len(series) == 1)
     periods = {f.fiscal_period for f in figures}
-    if over_time and durations and "FY" in periods and len(periods) > 1:   # instants compare at any date
-        return None, "the figures mix full-year and quarterly periods"
+    moments = {(f.fiscal_year, f.fiscal_period) for f in figures}
     if operation == "cagr" and len(periods) > 1:
         return None, f"cagr needs the same period each year ({', '.join(sorted(periods))} fetched)"
-    if not over_time and operation in PAIR_OPERATIONS and len({(f.fiscal_year, f.fiscal_period) for f in figures}) > 1:
+    if not over_time and operation in PAIR_OPERATIONS and len(moments) > 1:
         return None, "the figures are for different periods (" + ", ".join(f.label() for f in figures) + ")"
+    if operation == "sum" and not durations and len(moments) > 1:
+        return None, "balance-sheet values at different dates (" + ", ".join(f.label() for f in figures) + ")"
     if over_time:
         if len(series) > 1:
             names = ", ".join(f"{ticker} {metric}" for ticker, metric in series)
@@ -203,14 +209,17 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
         figures = sorted(figures, key=lambda f: f.when)
         if len({f.when for f in figures}) != len(figures):
             return None, f"two figures for the same period ({figures[0].label()}; ambiguous)"
-        gaps = [f for f in fetched if f.value is None and f.series == series[0]
-                and not figures[0].when <= f.when <= figures[-1].when]
+        # a gap inside a trend leaves its first and last period; any other missing figure may be an input
+        gaps = [f for f in missing if f.series != series[0] or not figures[0].when <= f.when <= figures[-1].when]
         if gaps:
             return None, f"no value for {gaps[0].label()}"
         if operation in OVER_TIME and len(figures) > 2:
             figures = [figures[0], figures[-1]]       # a trend over several periods: first and last
-    elif operation == "percent" and len(figures) == 2 and figures[0].metric == WHOLE_METRIC != figures[1].metric:
-        figures = [figures[1], figures[0]]            # [part, whole]: revenue is the whole
+    elif missing:                                     # ratio, percent, sum, difference between series
+        return None, f"no value for {missing[0].label()}"
+    elif (operation == "percent" and len(figures) == 2 and figures[0].ticker == figures[1].ticker
+          and figures[0].metric == WHOLE_METRIC != figures[1].metric):
+        figures = [figures[1], figures[0]]            # [part, whole]: the company's revenue is the whole
     if operation in PAIR_OPERATIONS and len(figures) != 2:
         return None, f"{operation} takes two figures, {len(figures)} fetched (ambiguous)"
     arguments: dict[str, Any] = {"operation": operation, "inputs": [f.value for f in figures]}
@@ -240,7 +249,8 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
     # Earlier output is already inside the LLM tokens once the composer has run (its prompt carries it).
     composed = bool((state.get("visits") or {}).get("composer"))
     fetched = 0 if composed else output_tokens(earlier, count)    # grows with each new result
-    known = {call_key(r.call): r for r in earlier}
+    known = {call_key(r.call): r for r in earlier}                 # the latest result of each call
+    sends = Counter(call_key(r.call) for r in earlier)            # how often each call was sent
     new: list[ToolResult] = []
     used: list[ToolResult] = []                        # this plan's results, in step order (reused ones included)
     failed_before: list[ToolCall] = []                 # this plan's calls that failed in an earlier round
@@ -250,19 +260,23 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         """The call's result (run, or reused from an earlier successful identical call); (None, None) for a call
         that failed in an earlier round (not sent again); (None, why) when a guard stopped it."""
         nonlocal fetched
-        prior = known.get(call_key(call))
-        if prior is not None and is_error(prior) and prior not in new:
+        key = call_key(call)
+        prior = known.get(key)
+        retry = prior is not None and prior.error_type in TRANSIENT and sends[key] < 2   # one more try, then not
+        if prior is not None and is_error(prior) and not retry:
             args = json.dumps(call.arguments, sort_keys=True)
             notes.append(f"executor: not sent again, failed before ({prior.error_type}): {call.name} {args}")
             failed_before.append(call)
             return None, None
-        if prior is not None:
+        if prior is not None and not retry:
             return prior, None
         if len(earlier) + len(new) >= max_steps:
             return None, f"{STEP_LIMIT} ({max_steps} tool calls)"
         if llm_tokens + fetched >= max_tokens:
             log.info("executor: %d LLM tokens + %d tokens of tool output, at most %d", llm_tokens, fetched, max_tokens)
-            return None, f"{TOKEN_LIMIT} ({llm_tokens} LLM tokens + {fetched} tokens of tool output, at most {max_tokens})"
+            return None, (f"{TOKEN_LIMIT} ({llm_tokens} LLM tokens + {fetched} tokens of tool output, "
+                          f"at most {max_tokens})")
+        sends[key] += 1
         result = await _run(call_tool, call)
         fetched += output_tokens([result], count)
         new.append(result)
