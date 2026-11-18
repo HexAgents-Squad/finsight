@@ -1,21 +1,20 @@
-"""Stub nodes for the W2-01 skeleton: the graph runs end to end before any node is built.
+"""Stub nodes for the W2-01 skeleton: the graph runs end to end before every node is built.
 
-Each Week 2 ticket replaces one stub with its node: the planner (W2-02), the executor (W2-04), the critic (W2-05)
-and the composer (W2-06). The stubs make no LLM or tool call:
+Each Week 2 ticket replaces one stub with its node: the planner (W2-02), the executor (W2-04), the critic
+(W2-05: agent/critic.make_critic, wired here), and the composer (W2-06). The remaining stubs make no LLM or
+tool call:
 - planner: reads the companies, years and periods (retrieval.entities.from_turns, ADR-017) and plans no steps;
 - executor: runs nothing;
 - composer: a refusal sentence for a refusal plan (docs/spec.md §6), otherwise a placeholder without citations;
-- critic: the spec §8 checks (agent/critic_checks.check_contract), so the placeholder fails, is sent back once and
-  ends as "could not verify": the skeleton shows every bound working.
+- critic: agent.critic.make_critic() (contract checks, units against tools, metric vs the question).
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from agent.contract import AnswerContract, refusal_answer
-from agent.critic_checks import QuestionScope, check_contract
-from agent.executor import executor_node
-from agent.state import AgentState, Plan, Verdict
+from agent.critic import make_critic
+from agent.state import AgentState, Plan
 from retrieval.entities import from_turns
 
 if TYPE_CHECKING:
@@ -47,20 +46,8 @@ async def compose_stub(state: AgentState) -> dict[str, Any]:
     return {"draft": draft}
 
 
-def question_scope(state: AgentState) -> QuestionScope | None:
-    """The planner's entities as the critic's scope (spec §8 invariant 4); None when nothing was read."""
-    entities = state.get("entities")
-    if entities is None:
-        return None
-    return QuestionScope(frozenset(entities.tickers), frozenset(entities.years), frozenset(entities.periods))
-
-
-async def critic_stub(state: AgentState) -> dict[str, Any]:
-    return {"verdict": Verdict.of(check_contract(state["draft"], question_scope(state), state["question"]))}
-
-
 def stub_nodes() -> Nodes:
     """The four stubs (agent.graph imports this module lazily, so importing agent.graph here is no cycle)."""
     from agent.graph import Nodes
 
-    return Nodes(planner=plan_stub, executor=executor_node, composer=compose_stub, critic=critic_stub)
+    return Nodes(planner=plan_stub, executor=execute_stub, composer=compose_stub, critic=make_critic())
