@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent.contract import AnswerContract, refusal_answer
 from agent.critic_checks import QuestionScope, check_contract
+from agent.executor import executor_node
 from agent.state import AgentState, Plan, Verdict
 from retrieval.entities import from_turns
 
@@ -62,4 +63,4 @@ def stub_nodes() -> Nodes:
     """The four stubs (agent.graph imports this module lazily, so importing agent.graph here is no cycle)."""
     from agent.graph import Nodes
 
-    return Nodes(planner=plan_stub, executor=execute_stub, composer=compose_stub, critic=critic_stub)
+    return Nodes(planner=plan_stub, executor=executor_node, composer=compose_stub, critic=critic_stub)
