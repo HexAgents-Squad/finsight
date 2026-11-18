@@ -382,6 +382,10 @@ def test_a_balance_sheet_instant_pairs_with_a_duration():
     assets = {**row(364980.0, metric="total_assets"), "duration": None}
     call, _ = ex.calculation_call("ratio", [fetched(row(391035.0)), fetched(assets)])
     assert call.arguments["inputs"] == [391035.0, 364980.0]
+    year_end = {**row(1932468.0, ticker="WFC", metric="total_assets", year=2023), "duration": None}
+    quarter_end = {**row(1940122.0, ticker="WFC", metric="total_assets", period="Q2"), "duration": None}
+    call, _ = ex.calculation_call("difference", [fetched(year_end), fetched(quarter_end)])
+    assert call.arguments["inputs"] == [1932468.0, 1940122.0]           # instants: year end to a quarter end
     call, _ = ex.calculation_call("cagr", [fetched(row(1.0, year=2022, period="Q2")),
                                            fetched(row(2.0, year=2024, period="Q2"))])
     assert call.arguments["years"] == 2.0

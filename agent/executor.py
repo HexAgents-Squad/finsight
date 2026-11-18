@@ -19,11 +19,13 @@ the whole run in agent.graph.run):
   goes into the composer's prompt; it counts that output with core.tokens.count_tokens (Qwen3's tokenizer; a
   conservative 2 characters per token if the tokenizer cannot load) and does not add it to `state["tokens"]`,
   which the composer's own prompt tokens will report (adding it would count it twice; for the same reason, once
-  the composer has run, earlier rounds' output is not counted again on a send-back);
+  the composer has run, earlier rounds' output is not counted again on a send-back, which relies on the W2-06
+  composer reporting its prompt tokens);
 - loop guard: a call identical to an earlier one of the question (same tool and arguments) is never sent again.
   If the earlier one succeeded, its result is reused, so a send-back or a replan that keeps a step costs no step;
   if it failed, it is skipped with a note and the plan's other steps run (a replan's fallback search still runs),
-  and no calculation is made without its figure. Only a new error sets `tool_error`, so the graph's own bound
+  and no calculation is made when any of the plan's fact steps failed before (conservative: its figure may be an
+  input). Only a new error sets `tool_error`, so the graph's own bound
   applies: one replan, then the composer answers "not found" (W2-01).
 
 A typed tool error stops the round and sets `tool_error`, so the graph replans once (W2-01). `not_reported` and
@@ -36,7 +38,7 @@ calculate call from the figures the plan's fact steps fetched (each figure keeps
 duration; the same figure fetched twice counts once; a not_reported fact is a planned figure with no value):
 - all operations: one unit and one duration (a balance-sheet instant has none, so it pairs with any);
 - growth and cagr: one series (one company and metric), oldest to newest by fiscal year then quarter, never
-  full-year and quarterly figures mixed (cagr: the same period each year, so `years` = last minus first fiscal
+  full-year and quarterly flows mixed (balance-sheet instants compare at any date; cagr: the same period each year, so `years` = last minus first fiscal
   year is right); a longer series (a compare_periods trend) uses its first and last period, and a period the
   series asked for but has no value for at either end means no calculation;
 - percent and ratio: two figures for the same fiscal year and period; percent is [part, whole] with revenue as
@@ -188,7 +190,7 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
     series = list(dict.fromkeys(f.series for f in figures))
     over_time = operation in OVER_TIME or (operation == "difference" and len(series) == 1)
     periods = {f.fiscal_period for f in figures}
-    if over_time and "FY" in periods and len(periods) > 1:
+    if over_time and durations and "FY" in periods and len(periods) > 1:   # instants compare at any date
         return None, "the figures mix full-year and quarterly periods"
     if operation == "cagr" and len(periods) > 1:
         return None, f"cagr needs the same period each year ({', '.join(sorted(periods))} fetched)"
