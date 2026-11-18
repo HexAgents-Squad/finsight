@@ -27,7 +27,7 @@ the whole run in agent.graph.run):
   and no calculation is made when any of the plan's fact steps failed before (conservative: its figure may be an
   input). Only a new error sets `tool_error`, so the graph's own bound applies: one replan, then the composer
   answers "not found" (W2-01). The one exception is `service_unavailable` (tools/base.py: "retry later"): a
-  repeat of such a call is sent once more, never a third time.
+  repeat of such a call is sent once more (never a third time, and not past a guard).
 
 A typed tool error stops the round and sets `tool_error`, so the graph replans once (W2-01). `not_reported` and
 the calculator's `undefined` are answers, not errors (spec §4.2, §7.2, §7.5: the answer says "not reported" or that
@@ -258,24 +258,31 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
 
     async def attempt(call: ToolCall) -> tuple[ToolResult | None, str | None]:
         """The call's result (run, or reused from an earlier successful identical call); (None, None) for a call
-        that failed in an earlier round (not sent again); (None, why) when a guard stopped it."""
+        that failed in an earlier round and is not sent again (a service_unavailable one is retried once, unless a
+        guard blocks the retry); (None, why) when a guard stopped a new call."""
         nonlocal fetched
         key = call_key(call)
         prior = known.get(key)
-        retry = prior is not None and prior.error_type in TRANSIENT and sends[key] < 2   # one more try, then not
-        if prior is not None and is_error(prior) and not retry:
+
+        def skip() -> tuple[None, None]:
             args = json.dumps(call.arguments, sort_keys=True)
             notes.append(f"executor: not sent again, failed before ({prior.error_type}): {call.name} {args}")
             failed_before.append(call)
             return None, None
+
+        retry = prior is not None and prior.error_type in TRANSIENT and sends[key] < 2   # one more try, then not
+        if prior is not None and is_error(prior) and not retry:
+            return skip()
         if prior is not None and not retry:
             return prior, None
+        stop = None
         if len(earlier) + len(new) >= max_steps:
-            return None, f"{STEP_LIMIT} ({max_steps} tool calls)"
-        if llm_tokens + fetched >= max_tokens:
+            stop = f"{STEP_LIMIT} ({max_steps} tool calls)"
+        elif llm_tokens + fetched >= max_tokens:
             log.info("executor: %d LLM tokens + %d tokens of tool output, at most %d", llm_tokens, fetched, max_tokens)
-            return None, (f"{TOKEN_LIMIT} ({llm_tokens} LLM tokens + {fetched} tokens of tool output, "
-                          f"at most {max_tokens})")
+            stop = f"{TOKEN_LIMIT} ({llm_tokens} LLM tokens + {fetched} tokens of tool output, at most {max_tokens})"
+        if stop:
+            return skip() if retry else (None, stop)  # a guard blocking a retry: the call simply failed before
         sends[key] += 1
         result = await _run(call_tool, call)
         fetched += output_tokens([result], count)

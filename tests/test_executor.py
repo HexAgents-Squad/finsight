@@ -196,6 +196,8 @@ def test_a_service_unavailable_call_is_retried_once_never_twice():
     assert [n for n, _ in tools.calls] == ["search_filings"] and out["tool_error"] is None
     out, tools = run(plan(search()), results=[once, once])                 # sent twice already
     assert tools.calls == [] and "failed before (service_unavailable)" in out["errors"][0]
+    out, tools = run(plan(search()), results=[once], max_steps=1)          # a guard blocks the retry
+    assert tools.calls == [] and "stop_reason" not in out and "failed before" in out["errors"][0]
 
 
 # ----------------------------------------------------------------------------------------------- errors
