@@ -1,16 +1,18 @@
 """The critic node (W2-05): contract checks, units against tool results, metric vs the question.
 
     make_critic()           -> the node: state -> {verdict}
-    critique(state)         Verdict from check_contract + unit and metric checks (no LLM, no I/O)
+    critique(state)         Verdict from check_contract + unit and metric checks (no LLM)
     question_scope(state)   planner entities as QuestionScope (spec §8 invariant 4)
 
 The graph owns the send-back (MAX_CRITIC_RUNS=2) and with_verification (finish). This node writes only
-`verdict`. Units: draft values are compared to get_financial_fact / compare_periods outputs on a common scale
-(UNIT_SCALE); a plain-dollar integer for a millions figure, or a matching number with the wrong unit label, is a
-`units` violation so the send-back can fix it (Week 1: Qwen wrote "$47.52 billion" as a wrong plain-dollar
-integer). Metric: when the question clearly names a mapped line item (or a search-only phrase such as
-stock-based compensation), a get_financial_fact / compare_periods result for a different metric is a `metric`
-violation (ADR-026).
+`verdict` and does not rewrite the draft (ADR-024: the composer owns the draft); "owns units" means it
+*flags* scale/unit mismatches so the send-back can fix them. Calculator recomputation is already in
+check_calculations (W1-07 / ADR-022 → tools.calculator.compute).
+
+Unit and metric checks read fact-tool rows the *draft uses* (same ticker, year, period, duration, and
+metric or line-item label), not the whole append-only tool_results log, so a send-back that fetches the
+right metric can clear an earlier wrong fetch (ADR-026). Phrase tables come from config/concept_map.yaml
+(loaded on first use, cached) plus glossary aliases from the development set / tool schema — never gold-v1.
 """
 from __future__ import annotations
 
@@ -33,11 +35,35 @@ from ingest.xbrl import load_concept_map
 from tools.financial_facts import METRICS
 
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
-# Line items that are not among the 13 metrics: any XBRL fact fetch for them is a forbidden substitute (ADR-026).
+# Line items that are not among the 13 metrics: any XBRL fact used in the draft is a forbidden substitute.
 SEARCH_ONLY = (
     re.compile(r"\bstock[ -]?based compensation\b", re.IGNORECASE),
     re.compile(r"\bshare[ -]?based compensation\b", re.IGNORECASE),
     re.compile(r"\bequity[ -]?based compensation\b", re.IGNORECASE),
+)
+# Spans that contain a metric word but are not that metric (masked before phrase matching).
+PHRASE_MASKS = (
+    re.compile(r"\bcost of revenue\b", re.IGNORECASE),
+    re.compile(r"\bnoninterest revenue\b", re.IGNORECASE),
+    re.compile(r"\bnet income attributable to\b(?:\s+\w+){0,6}", re.IGNORECASE),
+)
+# Bare "cash" must not fire on cash-flow / dividend wording.
+CASH_BARE = re.compile(
+    r"\bcash\b(?!\s+(?:and\s+cash\s+equivalents|flow|flows|generated|used|paid|dividend|dividends|"
+    r"from\s+operat|provided\s+by|provided\s+from))",
+    re.IGNORECASE,
+)
+# Non-contiguous cash-flow wording ("cash did X generate from operating activities").
+OPERATING_CASH_LOOSE = re.compile(
+    r"\bcash\b.{0,60}?\b(?:flow|flows|generate|generated|used|provided)\b.{0,40}?\boperat\w*",
+    re.IGNORECASE,
+)
+OPERATING_CASH_PHRASES = (
+    "operating cash flow", "cash flow from operations", "cash flows from operations",
+    "cash flow from operating activities", "cash flows from operating activities",
+    "cash provided by operating activities", "cash provided by operations",
+    "cash from operations", "cash from operating", "net cash from operations",
+    "net cash provided by operating activities", "net cash from operating activities",
 )
 
 
@@ -70,14 +96,67 @@ def _fact_rows(results: list[ToolResult]) -> list[dict[str, Any]]:
     return rows
 
 
+def _same_period(value: Value, row: dict[str, Any]) -> bool:
+    if (row.get("ticker") != value.ticker or row.get("fiscal_year") != value.fiscal_year
+            or row.get("fiscal_period") != value.fiscal_period):
+        return False
+    row_duration, value_duration = row.get("duration"), value.duration
+    if row_duration is not None and value_duration is not None and row_duration != value_duration:
+        return False
+    return True
+
+
+def _name_matches_row(value: Value, row: dict[str, Any]) -> bool:
+    """Match the mapped metric key or the company's line-item label (spec §7.5)."""
+    if row.get("metric") == value.name:
+        return True
+    label = row.get("label")
+    return isinstance(label, str) and label.casefold() == value.name.casefold()
+
+
+def _named_period_facts(value: Value, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fact rows for the value's company and period whose metric or label matches the value's name."""
+    return [row for row in rows
+            if (row.get("ticker") == value.ticker and row.get("fiscal_year") == value.fiscal_year
+                and row.get("fiscal_period") == value.fiscal_period and _name_matches_row(value, row))]
+
+
 def _matching_fact(value: Value, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """A tool fact for the same company, period and metric/name as `value`, if any."""
-    for row in rows:
-        if (row.get("ticker") == value.ticker and row.get("fiscal_year") == value.fiscal_year
-                and row.get("fiscal_period") == value.fiscal_period
-                and row.get("metric") == value.name):
+    """A tool fact for the same company, period, duration and metric/label as `value`, if any."""
+    for row in _named_period_facts(value, rows):
+        if _same_period(value, row):
             return row
     return None
+
+
+def draft_fact_rows(contract: AnswerContract, results: list[ToolResult]) -> list[dict[str, Any]]:
+    """Fact rows the draft actually uses (values or matching xbrl citations), ignoring stale tool log rows."""
+    rows = _fact_rows(results)
+    if not rows:
+        return []
+    used: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for value in contract.values:
+        if value.unit in DERIVED_UNITS:
+            continue
+        for row in rows:
+            if id(row) in seen:
+                continue
+            if _same_period(value, row) and _name_matches_row(value, row):
+                used.append(row)
+                seen.add(id(row))
+    for citation in contract.citations:
+        if citation.source_type != "xbrl":
+            continue
+        for row in rows:
+            if id(row) in seen:
+                continue
+            if (row.get("ticker") == citation.ticker and row.get("fiscal_year") == citation.fiscal_year
+                    and row.get("fiscal_period") == citation.fiscal_period
+                    and row.get("concept") == citation.concept):
+                used.append(row)
+                seen.add(id(row))
+    return used
 
 
 def check_units_against_tools(contract: AnswerContract, results: list[ToolResult]) -> list[Violation]:
@@ -89,9 +168,26 @@ def check_units_against_tools(contract: AnswerContract, results: list[ToolResult
     for value in contract.values:
         if value.unit in DERIVED_UNITS:
             continue
-        fact = _matching_fact(value, rows)
-        if fact is None:
+        named = _named_period_facts(value, rows)
+        timed = [row for row in named if _same_period(value, row)]
+        if timed:
+            fact = timed[0]
+        elif named:
+            fact = named[0]
+            out.append(Violation(
+                "units",
+                f"value {value.name} has duration {value.duration} but the tool returned "
+                f"{fact.get('duration')}",
+            ))
             continue
+        else:
+            # Company line-item name that isn't a mapped metric key: still catch a unique same-period fact.
+            if value.name in METRICS:
+                continue
+            peers = [row for row in rows if _same_period(value, row)]
+            if len(peers) != 1:
+                continue
+            fact = peers[0]
         fact_unit = fact.get("unit")
         if not isinstance(fact_unit, str) or fact_unit not in UNIT_SCALE or value.unit not in UNIT_SCALE:
             continue
@@ -107,26 +203,28 @@ def check_units_against_tools(contract: AnswerContract, results: list[ToolResult
         elif not same_number(draft_abs, fact_abs):
             out.append(Violation(
                 "units",
-                f"value {value.name} = {value.value} {value.unit} does not match the tool's "
-                f"{fact['value']} {fact_unit} (compare on a common scale)",
+                f"value {value.name} = {value.value} {value.unit} is not the tool's "
+                f"{fact['value']} {fact_unit} in filing units",
             ))
     return out
 
 
 @functools.cache
 def _metric_phrases() -> tuple[tuple[str, str], ...]:
-    """(phrase, metric) pairs from the concept map, longest phrase first (word-boundary match)."""
+    """(phrase, metric) pairs from the concept map, longest phrase first.
+
+    Loads config/concept_map.yaml on first call (cached). A missing or invalid map raises on that first call.
+    """
     pairs: list[tuple[str, str]] = []
     for name, metric in load_concept_map().items():
         phrases = {name.replace("_", " "), name.replace("_", "-")}
         for concept in metric.concepts:
             phrases.add(concept.label.lower())
+        # Full company labels only (do not split on commas: "total revenue, net of interest expense" is one label).
         for _, label in metric.ticker_labels:
-            for part in label.split(","):
-                text = part.strip().lower()
-                if text:
-                    phrases.add(text)
-        # Glossary aliases used in the tool schema (ADR-026), not every synonym.
+            text = " ".join(label.lower().split())
+            if text:
+                phrases.add(text)
         if name == "revenue":
             phrases.update({"total revenue", "net sales", "net revenues", "total net sales", "total revenues",
                             "revenues", "total sales"})
@@ -135,7 +233,8 @@ def _metric_phrases() -> tuple[tuple[str, str], ...]:
         elif name == "capex":
             phrases.update({"capital expenditures", "capital expenditure", "capex"})
         elif name == "cash":
-            phrases.update({"cash and cash equivalents", "cash"})
+            phrases.add("cash and cash equivalents")
+            # bare "cash" is matched separately (CASH_BARE) so cash-flow wording is not stolen
         elif name == "rd_expense":
             phrases.update({"research and development", "r&d", "r & d", "rd expense", "r&d expense"})
         elif name == "operating_income":
@@ -152,32 +251,46 @@ def _metric_phrases() -> tuple[tuple[str, str], ...]:
         elif name == "long_term_debt":
             phrases.update({"long-term debt", "long term debt"})
         elif name == "operating_cash_flow":
-            phrases.update({"operating cash flow", "cash from operations", "cash from operating"})
+            phrases.update(OPERATING_CASH_PHRASES)
         elif name == "eps_diluted":
             phrases.update({"diluted eps", "diluted earnings per share", "eps"})
         for phrase in phrases:
             cleaned = " ".join(phrase.lower().split())
-            if cleaned and cleaned not in {"sales"}:          # too short / ambiguous alone
+            if cleaned and cleaned not in {"sales", "cash"}:
                 pairs.append((cleaned, name))
     pairs.sort(key=lambda item: (-len(item[0]), item[0], item[1]))
     return tuple(pairs)
 
 
+def _mask_false_metric_spans(text: str) -> str:
+    """Blank out spans that contain a metric word but are not that metric."""
+    out = text
+    for pattern in PHRASE_MASKS:
+        out = pattern.sub(lambda m: " " * len(m.group(0)), out)
+    return out
+
+
 def named_metrics(question: str) -> frozenset[str]:
     """Mapped metrics the question's wording clearly names (longest phrase wins per span)."""
-    text = " ".join(question.lower().split())
+    text = _mask_false_metric_spans(" ".join(question.lower().split()))
     found: set[str] = set()
     covered = [False] * len(text)
+
+    def _cover(start: int, end: int, metric: str) -> None:
+        if any(covered[i] for i in range(start, end)):
+            return
+        for i in range(start, end):
+            covered[i] = True
+        found.add(metric)
+
+    for match in OPERATING_CASH_LOOSE.finditer(text):
+        _cover(match.start(), match.end(), "operating_cash_flow")
     for phrase, metric in _metric_phrases():
-        if metric not in METRICS:
-            continue
         pattern = re.compile(rf"(?<![\w]){re.escape(phrase)}(?![\w])", re.IGNORECASE)
         for match in pattern.finditer(text):
-            if any(covered[i] for i in range(match.start(), match.end())):
-                continue
-            for i in range(match.start(), match.end()):
-                covered[i] = True
-            found.add(metric)
+            _cover(match.start(), match.end(), metric)
+    for match in CASH_BARE.finditer(text):
+        _cover(match.start(), match.end(), "cash")
     return frozenset(found)
 
 
@@ -190,18 +303,29 @@ def search_only_line_item(question: str) -> str | None:
     return None
 
 
-def check_metric_matches_question(question: str, results: list[ToolResult]) -> list[Violation]:
-    """Fetched metrics must fit the question; search-only line items may not use XBRL facts.
+def metric_question_text(question: str, history: list[str] | None = None) -> str:
+    """The turn that names the line item: the question, or the latest history turn (follow-ups)."""
+    if named_metrics(question) or search_only_line_item(question):
+        return question
+    for prior in reversed(history or []):
+        if named_metrics(prior) or search_only_line_item(prior):
+            return prior
+    return question
 
-    Fact lookups: every returned metric must be one the question named. Ratio / percent / growth (and other
-    calculator) questions may fetch companion inputs the wording does not name (e.g. revenue with R&D); those
-    extras are allowed when at least one named metric was fetched. A wholly wrong set (none of the named
-    metrics) is still a violation.
+
+def check_metric_matches_question(question: str, results: list[ToolResult],
+                                  contract: AnswerContract | None = None,
+                                  history: list[str] | None = None) -> list[Violation]:
+    """Draft-used fact metrics must fit the question; search-only line items may not use XBRL facts.
+
+    Judges the draft, not the append-only tool log: only rows the draft uses (values / xbrl citations).
+    Without a contract (unit tests of the phrase table), falls back to all successful fact rows.
     """
-    rows = _fact_rows(results)
+    text = metric_question_text(question, history)
+    rows = draft_fact_rows(contract, results) if contract is not None else _fact_rows(results)
     if not rows:
         return []
-    forbidden = search_only_line_item(question)
+    forbidden = search_only_line_item(text)
     if forbidden:
         metrics = sorted({row["metric"] for row in rows})
         return [Violation(
@@ -209,11 +333,11 @@ def check_metric_matches_question(question: str, results: list[ToolResult]) -> l
             f"the question asks for {forbidden!r}, which is not a mapped metric; "
             f"search_filings must be used, not get_financial_fact ({', '.join(metrics)})",
         )]
-    wanted = named_metrics(question)
+    wanted = named_metrics(text)
     if not wanted:
         return []
     fetched = {row["metric"] for row in rows}
-    if expected_operations(question):
+    if expected_operations(text):
         if wanted & fetched:
             return []
         return [Violation(
@@ -221,25 +345,23 @@ def check_metric_matches_question(question: str, results: list[ToolResult]) -> l
             f"the question names {', '.join(sorted(wanted))}, but the tools returned "
             f"{', '.join(sorted(fetched))}",
         )]
-    out: list[Violation] = []
-    for metric in sorted(fetched - wanted):
-        out.append(Violation(
-            "metric",
-            f"the question names {', '.join(sorted(wanted))}, but a tool returned {metric}",
-        ))
-    return out
+    return [Violation(
+        "metric",
+        f"the question names {', '.join(sorted(wanted))}, but a tool returned {metric}",
+    ) for metric in sorted(fetched - wanted)]
 
 
 def critique(state: AgentState) -> Verdict:
     """Every critic check on the latest draft: contract (W1-07) + units + metric (no invariant 7)."""
     draft = state.get("draft")
     if draft is None:
-        return Verdict(violations=[("critic", "the critic returned no verdict")])
+        return Verdict(violations=[("critic", "no draft to check")])
     question = state.get("question") or ""
+    history = list(state.get("history") or [])
     results = list(state.get("tool_results") or [])
     violations = (check_contract(draft, question_scope(state), question)
                   + check_units_against_tools(draft, results)
-                  + check_metric_matches_question(question, results))
+                  + check_metric_matches_question(question, results, contract=draft, history=history))
     return Verdict.of(violations)
 
 
