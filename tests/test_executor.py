@@ -68,11 +68,17 @@ def plan(*steps, calculation=None, rule=None) -> Plan:
     return Plan(reasoning="x", refuse=False, refusal_rule=rule, steps=list(steps), calculation=calculation)
 
 
-def run(p: Plan, tools: FakeTools | None = None, *, results=(), max_steps=10, tokens=0, max_tokens=12_000):
+def words(text: str) -> int:
+    """An offline token counter (core.tokens needs the Qwen tokenizer)."""
+    return len(text.split())
+
+
+def run(p: Plan, tools: FakeTools | None = None, *, results=(), max_steps=10, tokens=0, max_tokens=12_000,
+        count=words):
     tools = tools or FakeTools()
     state = {"plan": p, "tool_results": list(results), "tokens": tokens,
              "limits": {"max_steps": max_steps, "max_tokens": max_tokens, "timeout_s": 60.0}}
-    return asyncio.run(ex.execute(state, tools)), tools
+    return asyncio.run(ex.execute(state, tools, count)), tools
 
 
 def done(name, arguments, output) -> ToolResult:
@@ -111,7 +117,34 @@ def test_the_step_cap_stops_the_round_at_max_steps_for_the_whole_question():
 
 def test_the_token_budget_stops_before_any_call():
     out, tools = run(plan(fact()), tokens=12_500, max_tokens=12_000)
-    assert tools.calls == [] and out["stop_reason"] == "token budget exceeded (12500 tokens, at most 12000)"
+    assert tools.calls == []
+    assert out["stop_reason"] == "token budget exceeded (12500 LLM tokens + 0 tokens of tool output, at most 12000)"
+
+
+def test_fetched_tool_output_counts_toward_the_token_budget():
+    """Everything fetched goes into the composer's prompt: a large search result stops further calls."""
+    big = [{"chunk_id": "x", "text": "word " * 900}]
+    tools = FakeTools({json.dumps(["search_filings", search().arguments], sort_keys=True): big})
+    out, _ = run(plan(search(), fact()), tools, tokens=1_000, max_tokens=1_800)
+    assert [n for n, _ in tools.calls] == ["search_filings"]
+    assert out["stop_reason"].startswith("token budget exceeded (1000 LLM tokens + 9")
+    assert "tokens" not in out                          # the composer's prompt reports them: no double count
+    earlier = [done("search_filings", {"query": "a"}, big)]        # earlier rounds' output counts too
+    out, tools = run(plan(fact()), results=earlier, tokens=1_000, max_tokens=1_800)
+    assert tools.calls == [] and "token budget exceeded" in out["stop_reason"]
+
+
+def test_the_default_counter_is_core_tokens_with_a_conservative_fallback(monkeypatch):
+    import core.tokens
+    from core.exceptions import FinSightError
+    monkeypatch.setattr(core.tokens, "count_tokens", lambda text: 7)
+    assert ex._default_count_tokens("anything") == 7
+
+    def unavailable(text):
+        raise FinSightError("no tokenizer", error_type="TokenizerUnavailable")
+
+    monkeypatch.setattr(core.tokens, "count_tokens", unavailable)
+    assert ex._default_count_tokens("12345") == 3       # 2 characters per token, rounded up
 
 
 def test_a_repeated_call_that_failed_before_stops_the_run():
@@ -265,7 +298,7 @@ def test_in_the_graph_a_tool_error_replans_once_and_reuses_the_good_step():
         return {"verdict": Verdict()}
 
     tools = FakeTools()
-    graph = g.build_graph(g.Nodes(planner, ex.make_executor(tools), composer, critic))
+    graph = g.build_graph(g.Nodes(planner, ex.make_executor(tools, words), composer, critic))
     result = asyncio.run(g.run("How did Apple's revenue change from fiscal 2023 to 2024?", graph=graph,
                                limits=g.Limits()))
     assert result.state["visits"] == {"planner": 2, "executor": 2, "composer": 1, "critic": 1}
@@ -280,7 +313,9 @@ def test_the_default_caller_is_the_tool_registry(monkeypatch):
         seen.append(name)
         return {"result": 1.0}
 
+    import core.tokens
     import tools.registry
     monkeypatch.setattr(tools.registry, "call_tool_async", fake_registry)
+    monkeypatch.setattr(core.tokens, "count_tokens", words)
     out = asyncio.run(ex.make_executor()({"plan": plan(search()), "tool_results": [], "limits": {}}))
     assert seen == ["search_filings"] and out["tool_error"] is None

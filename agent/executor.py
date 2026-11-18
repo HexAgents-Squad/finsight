@@ -13,7 +13,11 @@ Guards, from state["limits"] (W2-01: MAX_AGENT_STEPS, MAX_TOKENS_PER_QUERY; the 
 the whole run in agent.graph.run):
 - step cap: no call beyond max_steps tool calls for the question (all rounds together); the round stops with a
   `stop_reason`, and the graph ends the run with "could not verify";
-- token budget: no call once the question's LLM tokens are over max_tokens (the executor itself uses no LLM);
+- token budget: no call once the question's LLM tokens (`state["tokens"]`) plus the tokens of the tool output
+  fetched so far reach max_tokens. The executor uses no LLM, but everything it fetches goes into the composer's
+  prompt; it counts that output with core.tokens.count_tokens (Qwen3's tokenizer; a conservative 2 characters per
+  token if the tokenizer cannot load) and does not add it to `state["tokens"]`, which the composer's own prompt
+  tokens will report (adding it would count it twice);
 - loop guard: a call identical to an earlier one (same tool and arguments) is not sent again. If the earlier one
   failed, the run stops (the plan would repeat a failing call); if it succeeded, its result is reused, so a
   send-back or a replan that keeps a step costs no extra step.
@@ -43,6 +47,8 @@ from tools.base import INTERNAL_ERROR, NOT_REPORTED, UNDEFINED, error_result
 log = logging.getLogger(__name__)
 
 ToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
+TokenCounter = Callable[[str], int]
+CHARS_PER_TOKEN_FLOOR = 2       # core/tokens.py: filing tables run at 2.2 characters per token, prose at 4.6
 ANSWERS = frozenset({NOT_REPORTED, UNDEFINED})       # typed results that answer the question: no replan
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
 PAIR_OPERATIONS = frozenset({"ratio", "percent", "growth", "difference", "cagr"})   # tools.calculator: two inputs
@@ -63,6 +69,21 @@ def is_error(result: ToolResult) -> bool:
 async def _default_call_tool(name: str, arguments: dict[str, Any]) -> Any:
     from tools.registry import call_tool_async  # loads the tools on first use, not at import
     return await call_tool_async(name, arguments)
+
+
+def _default_count_tokens(text: str) -> int:
+    from core.exceptions import FinSightError
+    from core.tokens import count_tokens
+    try:
+        return count_tokens(text)
+    except FinSightError as err:                       # no tokenizer (offline, first run): over- not under-count
+        log.warning("executor: %s; counting %d characters per token", err, CHARS_PER_TOKEN_FLOOR)
+        return -(-len(text) // CHARS_PER_TOKEN_FLOOR)
+
+
+def output_tokens(results: list[ToolResult], count: TokenCounter) -> int:
+    """Tokens of the tool output in `results`, as JSON (what a prompt carries)."""
+    return sum(count(json.dumps(r.output, default=str, ensure_ascii=False)) for r in results)
 
 
 async def _run(call_tool: ToolCaller, call: ToolCall) -> ToolResult:
@@ -119,7 +140,7 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
 
 
 # ----------------------------------------------------------------------------------------------- node
-async def execute(state: AgentState, call_tool: ToolCaller) -> dict[str, Any]:
+async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None) -> dict[str, Any]:
     """One executor round (see the module docstring). Returns the new results, the round's tool error (None when
     it had none), and a stop_reason / notes when a guard or the calculation needs saying."""
     plan: Plan | None = state.get("plan")
@@ -129,6 +150,9 @@ async def execute(state: AgentState, call_tool: ToolCaller) -> dict[str, Any]:
     max_steps = int(limits.get("max_steps", DEFAULT_MAX_STEPS))
     max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS))
     earlier = list(state.get("tool_results") or [])
+    count = count_tokens or _default_count_tokens
+    llm_tokens = int(state.get("tokens") or 0)
+    fetched = output_tokens(earlier, count)            # grows with each new result
     known = {call_key(r.call): r for r in earlier}
     new: list[ToolResult] = []
     used: list[ToolResult] = []                        # this plan's results, in step order (reused ones included)
@@ -136,6 +160,7 @@ async def execute(state: AgentState, call_tool: ToolCaller) -> dict[str, Any]:
 
     async def attempt(call: ToolCall) -> tuple[ToolResult | None, str | None]:
         """The call's result (run or reused), or a stop reason."""
+        nonlocal fetched
         prior = known.get(call_key(call))
         if prior is not None:
             if is_error(prior):
@@ -144,9 +169,11 @@ async def execute(state: AgentState, call_tool: ToolCaller) -> dict[str, Any]:
             return prior, None
         if len(earlier) + len(new) >= max_steps:
             return None, f"step limit reached ({max_steps} tool calls)"
-        if (state.get("tokens") or 0) > max_tokens:
-            return None, f"token budget exceeded ({state.get('tokens')} tokens, at most {max_tokens})"
+        if llm_tokens + fetched >= max_tokens:
+            return None, (f"token budget exceeded ({llm_tokens} LLM tokens + {fetched} tokens of tool output, "
+                          f"at most {max_tokens})")
         result = await _run(call_tool, call)
+        fetched += output_tokens([result], count)
         new.append(result)
         known[call_key(call)] = result
         return result, None
@@ -180,11 +207,12 @@ def _update(new: list[ToolResult], tool_error: str | None, notes: list[str], sto
     return update
 
 
-def make_executor(call_tool: ToolCaller | None = None) -> Any:
-    """The executor node for agent.graph.Nodes(executor=...); `call_tool` defaults to the tool registry."""
+def make_executor(call_tool: ToolCaller | None = None, count_tokens: TokenCounter | None = None) -> Any:
+    """The executor node for agent.graph.Nodes(executor=...); `call_tool` defaults to the tool registry and
+    `count_tokens` to core.tokens.count_tokens (offline tests pass their own)."""
     caller = call_tool or _default_call_tool
 
     async def executor(state: AgentState) -> dict[str, Any]:
-        return await execute(state, caller)
+        return await execute(state, caller, count_tokens)
 
     return executor

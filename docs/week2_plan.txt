@@ -111,8 +111,9 @@ parallel with W2-04). Full ticket text (goal, steps, acceptance criteria) is in 
   PR reviewed.
 - Prompts are tuned on the development set only and pinned by sha256 before any gold run; gold-v1 stays frozen.
 - The shared key: one evaluation run at a time, through the reply cache; announce long runs in the team chat.
-- Decisions with numbers go into docs/decisions.md (next free ADR: ADR-027; ADR-024 = the agent graph, W2-01;
-ADR-025 = the planner, W2-02; ADR-026 = the tool schemas, W2-03).
+- Decisions with numbers go into docs/decisions.md (next free ADR: ADR-029; ADR-024 = the agent graph, W2-01;
+ADR-025 = the planner, W2-02; ADR-026 = the tool schemas, W2-03; ADR-027 = the critic, W2-05;
+ADR-028 = the executor, W2-04).
 
 5. Risks
 ========

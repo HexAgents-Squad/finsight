@@ -1,8 +1,9 @@
 """Stub nodes for the W2-01 skeleton: the graph runs end to end before every node is built.
 
-Each Week 2 ticket replaces one stub with its node: the planner (W2-02), the executor (W2-04), the critic
-(W2-05: agent/critic.make_critic, wired here), and the composer (W2-06). The remaining stubs make no LLM or
-tool call:
+Each Week 2 ticket replaces one stub with its node: the planner (W2-02), the executor (W2-04:
+agent/executor.make_executor, not wired here so the graph tests need no index; W2-07 wires the real nodes),
+the critic (W2-05: agent/critic.make_critic, wired here), and the composer (W2-06). The remaining stubs make
+no LLM or tool call:
 - planner: reads the companies, years and periods (retrieval.entities.from_turns, ADR-017) and plans no steps;
 - executor: runs nothing;
 - composer: a refusal sentence for a refusal plan (docs/spec.md §6), otherwise a placeholder without citations;
