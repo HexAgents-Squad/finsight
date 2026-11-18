@@ -1,8 +1,8 @@
 """The executor node (W2-04): run the plan's tool steps, then the plan's calculation, within the run's limits.
 
-    make_executor(call_tool=None)   -> the node for agent.graph.Nodes(executor=...)
-    execute(state, call_tool)       the work (tests pass a fake call_tool)
-    calculation_call(op, results)   the calculate call ADR-025 asks for, built from the fetched figures
+    make_executor(call_tool=None, count_tokens=None)   -> the node for agent.graph.Nodes(executor=...)
+    execute(state, call_tool, count_tokens=None)       the work (tests pass a fake call_tool and counter)
+    calculation_call(op, results)                      the calculate call ADR-025 asks for, from the fetched figures
 
 Each step of the plan (search_filings, get_financial_fact, compare_periods; ADR-025) runs in order through
 tools.registry.call_tool_async, the agent's single entry point, which returns a typed error instead of raising
@@ -11,16 +11,18 @@ tools.registry.call_tool_async, the agent's single entry point, which returns a 
 
 Guards, from state["limits"] (W2-01: MAX_AGENT_STEPS, MAX_TOKENS_PER_QUERY; the QUERY_TIMEOUT_S wall clock wraps
 the whole run in agent.graph.run):
-- step cap: no call beyond max_steps tool calls for the question (all rounds together); the round stops with a
-  `stop_reason`, and the graph ends the run with "could not verify";
+- step cap: no call beyond max_steps tool calls for the question (all rounds together); a plan step that would
+  pass it stops the round with a `stop_reason` (the graph then ends the run with "could not verify"); a
+  calculation that would pass it is skipped with a note, so the composer still answers from the fetched figures;
 - token budget: no call once the question's LLM tokens (`state["tokens"]`) plus the tokens of the tool output
-  fetched so far reach max_tokens. The executor uses no LLM, but everything it fetches goes into the composer's
-  prompt; it counts that output with core.tokens.count_tokens (Qwen3's tokenizer; a conservative 2 characters per
-  token if the tokenizer cannot load) and does not add it to `state["tokens"]`, which the composer's own prompt
-  tokens will report (adding it would count it twice);
-- loop guard: a call identical to an earlier one (same tool and arguments) is not sent again. If the earlier one
-  failed, the run stops (the plan would repeat a failing call); if it succeeded, its result is reused, so a
-  send-back or a replan that keeps a step costs no extra step.
+  fetched so far reach max_tokens, handled like the step cap. The executor uses no LLM, but everything it fetches
+  goes into the composer's prompt; it counts that output with core.tokens.count_tokens (Qwen3's tokenizer; a
+  conservative 2 characters per token if the tokenizer cannot load) and does not add it to `state["tokens"]`,
+  which the composer's own prompt tokens will report (adding it would count it twice);
+- loop guard: a call identical to an earlier one of the question (same tool and arguments) is never sent again.
+  If the earlier one succeeded, its result is reused, so a send-back or a replan that keeps a step costs no step;
+  if it failed, its error is the round's tool error again (with a note), so the graph's own bound decides: one
+  replan, then the composer answers "not found" (W2-01).
 
 A typed tool error stops the round and sets `tool_error`, so the graph replans once (W2-01). `not_reported` and
 the calculator's `undefined` are answers, not errors (spec §4.2, §7.2, §7.5: the answer says "not reported" or that
@@ -28,17 +30,24 @@ the measure is undefined), so they do not trigger a replan; a fourth-quarter que
 way. An exception from the tool caller (a bug: call_tool_async does not raise) becomes an internal_error result.
 
 The calculation (ADR-025): a plan has no numbers, so when `plan.calculation` is set the executor builds the
-calculate call from the figures the plan's steps fetched, in step order: [part, whole] for ratio and percent (the
-planner fetches the line item, then revenue), chronological [old, new] for growth, difference over years and cagr
-(with `years` from the fiscal years), and the inputs' shared unit for difference and sum. Figures in different
-units, too few figures, or more than two figures for a two-input operation (ambiguous) mean no calculation and a
-note in `errors`: the composer then answers from the fetched figures and the critic checks it.
+calculate call from the figures the plan's fact steps fetched (each figure keeps its company, metric and period;
+the same figure fetched twice counts once):
+- growth and cagr: one series (one company and metric), oldest to newest; a longer series (a compare_periods
+  trend) uses its first and last period, and a period the series asked for but has no value for at either end
+  means no calculation; cagr gets `years` from the fiscal years;
+- percent: [part, whole]: the planner fetches the line item, then revenue; revenue is the whole whichever comes
+  first. ratio: the two figures in step order;
+- difference: one series oldest to newest, or two companies (or metrics) in step order (second minus first: the
+  composer states which is which); sum: every figure, with the shared unit (also for difference).
+Figures in different units, too few figures, or a count or mix the operation cannot take unambiguously mean no
+calculation and a note in `errors`, never a guessed pair: the composer then answers from the fetched figures.
 """
 from __future__ import annotations
 
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from agent.state import AgentState, Plan, ToolCall, ToolResult
@@ -52,8 +61,11 @@ CHARS_PER_TOKEN_FLOOR = 2       # core/tokens.py: filing tables run at 2.2 chara
 ANSWERS = frozenset({NOT_REPORTED, UNDEFINED})       # typed results that answer the question: no replan
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
 PAIR_OPERATIONS = frozenset({"ratio", "percent", "growth", "difference", "cagr"})   # tools.calculator: two inputs
-OVER_TIME = frozenset({"growth", "cagr"})            # always chronological
+OVER_TIME = frozenset({"growth", "cagr"})            # one series, always chronological
+PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}   # within a fiscal year (the year ends with Q4)
+WHOLE_METRIC = "revenue"                             # the whole of a percent (a margin, a share of revenue)
 DEFAULT_MAX_STEPS, DEFAULT_MAX_TOKENS = 10, 12_000   # agent.graph.Limits() defaults, for a state without limits
+STEP_LIMIT, TOKEN_LIMIT = "step limit reached", "token budget exceeded"
 
 
 def call_key(call: ToolCall) -> str:
@@ -96,41 +108,90 @@ async def _run(call_tool: ToolCaller, call: ToolCall) -> ToolResult:
 
 
 # ----------------------------------------------------------------------------------------------- calculation
-def _figures(results: list[ToolResult]) -> list[tuple[float, str, int | None]]:
-    """(value, unit, fiscal year) of every figure the fact steps fetched, in step order (a compare_periods call
-    gives one per year that has a value)."""
-    out: list[tuple[float, str, int | None]] = []
+@dataclass(frozen=True)
+class Figure:
+    """One fetched figure; `value` is None for a period compare_periods asked for but has no value for."""
+    value: float | None
+    unit: str | None
+    ticker: str | None
+    metric: str | None
+    fiscal_year: int | None
+    fiscal_period: str
+    duration: str | None
+
+    @property
+    def series(self) -> tuple[str | None, str | None]:
+        return self.ticker, self.metric
+
+    @property
+    def when(self) -> tuple[int, int]:
+        return self.fiscal_year or 0, PERIOD_ORDER.get(self.fiscal_period, 4)
+
+    def label(self) -> str:
+        return f"{self.ticker} {self.metric} {self.fiscal_period} {self.fiscal_year}"
+
+
+def _figures(results: list[ToolResult]) -> list[Figure]:
+    """Every figure the fact steps fetched, in step order, each once (a compare_periods call gives one per year)."""
+    out: list[Figure] = []
+    seen: set[tuple] = set()
     for result in results:
         if result.call.name not in FACT_TOOLS or result.error_type is not None:
             continue
+        args = result.call.arguments
         rows = result.output if isinstance(result.output, list) else [result.output]
         for row in rows:
-            value = row.get("value") if isinstance(row, dict) else None
-            if isinstance(value, int | float) and not isinstance(value, bool) and isinstance(row.get("unit"), str):
-                out.append((float(value), row["unit"], row.get("fiscal_year")))
+            if not isinstance(row, dict):
+                continue
+            value = row.get("value")
+            number = isinstance(value, int | float) and not isinstance(value, bool)
+            if value is not None and not number:
+                continue
+            figure = Figure(value=float(value) if number else None,
+                            unit=row.get("unit") if isinstance(row.get("unit"), str) else None,
+                            ticker=row.get("ticker") or args.get("ticker"),
+                            metric=row.get("metric") or args.get("metric"),
+                            fiscal_year=row.get("fiscal_year") or args.get("fiscal_year"),
+                            fiscal_period=row.get("fiscal_period") or args.get("fiscal_period") or "FY",
+                            duration=row.get("duration"))
+            key = (figure.series, figure.when, figure.fiscal_period, figure.duration)
+            if key not in seen:
+                seen.add(key)
+                out.append(figure)
     return out
 
 
 def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCall | None, str | None]:
     """The calculate call for `operation` over the fetched figures, or (None, why not)."""
-    figures = _figures(results)
+    fetched = _figures(results)
+    figures = [f for f in fetched if f.value is not None and f.unit is not None]
     if len(figures) < 2:
         return None, f"needs two figures, {len(figures)} fetched"
-    units = {unit for _, unit, _ in figures}
+    units = {f.unit for f in figures}
     if len(units) > 1:
         return None, f"the figures are in different units ({', '.join(sorted(units))})"
     unit = units.pop()
-    years = [year for _, _, year in figures]
-    by_year = None not in years and len(set(years)) == len(years)
-    if operation in OVER_TIME or (operation == "difference" and by_year):
-        figures = sorted(figures, key=lambda f: f[2] if f[2] is not None else 0)
+    series = list(dict.fromkeys(f.series for f in figures))
+    if operation in OVER_TIME or (operation == "difference" and len(series) == 1):
+        if len(series) > 1:
+            names = ", ".join(f"{ticker} {metric}" for ticker, metric in series)
+            return None, f"{operation} takes one series, figures for {len(series)} were fetched ({names}; ambiguous)"
+        figures = sorted(figures, key=lambda f: f.when)
+        if len({f.when for f in figures}) != len(figures):
+            return None, f"two figures for the same period ({figures[0].label()}; ambiguous)"
+        gaps = [f for f in fetched if f.value is None and f.series == series[0]
+                and not figures[0].when <= f.when <= figures[-1].when]
+        if gaps:
+            return None, f"no value for {gaps[0].label()}"
         if operation in OVER_TIME and len(figures) > 2:
-            figures = [figures[0], figures[-1]]       # a trend over several years: first and last
+            figures = [figures[0], figures[-1]]       # a trend over several periods: first and last
+    elif operation == "percent" and len(figures) == 2 and figures[0].metric == WHOLE_METRIC != figures[1].metric:
+        figures = [figures[1], figures[0]]            # [part, whole]: revenue is the whole
     if operation in PAIR_OPERATIONS and len(figures) != 2:
         return None, f"{operation} takes two figures, {len(figures)} fetched (ambiguous)"
-    arguments: dict[str, Any] = {"operation": operation, "inputs": [value for value, _, _ in figures]}
+    arguments: dict[str, Any] = {"operation": operation, "inputs": [f.value for f in figures]}
     if operation == "cagr":
-        first, last = figures[0][2], figures[-1][2]
+        first, last = figures[0].fiscal_year, figures[-1].fiscal_year
         if first is None or last is None or last <= first:
             return None, "cagr needs two different fiscal years"
         arguments["years"] = float(last - first)
@@ -159,19 +220,18 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
     notes: list[str] = []
 
     async def attempt(call: ToolCall) -> tuple[ToolResult | None, str | None]:
-        """The call's result (run or reused), or a stop reason."""
+        """The call's result (run, or reused from an earlier identical call), or the guard that stopped it."""
         nonlocal fetched
         prior = known.get(call_key(call))
         if prior is not None:
             if is_error(prior):
                 args = json.dumps(call.arguments, sort_keys=True)
-                return None, f"repeated identical tool call: {call.name} {args} failed before ({prior.error_type})"
+                notes.append(f"executor: not sent again, failed before ({prior.error_type}): {call.name} {args}")
             return prior, None
         if len(earlier) + len(new) >= max_steps:
-            return None, f"step limit reached ({max_steps} tool calls)"
+            return None, f"{STEP_LIMIT} ({max_steps} tool calls)"
         if llm_tokens + fetched >= max_tokens:
-            return None, (f"token budget exceeded ({llm_tokens} LLM tokens + {fetched} tokens of tool output, "
-                          f"at most {max_tokens})")
+            return None, f"{TOKEN_LIMIT} ({llm_tokens} LLM tokens + {fetched} tokens of tool output, at most {max_tokens})"
         result = await _run(call_tool, call)
         fetched += output_tokens([result], count)
         new.append(result)
@@ -181,27 +241,28 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
     for step in plan.steps:
         result, stop = await attempt(ToolCall(name=step.tool, arguments=step.arguments))
         if stop:
-            return _update(new, None, notes, stop)
+            return _update(state, new, None, notes, stop)
         used.append(result)
         if is_error(result):
-            return _update(new, result.error_type, notes, None)
+            return _update(state, new, result.error_type, notes, None)
     if plan.calculation:
         call, why = calculation_call(plan.calculation, used)
-        if call is None:
+        if call is not None:
+            result, why = await attempt(call)         # a guard skips only the calculation: the figures stand
+            if result is not None and is_error(result):
+                return _update(state, new, result.error_type, notes, None)
+        if why:
             notes.append(f"executor: {plan.calculation} not calculated: {why}")
-        else:
-            result, stop = await attempt(call)
-            if stop:
-                return _update(new, None, notes, stop)
-            if is_error(result):
-                return _update(new, result.error_type, notes, None)
-    return _update(new, None, notes, None)
+    return _update(state, new, None, notes, None)
 
 
-def _update(new: list[ToolResult], tool_error: str | None, notes: list[str], stop: str | None) -> dict[str, Any]:
+def _update(state: AgentState, new: list[ToolResult], tool_error: str | None, notes: list[str],
+            stop: str | None) -> dict[str, Any]:
     update: dict[str, Any] = {"tool_results": new, "tool_error": tool_error}
-    if notes:
-        update["errors"] = notes
+    logged = set(state.get("errors") or [])            # errors is append-only: a send-back repeats no note
+    fresh = [note for note in dict.fromkeys(notes) if note not in logged]
+    if fresh:
+        update["errors"] = fresh
     if stop:
         update["stop_reason"] = stop
     return update

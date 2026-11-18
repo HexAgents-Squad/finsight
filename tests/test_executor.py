@@ -147,11 +147,13 @@ def test_the_default_counter_is_core_tokens_with_a_conservative_fallback(monkeyp
     assert ex._default_count_tokens("12345") == 3       # 2 characters per token, rounded up
 
 
-def test_a_repeated_call_that_failed_before_stops_the_run():
+def test_a_repeated_call_that_failed_before_is_not_sent_and_returns_its_error():
+    """The graph's own bound then decides (one replan, then 'not found'); the call is never sent twice."""
     failed = done("get_financial_fact", fact(year=2019).arguments, {"error": {"type": "out_of_corpus", "message": "x"}})
-    out, tools = run(plan(fact(year=2019)), results=[failed])
-    assert tools.calls == [] and out["stop_reason"].startswith("repeated identical tool call: get_financial_fact")
-    assert "failed before (out_of_corpus)" in out["stop_reason"]
+    out, tools = run(plan(fact(year=2019), fact()), results=[failed])
+    assert tools.calls == [] and out["tool_error"] == "out_of_corpus" and "stop_reason" not in out
+    assert out["tool_results"] == [] and out["errors"][0].startswith(
+        "executor: not sent again, failed before (out_of_corpus): get_financial_fact")
 
 
 def test_a_repeated_call_that_succeeded_is_reused_not_sent_again():
@@ -164,7 +166,7 @@ def test_the_loop_guard_ignores_argument_order():
     reordered = done("get_financial_fact", dict(reversed(list(fact().arguments.items()))),
                      {"error": {"type": "no_results", "message": "x"}})
     out, tools = run(plan(fact()), results=[reordered])
-    assert tools.calls == [] and "repeated identical tool call" in out["stop_reason"]
+    assert tools.calls == [] and out["tool_error"] == "no_results"
 
 
 # ----------------------------------------------------------------------------------------------- errors
@@ -248,12 +250,77 @@ def test_an_undefined_calculation_is_an_answer():
     assert out["tool_results"][-1].error_type == "undefined" and out["tool_error"] is None
 
 
-def test_the_calculation_is_capped_and_reused_like_any_call():
+def test_a_guard_skips_only_the_calculation_and_the_figures_stand():
     out, tools = run(plan(fact(year=2023), fact(year=2024), calculation="growth"), max_steps=2)
-    assert all(name != "calculate" for name, _ in tools.calls) and "step limit" in out["stop_reason"]
+    assert all(name != "calculate" for name, _ in tools.calls) and "stop_reason" not in out
+    assert out["errors"] == ["executor: growth not calculated: step limit reached (2 tool calls)"]
+    assert len(out["tool_results"]) == 2 and out["tool_error"] is None
+
+
+def test_a_send_back_reuses_everything_and_repeats_no_note():
     first, _ = run(plan(fact(year=2023), fact(year=2024), calculation="growth"))
     again, tools = run(plan(fact(year=2023), fact(year=2024), calculation="growth"), results=first["tool_results"])
     assert tools.calls == [] and again["tool_results"] == []            # a send-back costs no step
+    p = plan(fact(), calculation="percent")
+    first, _ = run(p)
+    state = {"plan": p, "tool_results": first["tool_results"], "errors": first["errors"], "limits": {}}
+    assert "errors" not in asyncio.run(ex.execute(state, FakeTools(), words))
+
+
+def row(value, *, ticker="AAPL", metric="revenue", year=2024, period="FY", unit="USD millions") -> dict:
+    return {"value": value, "unit": unit, "ticker": ticker, "metric": metric, "fiscal_year": year,
+            "fiscal_period": period, "duration": "12M" if period == "FY" else "3M"}
+
+
+def fetched(*rows) -> ToolResult:
+    first = rows[0]
+    return done("get_financial_fact", {"ticker": first["ticker"], "metric": first["metric"],
+                                       "fiscal_year": first["fiscal_year"], "fiscal_period": first["fiscal_period"]},
+                first)
+
+
+@pytest.mark.parametrize("operation", ["growth", "cagr"])
+def test_growth_never_mixes_companies_or_metrics(operation):
+    two_companies = [fetched(row(100.0, ticker="AAA", year=2023)), fetched(row(110.0, ticker="AAA")),
+                     fetched(row(500.0, ticker="BBB", year=2023)), fetched(row(900.0, ticker="BBB"))]
+    call, why = ex.calculation_call(operation, two_companies)
+    assert call is None and why.startswith(f"{operation} takes one series, figures for 2 were fetched (AAA revenue")
+    context_metric = [fetched(row(100.0, year=2024)), fetched(row(110.0, year=2025)),
+                      fetched(row(20.0, metric="net_income", year=2025))]
+    call, why = ex.calculation_call(operation, context_metric)
+    assert call is None and "ambiguous" in why
+
+
+def test_quarters_of_one_year_are_ordered_by_quarter():
+    call, _ = ex.calculation_call("growth", [fetched(row(300.0, year=2025, period="Q3")),
+                                             fetched(row(100.0, year=2025, period="Q1"))])
+    assert call.arguments["inputs"] == [100.0, 300.0]
+
+
+def test_a_trend_missing_its_last_year_is_not_calculated():
+    trend = done("compare_periods", {"ticker": "AAPL", "metric": "revenue", "years": [2023, 2024, 2025]},
+                 [row(90.0, year=2023), row(100.0, year=2024), row(None, year=2025)])
+    call, why = ex.calculation_call("growth", [trend])
+    assert call is None and why == "no value for AAPL revenue FY 2025"
+    inner_gap = done("compare_periods", {"ticker": "AAPL", "metric": "revenue", "years": [2023, 2024, 2025]},
+                     [row(90.0, year=2023), row(None, year=2024), row(110.0, year=2025)])
+    assert ex.calculation_call("growth", [inner_gap])[0].arguments["inputs"] == [90.0, 110.0]
+
+
+def test_a_percent_takes_revenue_as_the_whole_whichever_comes_first():
+    call, _ = ex.calculation_call("percent", [fetched(row(1000.0)), fetched(row(200.0, metric="operating_income"))])
+    assert call.arguments["inputs"] == [200.0, 1000.0]
+    call, _ = ex.calculation_call("ratio", [fetched(row(1000.0)), fetched(row(200.0, metric="operating_income"))])
+    assert call.arguments["inputs"] == [1000.0, 200.0]                    # a ratio keeps the plan's order
+
+
+def test_the_same_figure_fetched_twice_counts_once():
+    trend = done("compare_periods", {"ticker": "AAPL", "metric": "revenue", "years": [2023, 2024]},
+                 [row(383285.0, year=2023), row(391035.0, year=2024)])
+    call, _ = ex.calculation_call("growth", [fetched(row(391035.0)), trend])
+    assert call.arguments["inputs"] == [383285.0, 391035.0]
+    call, why = ex.calculation_call("percent", [fetched(row(391035.0)), fetched(row(391035.0))])
+    assert call is None and why == "needs two figures, 1 fetched"
 
 
 # ----------------------------------------------------------------------------------------------- real plans
@@ -304,6 +371,38 @@ def test_in_the_graph_a_tool_error_replans_once_and_reuses_the_good_step():
     assert result.state["visits"] == {"planner": 2, "executor": 2, "composer": 1, "critic": 1}
     assert [a.get("fiscal_year") for n, a in tools.calls if n == "get_financial_fact"] == [2023, 2019, 2024]
     assert [r.call.name for r in result.state["tool_results"]][-1] == "calculate"
+
+
+def scripted_graph(plans, tools, verdicts=()):
+    async def planner(state):
+        return {"plan": plans[min((state.get("visits") or {}).get("planner", 0), len(plans) - 1)]}
+
+    async def composer(state):
+        return {"draft": AnswerContract(answer="A draft.", verified=False, refused=False)}
+
+    async def critic(state):
+        n = (state.get("visits") or {}).get("critic", 0)
+        return {"verdict": verdicts[n] if n < len(verdicts) else Verdict()}
+
+    return g.build_graph(g.Nodes(planner, ex.make_executor(tools, words), composer, critic))
+
+
+def test_in_the_graph_a_replan_that_repeats_the_failing_step_is_answered_not_found():
+    tools = FakeTools()
+    same = plan(fact(year=2023), fact(year=2019))                  # 2019: data_missing, planned twice
+    result = asyncio.run(g.run("q", graph=scripted_graph([same, same], tools), limits=g.Limits()))
+    assert result.state["visits"] == {"planner": 2, "executor": 2, "composer": 1, "critic": 1}
+    assert [a["fiscal_year"] for _, a in tools.calls] == [2023, 2019]          # neither call sent twice
+    assert not result.state.get("stop_reason")
+
+
+def test_in_the_graph_a_send_back_after_a_second_error_reaches_the_critic_again():
+    tools = FakeTools()
+    plans = [plan(fact(year=2019)), plan(fact(year=2023), fact(year=2018))]   # both fail, on different calls
+    failed = Verdict(violations=[("1", "a number is not in any tool result")])
+    result = asyncio.run(g.run("q", graph=scripted_graph(plans, tools, [failed]), limits=g.Limits()))
+    assert result.state["visits"] == {"planner": 2, "executor": 3, "composer": 2, "critic": 2}
+    assert len(tools.calls) == 3 and result.answer.verified
 
 
 def test_the_default_caller_is_the_tool_registry(monkeypatch):
