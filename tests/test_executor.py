@@ -147,13 +147,20 @@ def test_the_default_counter_is_core_tokens_with_a_conservative_fallback(monkeyp
     assert ex._default_count_tokens("12345") == 3       # 2 characters per token, rounded up
 
 
-def test_a_repeated_call_that_failed_before_is_not_sent_and_returns_its_error():
-    """The graph's own bound then decides (one replan, then 'not found'); the call is never sent twice."""
+def test_a_call_that_failed_before_is_not_sent_again_and_the_other_steps_run():
+    """A replan that keeps the failing step and adds a fallback: the fallback runs; only a new error replans."""
     failed = done("get_financial_fact", fact(year=2019).arguments, {"error": {"type": "out_of_corpus", "message": "x"}})
-    out, tools = run(plan(fact(year=2019), fact()), results=[failed])
-    assert tools.calls == [] and out["tool_error"] == "out_of_corpus" and "stop_reason" not in out
-    assert out["tool_results"] == [] and out["errors"][0].startswith(
+    out, tools = run(plan(fact(year=2019), search()), results=[failed])
+    assert [n for n, _ in tools.calls] == ["search_filings"] and out["tool_error"] is None
+    assert "stop_reason" not in out and out["errors"][0].startswith(
         "executor: not sent again, failed before (out_of_corpus): get_financial_fact")
+
+
+def test_no_calculation_without_a_figure_that_failed_before():
+    failed = done("get_financial_fact", fact(year=2025).arguments, {"error": {"type": "data_missing", "message": "x"}})
+    out, tools = run(plan(fact(year=2023), fact(year=2024), fact(year=2025), calculation="growth"), results=[failed])
+    assert all(n != "calculate" for n, _ in tools.calls)                # never 2023 -> 2024 in place of 2025
+    assert out["errors"][-1].startswith("executor: growth not calculated: no value for get_financial_fact")
 
 
 def test_a_repeated_call_that_succeeded_is_reused_not_sent_again():
@@ -166,7 +173,7 @@ def test_the_loop_guard_ignores_argument_order():
     reordered = done("get_financial_fact", dict(reversed(list(fact().arguments.items()))),
                      {"error": {"type": "no_results", "message": "x"}})
     out, tools = run(plan(fact()), results=[reordered])
-    assert tools.calls == [] and out["tool_error"] == "no_results"
+    assert tools.calls == [] and out["errors"][0].startswith("executor: not sent again, failed before (no_results)")
 
 
 # ----------------------------------------------------------------------------------------------- errors
@@ -226,7 +233,8 @@ def test_a_difference_between_companies_keeps_step_order_and_the_unit():
 
 @pytest.mark.parametrize(("steps", "why"), [
     ((fact(),), "needs two figures, 1 fetched"),
-    ((fact(year=2023), fact(year=2024), fact(year=2025)), "percent takes two figures, 3 fetched (ambiguous)"),
+    ((fact(year=2023), fact(year=2024)),
+     "the figures are for different periods (AAPL revenue FY 2023, AAPL revenue FY 2024)"),
 ])
 def test_no_calculation_when_the_figures_do_not_fit(steps, why):
     out, tools = run(plan(*steps, calculation="percent"))
@@ -265,6 +273,23 @@ def test_a_send_back_reuses_everything_and_repeats_no_note():
     first, _ = run(p)
     state = {"plan": p, "tool_results": first["tool_results"], "errors": first["errors"], "limits": {}}
     assert "errors" not in asyncio.run(ex.execute(state, FakeTools(), words))
+
+
+def test_a_calculation_skipped_by_the_token_budget_has_a_stable_note():
+    p = plan(fact(year=2023), fact(year=2024), calculation="growth")
+    first_output = asyncio.run(FakeTools()("get_financial_fact", fact(year=2023).arguments))
+    budget = 900 + words(json.dumps(first_output)) + 1                   # room for both facts, not the calculation
+    out, tools = run(p, tokens=900, max_tokens=budget)
+    assert len(tools.calls) == 2 and out["errors"] == ["executor: growth not calculated: token budget exceeded"]
+
+
+def test_after_the_composer_earlier_output_is_already_in_the_llm_tokens():
+    big = [{"chunk_id": "x", "text": "word " * 900}]
+    state = {"plan": plan(fact()), "tool_results": [done("search_filings", {"query": "a"}, big)], "tokens": 1_000,
+             "limits": {"max_tokens": 1_800}, "visits": {"composer": 1}}
+    tools = FakeTools()
+    out = asyncio.run(ex.execute(state, tools, words))
+    assert len(tools.calls) == 1 and "stop_reason" not in out                 # not counted twice
 
 
 def row(value, *, ticker="AAPL", metric="revenue", year=2024, period="FY", unit="USD millions") -> dict:
@@ -312,6 +337,54 @@ def test_a_percent_takes_revenue_as_the_whole_whichever_comes_first():
     assert call.arguments["inputs"] == [200.0, 1000.0]
     call, _ = ex.calculation_call("ratio", [fetched(row(1000.0)), fetched(row(200.0, metric="operating_income"))])
     assert call.arguments["inputs"] == [1000.0, 200.0]                    # a ratio keeps the plan's order
+
+
+def test_a_percent_of_three_figures_is_ambiguous():
+    call, why = ex.calculation_call("percent", [fetched(row(1.0, metric="gross_profit")),
+                                                fetched(row(2.0, metric="operating_income")), fetched(row(9.0))])
+    assert call is None and why == "percent takes two figures, 3 fetched (ambiguous)"
+
+
+def test_a_sum_needs_every_planned_figure():
+    quarters = [fetched(row(v, year=2024, period=q)) for v, q in ((119575.0, "Q1"), (90753.0, "Q2"), (85777.0, "Q3"))]
+    q4 = done("get_financial_fact", {"ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024, "fiscal_period": "Q4"},
+              {"error": {"type": "not_reported", "message": "Q4 is not reported separately"}})
+    call, why = ex.calculation_call("sum", [*quarters, q4])
+    assert call is None and why == "no value for AAPL revenue Q4 2024"
+    assert ex.calculation_call("sum", quarters)[0].arguments["inputs"] == [119575.0, 90753.0, 85777.0]
+    trend = done("compare_periods", {"ticker": "AAPL", "metric": "revenue", "years": [2022, 2023, 2024]},
+                 [row(None, year=2022), row(383285.0, year=2023), row(391035.0, year=2024)])
+    assert ex.calculation_call("sum", [trend])[1] == "no value for AAPL revenue FY 2022"
+
+
+def with_duration(figure_row: dict, duration) -> dict:
+    return {**figure_row, "duration": duration}
+
+
+@pytest.mark.parametrize(("operation", "rows", "why"), [
+    ("growth", [with_duration(row(5.0, year=2023, period="Q2"), "6M"), row(3.0, year=2024, period="Q2")],
+     "the figures cover different durations (3M, 6M)"),
+    ("percent", [row(4.0, metric="gross_profit", period="Q2"), with_duration(row(9.0, period="Q2"), "6M")],
+     "the figures cover different durations (3M, 6M)"),
+    ("percent", [row(4.0, metric="gross_profit", year=2023), row(9.0, year=2024)],
+     "the figures are for different periods (AAPL gross_profit FY 2023, AAPL revenue FY 2024)"),
+    ("difference", [row(4.0, ticker="AAA", year=2023), row(9.0, ticker="BBB", year=2024)],
+     "the figures are for different periods (AAA revenue FY 2023, BBB revenue FY 2024)"),
+    ("growth", [with_duration(row(1.0, period="Q1"), "12M"), row(4.0)], "the figures mix full-year and quarterly periods"),
+    ("cagr", [row(1.0, year=2023, period="Q1"), row(2.0, year=2024, period="Q3")],
+     "cagr needs the same period each year (Q1, Q3 fetched)"),
+])
+def test_figures_from_different_periods_or_durations_are_not_combined(operation, rows, why):
+    assert ex.calculation_call(operation, [fetched(r) for r in rows]) == (None, why)
+
+
+def test_a_balance_sheet_instant_pairs_with_a_duration():
+    assets = {**row(364980.0, metric="total_assets"), "duration": None}
+    call, _ = ex.calculation_call("ratio", [fetched(row(391035.0)), fetched(assets)])
+    assert call.arguments["inputs"] == [391035.0, 364980.0]
+    call, _ = ex.calculation_call("cagr", [fetched(row(1.0, year=2022, period="Q2")),
+                                           fetched(row(2.0, year=2024, period="Q2"))])
+    assert call.arguments["years"] == 2.0
 
 
 def test_the_same_figure_fetched_twice_counts_once():
