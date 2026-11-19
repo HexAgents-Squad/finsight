@@ -69,7 +69,7 @@ class FakeLangfuse:
     """The five calls LangfuseTracer makes on a langfuse.Langfuse client."""
 
     def __init__(self, fail_on=()):
-        self.calls, self.fail_on, self.exits = [], set(fail_on), []
+        self.calls, self.fail_on, self.exits, self.raws = [], set(fail_on), [], []
 
     def _cm(self, kind, **kw):
         if kind in self.fail_on:
@@ -77,6 +77,7 @@ class FakeLangfuse:
         self.calls.append((kind, kw))
         fake = self
         raw = SimpleNamespace(updates=[], update=lambda **u: raw.updates.append(u))
+        self.raws.append(raw)
 
         class CM:
             def __enter__(self):
@@ -139,6 +140,17 @@ def test_enabled_needs_both_keys_and_the_message_hides_them():
     with pytest.raises(ValidationError, match="LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY") as err:
         Settings(_env_file=None, LANGFUSE_ENABLED=True, LANGFUSE_PUBLIC_KEY="pk-lf-visible", **base)
     assert "pk-lf-visible" not in str(err.value)
+    with pytest.raises(ValidationError, match="not both set") as err:          # only the secret: never quoted
+        Settings(_env_file=None, LANGFUSE_ENABLED=True, LANGFUSE_SECRET_KEY="sk-lf-q7Zx9", **base)
+    assert "q7Zx9" not in str(err.value) and "q7Zx9" not in repr(err.value)
+    keys = {"LANGFUSE_PUBLIC_KEY": "pk-lf-1", "LANGFUSE_SECRET_KEY": "sk-lf-2"}
+    with pytest.raises(ValidationError, match="https://") as err:
+        Settings(_env_file=None, LANGFUSE_ENABLED=True, LANGFUSE_HOST="cloud.langfuse.com", **keys, **base)
+    assert "sk-lf-2" not in str(err.value)
+    local = Settings(_env_file=None, LANGFUSE_ENABLED=True, LANGFUSE_HOST="http://localhost:3000/", **keys, **base)
+    assert local.LANGFUSE_HOST == "http://localhost:3000"
+    off = Settings(_env_file=None, LANGFUSE_HOST="", **base)                      # `LANGFUSE_HOST=` while off: fine
+    assert off.LANGFUSE_HOST == "https://cloud.langfuse.com"
     ok = Settings(_env_file=None, LANGFUSE_ENABLED=True, LANGFUSE_PUBLIC_KEY="pk-lf-1", LANGFUSE_SECRET_KEY="sk-lf-2", **base)
     assert "sk-lf-2" not in repr(ok) and "pk-lf-1" not in repr(ok)
     empty = Settings(_env_file=None, LANGFUSE_PUBLIC_KEY="", LANGFUSE_SECRET_KEY=" ", **base)    # `KEY=` in .env = unset
@@ -153,6 +165,21 @@ def test_scrub_masks_emails_and_phones_but_not_financial_figures():
     assert out.count("[email]") == 1 and out.count("[phone]") == 3
     for kept in ("383285000000", "2024-09-28", "0000320193-24-000123", "2023 2024 2025", "109.4 / 245.1 = 44.6%"):
         assert kept in out
+
+
+@pytest.mark.parametrize("phone", ["415 555 2671", "415-555-2671", "415.555.2671", "(415) 555-2671", "(415)555-2671",
+                                   "1-800-555-1234", "1 800 555 1234", "+1 415 555 2671", "+91 98765 43210",
+                                   "+44 20 7946 0958"])
+def test_scrub_masks_phone_shapes(phone):
+    assert scrub(f"call {phone} today") == "call [phone] today"
+
+
+@pytest.mark.parametrize("text", ["4155552671", "(123) 456 789", "(35) 133 148", "change +12 345 678", "+5 2023 2024",
+                                  "growth +1.25 34.6", "| 164,501 | 134,902 |", "2023-2025", "FY 2023 2024 2025",
+                                  "0000320193-24-000123", "2024-09-28", "EIN 94-2404110", "File No. 001-36743",
+                                  "CUSIP 037833100", "revenue 1,234.5 567.8 9,012.3", "123 456 7890.5"])
+def test_scrub_never_masks_financial_text(text):
+    assert scrub(text) == text
 
 
 def test_scrub_cuts_long_texts_and_big_collections_and_handles_models():
@@ -207,6 +234,50 @@ def test_a_langfuse_failure_never_changes_the_run(fail_on):
         root.update(output="a")
         root.tag("verdict:verified")
     assert ran == ["body"]
+
+
+def test_a_block_cancelled_by_the_time_limit_is_marked_as_an_error():
+    client = FakeLangfuse()
+
+    async def go():
+        with trace_run(INFO, "q", tracer=LangfuseTracer(client)):
+            with span("executor"):
+                await asyncio.sleep(10)
+
+    async def main():
+        await asyncio.wait_for(go(), timeout=0.05)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(main())
+    executor = client.raws[1]                                                 # the root is raws[0]
+    assert {"level": "ERROR", "status_message": "cancelled (the run's time limit)"} in executor.updates
+    assert client.exits[0] is asyncio.CancelledError
+
+
+def test_a_generation_uses_the_current_sdk_call_when_the_client_has_it():
+    client = FakeLangfuse()
+    client.start_as_current_observation = lambda **kw: client._cm("observation", **kw)
+    with trace_run(INFO, "q", tracer=LangfuseTracer(client)), generation("llm", model="Qwen/Qwen3-8B"):
+        pass
+    kinds = [(c[0], c[1].get("as_type")) for c in client.calls]
+    assert ("observation", "generation") in kinds and not any(k == "generation" for k, _ in kinds)
+
+
+def test_a_cached_reply_reports_no_usage(tmp_path):
+    from tests.test_llm import client, reply
+    llm = client(reply("hello", 11, 4), LLM_CACHE_DIR=str(tmp_path))
+    tracer = RecordingTracer()
+
+    async def go():
+        with trace_run(INFO, "q", tracer=tracer):
+            await llm.chat([{"role": "user", "content": "Reply with: hello"}])
+            await llm.chat([{"role": "user", "content": "Reply with: hello"}])     # the same request: from the cache
+
+    asyncio.run(go())
+    first, second = [e["updates"][0] for e in tracer.events if e["kind"] == "generation"]
+    assert first["usage"] == {"input": 11, "output": 4} and first["metadata"]["cached"] is False
+    assert second["usage"] is None and second["metadata"]["cached"] is True
+    assert second["metadata"]["cached_tokens"] == {"input": 11, "output": 4}
 
 
 def test_after_a_traced_run_nothing_more_is_traced():

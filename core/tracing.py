@@ -14,6 +14,7 @@ All Langfuse SDK calls (Python SDK v3, `langfuse>=3,<4`) are in `LangfuseTracer`
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
@@ -31,12 +32,23 @@ MAX_DEPTH = 6
 MASK_EMAIL = "[email]"
 MASK_PHONE = "[phone]"
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-# Three shapes only, so a run of years ("2023 2024 2025"), a bare figure (383285000000), a date (2024-09-28) or an
-# accession number (0000320193-24-000123) is never taken for a phone number: +CC groups, (area) groups, 3-3/4-4 groups
-# joined by hyphens or dots.
-PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}[\s.-]?\d{2,5}(?:[\s.-]\d{2,5}){1,3}"
-                   r"|\(\d{2,4}\)[\s.-]?\d{3,4}[\s.-]\d{3,4}"
-                   r"|\d{3}[.-]\d{3,4}[.-]\d{4})(?![\w-])")
+# Two shapes, chosen so financial text is never masked: a run of years ("2023 2024 2025"), a bare figure
+# (383285000000 or 4155552671), a date (2024-09-28), a range (2023-2025), an accession number (0000320193-24-000123),
+# a negative column "(123) 456 789" or a signed change "+1.25 34.6" all stay.
+#   North American: optional 1, area code (with or without brackets), 3 digits, 4 digits, any of space . - between.
+#   International: +country code and groups, at least 10 digits in all (checked in _mask_phone).
+# Local numbers without a country code outside North America ("020 7946 0958") are not recognised: too close to
+# columns of figures. A number without separators is never masked.
+PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}(?:[\s.-]?\d{1,5}){2,5}"
+                   r"|(?:1[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4})(?![\w-]|[.,]\d)")
+MIN_INTERNATIONAL_DIGITS = 10
+
+
+def _mask_phone(match: re.Match[str]) -> str:
+    text = match.group()
+    if text.startswith("+") and sum(c.isdigit() for c in text) < MIN_INTERNATIONAL_DIGITS:
+        return text                                      # "+12 345 678": a signed figure, not a phone number
+    return MASK_PHONE
 
 
 # ----------------------------------------------------------------------------------------------- scrubbing
@@ -45,7 +57,7 @@ def scrub(value: Any, _depth: int = 0) -> Any:
     if value is None or isinstance(value, bool | int | float):
         return value
     if isinstance(value, str):
-        text = PHONE.sub(MASK_PHONE, EMAIL.sub(MASK_EMAIL, value))
+        text = PHONE.sub(_mask_phone, EMAIL.sub(MASK_EMAIL, value))
         if len(text) > MAX_TEXT_CHARS:
             return f"{text[:MAX_TEXT_CHARS]}…[{len(text) - MAX_TEXT_CHARS} more characters]"
         return text
@@ -200,7 +212,11 @@ class LangfuseTracer:
         handle: Span = _LangfuseSpan(raw, self.client, info) if raw is not None else _NoopSpan()
         try:
             yield handle
-        except BaseException as err:                       # incl. CancelledError: the span still closes
+        except asyncio.CancelledError as err:              # the run's time limit cancelled this block
+            handle.update(level="ERROR", status_message="cancelled (the run's time limit)")
+            self._close(cm, type(err), err, err.__traceback__)
+            raise
+        except BaseException as err:                       # the span still closes, marked failed by the SDK
             self._close(cm, type(err), err, err.__traceback__)
             raise
         else:
@@ -222,8 +238,11 @@ class LangfuseTracer:
 
     def generation(self, name: str, *, model: str, input: Any = None, metadata: dict[str, Any] | None = None,
                    ) -> contextlib.AbstractContextManager[Span]:
-        return self._open(lambda: self.client.start_as_current_generation(
-            name=name, model=model, input=scrub(input), metadata=scrub(metadata) if metadata else None))
+        fields = {"name": name, "model": model, "input": scrub(input), "metadata": scrub(metadata) if metadata else None}
+        start = getattr(self.client, "start_as_current_observation", None)
+        if start is not None:                            # SDK 3.x: start_as_current_generation is deprecated
+            return self._open(lambda: start(as_type="generation", **fields))
+        return self._open(lambda: self.client.start_as_current_generation(**fields))
 
     def trace(self, info: TraceInfo, *, input: Any = None) -> contextlib.AbstractContextManager[Span]:
         def tag_trace() -> None:
@@ -284,7 +303,8 @@ def trace_run(info: TraceInfo | None, question: str, *, tracer: Tracer | None = 
 
 
 def flush() -> None:
-    """Send what is buffered (call at the end of a script; the API calls it at shutdown)."""
+    """Send what is buffered. Call it at the end of a script (scripts/trace_demo.py does); the API (W2-09) must call it
+    at shutdown, or the last traces of a process can be lost."""
     _current.get().flush()
     if default_tracer.cache_info().currsize:
         default_tracer().flush()

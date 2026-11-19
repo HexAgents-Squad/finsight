@@ -425,8 +425,11 @@ class LLMClient(AbstractLLMClient):
                                 metadata={"temperature": temperature, "sample": sample}) as gen:
             reply = await self._complete(messages, temperature=temperature, model=model, sample=sample, seed=seed,
                                          response_format=response_format)
-            gen.update(output=reply.text, usage={"input": reply.prompt_tokens, "output": reply.completion_tokens},
-                       metadata={"cached": reply.cached, "retries": reply.retries, "seconds": round(reply.seconds, 3)})
+            # a cached reply cost no endpoint tokens: its counts stay in metadata, not in Langfuse's usage/cost totals
+            counts = {"input": reply.prompt_tokens, "output": reply.completion_tokens}
+            gen.update(output=reply.text, usage=None if reply.cached else counts,
+                       metadata={"cached": reply.cached, "retries": reply.retries, "seconds": round(reply.seconds, 3),
+                                 **({"cached_tokens": counts} if reply.cached else {})})
             return reply
 
     async def _complete(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,

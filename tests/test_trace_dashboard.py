@@ -59,10 +59,23 @@ def test_a_row_takes_the_agents_own_numbers():
     ({"verdict": "unverified", "stop": "step limit reached (10 tool calls)"}, "step limit reached (10 tool calls)"),
     ({"verdict": "unverified"}, "unverified"),
     ({"verdict": "refused"}, ""),
+    ({"verdict": "verified", "stop": "limit reached after the answer was checked: token budget"}, ""),
     ({"verdict": None}, "no verdict (the run raised)"),
 ])
 def test_a_row_names_the_failure(kwargs, failure):
     assert td.row(trace("X", **kwargs))["failure"] == failure
+
+
+def test_a_row_decodes_metadata_the_sdk_sent_as_json_text():
+    """The SDK sends every non-string metadata value as JSON text (langfuse._client.attributes._serialize)."""
+    import json
+    t = trace("B07", verdict="unverified", stop="step limit reached (10 tool calls)", tokens=3536, tool_calls=4,
+              visits={"planner": 2, "executor": 2, "composer": 1, "critic": 1})
+    t.metadata = {k: v if isinstance(v, str) else json.dumps(v) for k, v in t.metadata.items()}
+    assert td.row(t) == {"question": "B07", "verdict": "unverified", "seconds": 3.2, "steps": 6, "tool_calls": 4,
+                         "tokens": 3536, "failure": "step limit reached (10 tool calls)"}
+    t.metadata["stop_reason"], t.metadata["notes"] = "null", '["could not verify: x"]'
+    assert td.row(t)["failure"] == "could not verify: x"
 
 
 def test_a_trace_without_a_summary_still_gives_a_row():

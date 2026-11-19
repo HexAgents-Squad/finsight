@@ -13,6 +13,7 @@ The same view in the Langfuse UI: Traces, filter `tags = run:<run_id>`, columns 
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from collections import Counter
@@ -42,24 +43,41 @@ def _tag(tags: list[str] | None, prefix: str) -> str | None:
     return next((t[len(prefix):] for t in tags or [] if t.startswith(prefix)), None)
 
 
+def _decoded(value: Any) -> Any:
+    """A metadata value as the agent wrote it. The Langfuse SDK sends each non-string metadata value as JSON text
+    (OpenTelemetry attributes), so the API may return "3.2", "null" or '{"planner": 1}': decode those, keep text."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
+def _number(value: Any) -> float | int | None:
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
 def row(trace: Any) -> dict[str, Any]:
     """One question's numbers from its trace (tolerant of a trace whose run failed before writing a summary)."""
-    meta = trace.metadata if isinstance(trace.metadata, dict) else {}
+    raw = trace.metadata if isinstance(trace.metadata, dict) else {}
+    meta = {key: _decoded(value) for key, value in raw.items()}
     visits = meta.get("visits") if isinstance(meta.get("visits"), dict) else {}
+    notes = meta.get("notes") if isinstance(meta.get("notes"), list) else []
     verdict = _tag(trace.tags, "verdict:")
-    seconds = meta.get("seconds") if isinstance(meta.get("seconds"), int | float) else trace.latency
+    seconds = _number(meta.get("seconds"))
     if verdict is None:
         failure = "no verdict (the run raised)"
+    elif verdict != "unverified":                       # verified or refused: not a failure, even if a limit broke
+        failure = ""                                    # after the critic passed the answer (ADR-024)
     elif meta.get("stop_reason"):
         failure = str(meta["stop_reason"])
-    elif verdict == "unverified":
-        failure = "; ".join(str(n) for n in meta.get("notes") or []) or "unverified"
     else:
-        failure = ""
-    return {"question": meta.get("question_id") or _tag(trace.tags, "q:") or trace.id,
-            "verdict": verdict or "none", "seconds": seconds,
-            "steps": sum(v for v in visits.values() if isinstance(v, int)),
-            "tool_calls": meta.get("tool_calls"), "tokens": meta.get("tokens"), "failure": failure}
+        failure = "; ".join(str(n) for n in notes) or "unverified"
+    return {"question": str(raw.get("question_id") or _tag(trace.tags, "q:") or trace.id),
+            "verdict": verdict or "none", "seconds": seconds if seconds is not None else trace.latency,
+            "steps": sum(v for v in visits.values() if _number(v) is not None),
+            "tool_calls": _number(meta.get("tool_calls")), "tokens": _number(meta.get("tokens")), "failure": failure}
 
 
 def _percentile(values: list[float], q: float) -> float | None:

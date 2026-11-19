@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = REPO_ROOT / ".env"
 HTTPS = "https://"
+LANGFUSE_CLOUD = "https://cloud.langfuse.com"
 
 
 class SecSettings(BaseSettings):
@@ -105,9 +106,9 @@ class Settings(SecSettings):
     # The keys are SecretStr (never in a repr or an error message); the host is Langfuse Cloud or a self-hosted URL.
     LANGFUSE_ENABLED: bool = Field(False, description="send traces to Langfuse")
     LANGFUSE_PUBLIC_KEY: SecretStr | None = Field(None, description="Langfuse project public key (pk-lf-...)")
-    LANGFUSE_SECRET_KEY: SecretStr | None = Field(None, validate_default=True,
-                                                  description="Langfuse project secret key (sk-lf-...)")
-    LANGFUSE_HOST: str = Field("https://cloud.langfuse.com", min_length=1, description="Langfuse URL")
+    LANGFUSE_SECRET_KEY: SecretStr | None = Field(None, description="Langfuse project secret key (sk-lf-...)")
+    # Declared after both keys: its validator checks them, and an error on this field quotes only the host.
+    LANGFUSE_HOST: str = Field(LANGFUSE_CLOUD, validate_default=True, description="Langfuse URL (http or https)")
 
     @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", "LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS",
                      "EMBED_CA_CERT", "EMBED_MAX_INPUT_TOKENS", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
@@ -127,14 +128,21 @@ class Settings(SecSettings):
         quote every input value, the API key included."""
         return _ca_file(value, info.data.get("LLM_BASE_URL"), "LLM_CA_CERT", "LLM_BASE_URL")
 
-    @field_validator("LANGFUSE_SECRET_KEY")
+    @field_validator("LANGFUSE_HOST")
     @classmethod
-    def _langfuse_keys_when_enabled(cls, value: SecretStr | None, info: ValidationInfo) -> SecretStr | None:
-        """Tracing switched on without both keys must fail at start-up, not as a silent gap in the traces. A field
-        validator, so the message never quotes a value."""
-        if info.data.get("LANGFUSE_ENABLED") and (value is None or info.data.get("LANGFUSE_PUBLIC_KEY") is None):
+    def _langfuse_when_enabled(cls, value: str, info: ValidationInfo) -> str:
+        """Tracing switched on without both keys, or with a host that is not a URL, must fail at start-up, not as a
+        silent gap in the traces. The check sits on LANGFUSE_HOST, declared after both keys, so a validation error
+        quotes the host and never a key (an error on a key field would show the key as its input value). An empty
+        `LANGFUSE_HOST=` means the default (Langfuse Cloud); nothing is checked while tracing is off."""
+        host = value.strip() or LANGFUSE_CLOUD
+        if not info.data.get("LANGFUSE_ENABLED"):
+            return host
+        if info.data.get("LANGFUSE_PUBLIC_KEY") is None or info.data.get("LANGFUSE_SECRET_KEY") is None:
             raise ValueError("LANGFUSE_ENABLED is true but LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not both set")
-        return value
+        if not host.startswith(("https://", "http://")):
+            raise ValueError("LANGFUSE_HOST must be a URL starting with https:// (or http:// for a local Langfuse)")
+        return host.rstrip("/")
 
     @field_validator("EMBED_CA_CERT")
     @classmethod
