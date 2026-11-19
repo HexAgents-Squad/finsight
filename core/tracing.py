@@ -35,12 +35,16 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # Two shapes, chosen so financial text is never masked: a run of years ("2023 2024 2025"), a bare figure
 # (383285000000 or 4155552671), a date (2024-09-28), a range (2023-2025), an accession number (0000320193-24-000123),
 # a negative column "(123) 456 789" or a signed change "+1.25 34.6" all stay.
-#   North American: optional 1, area code (with or without brackets), 3 digits, 4 digits, any of space . - between.
-#   International: +country code and groups, at least 10 digits in all (checked in _mask_phone).
-# Local numbers without a country code outside North America ("020 7946 0958") are not recognised: too close to
-# columns of figures. A number without separators is never masked.
-PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}(?:[\s.-]?\d{1,5}){2,5}"
-                   r"|(?:1[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4})(?![\w-]|[.,]\d)")
+#   North American: 415-555-2671, 415.555.2671, (415) 555-2671, an optional leading 1; plain spaces only with a
+#     leading 1 ("1 800 555 1234"), since "391 035 2024" in a table is figures, not a phone number.
+#   International: +country code, then 2 to 4 groups of at least 2 digits joined by a space or a hyphen, at least
+#     10 digits in all (checked in _mask_phone); "+383285000000" or "+3.5 12.25" is a signed figure.
+# Not recognised, on purpose: "415 555 2671" (bare spaces), local numbers without a country code outside North
+# America ("020 7946 0958"), and anything without separators: all too close to columns of figures. Separators are
+# never line breaks.
+PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}(?:[ -]\d{2,5}){2,4}"
+                   r"|(?:1[ .-]?)?(?:\(\d{3}\) ?\d{3}[ .-]\d{4}|\d{3}-\d{3}-\d{4}|\d{3}\.\d{3}\.\d{4})"
+                   r"|1 \d{3} \d{3} \d{4})(?![\w-]|[.,]\d)")
 MIN_INTERNATIONAL_DIGITS = 10
 
 
@@ -212,8 +216,8 @@ class LangfuseTracer:
         handle: Span = _LangfuseSpan(raw, self.client, info) if raw is not None else _NoopSpan()
         try:
             yield handle
-        except asyncio.CancelledError as err:              # the run's time limit cancelled this block
-            handle.update(level="ERROR", status_message="cancelled (the run's time limit)")
+        except asyncio.CancelledError as err:              # the run's time limit, or the caller going away
+            handle.update(level="ERROR", status_message="cancelled")
             self._close(cm, type(err), err, err.__traceback__)
             raise
         except BaseException as err:                       # the span still closes, marked failed by the SDK

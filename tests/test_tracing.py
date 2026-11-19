@@ -167,17 +167,21 @@ def test_scrub_masks_emails_and_phones_but_not_financial_figures():
         assert kept in out
 
 
-@pytest.mark.parametrize("phone", ["415 555 2671", "415-555-2671", "415.555.2671", "(415) 555-2671", "(415)555-2671",
-                                   "1-800-555-1234", "1 800 555 1234", "+1 415 555 2671", "+91 98765 43210",
-                                   "+44 20 7946 0958"])
+@pytest.mark.parametrize("phone", ["415-555-2671", "415.555.2671", "(415) 555-2671", "(415)555-2671", "1-800-555-1234",
+                                   "1 800 555 1234", "1 (800) 555-1234", "+1 415 555 2671", "+1-415-555-2671",
+                                   "+91 98765 43210", "+44 20 7946 0958"])
 def test_scrub_masks_phone_shapes(phone):
     assert scrub(f"call {phone} today") == "call [phone] today"
 
 
-@pytest.mark.parametrize("text", ["4155552671", "(123) 456 789", "(35) 133 148", "change +12 345 678", "+5 2023 2024",
-                                  "growth +1.25 34.6", "| 164,501 | 134,902 |", "2023-2025", "FY 2023 2024 2025",
-                                  "0000320193-24-000123", "2024-09-28", "EIN 94-2404110", "File No. 001-36743",
-                                  "CUSIP 037833100", "revenue 1,234.5 567.8 9,012.3", "123 456 7890.5"])
+@pytest.mark.parametrize("text", [
+    "4155552671", "(123) 456 789", "(35) 133 148", "change +12 345 678", "+5 2023 2024", "growth +1.25 34.6",
+    "| 164,501 | 134,902 |", "2023-2025", "FY 2023 2024 2025", "0000320193-24-000123", "2024-09-28", "EIN 94-2404110",
+    "File No. 001-36743", "CUSIP 037833100", "revenue 1,234.5 567.8 9,012.3", "123 456 7890.5",
+    "net income +383285000000", "+93736000000", "+3.5 12.25 2024 2023", "shares 391 035 2024",
+    "Net sales 245 122 2023 2022", "segments 100 200 3000 4000", "123\n456\n7890", "ratio 123-456-7890.12",
+    "415 555 2671",                     # bare spaces: indistinguishable from a row of figures, so left alone
+])
 def test_scrub_never_masks_financial_text(text):
     assert scrub(text) == text
 
@@ -250,7 +254,7 @@ def test_a_block_cancelled_by_the_time_limit_is_marked_as_an_error():
     with pytest.raises(TimeoutError):
         asyncio.run(main())
     executor = client.raws[1]                                                 # the root is raws[0]
-    assert {"level": "ERROR", "status_message": "cancelled (the run's time limit)"} in executor.updates
+    assert {"level": "ERROR", "status_message": "cancelled"} in executor.updates
     assert client.exits[0] is asyncio.CancelledError
 
 

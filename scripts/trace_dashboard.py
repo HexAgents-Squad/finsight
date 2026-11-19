@@ -49,7 +49,7 @@ def _decoded(value: Any) -> Any:
     if not isinstance(value, str):
         return value
     try:
-        return json.loads(value)
+        return json.loads(value, parse_constant=lambda _: value)    # "NaN" / "Infinity" stay text, never numbers
     except ValueError:
         return value
 

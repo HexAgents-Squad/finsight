@@ -76,6 +76,8 @@ def test_a_row_decodes_metadata_the_sdk_sent_as_json_text():
                          "tokens": 3536, "failure": "step limit reached (10 tool calls)"}
     t.metadata["stop_reason"], t.metadata["notes"] = "null", '["could not verify: x"]'
     assert td.row(t)["failure"] == "could not verify: x"
+    t.metadata["tokens"], t.metadata["seconds"] = "NaN", "Infinity"            # never read as numbers
+    assert td.row(t)["tokens"] is None and td.row(t)["seconds"] == 9.9       # falls back to the trace latency
 
 
 def test_a_trace_without_a_summary_still_gives_a_row():
