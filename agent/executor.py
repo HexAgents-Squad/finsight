@@ -119,8 +119,9 @@ async def _run(call_tool: ToolCaller, call: ToolCall) -> ToolResult:
             log.exception("tool %s raised (call_tool_async should return a typed error)", call.name)
             output = error_result(INTERNAL_ERROR, f"{type(err).__name__}: {err}")
         result = ToolResult(call=call, output=output)
+        # not_reported and undefined are answers (ADR-028), not failures: only a typed error is a WARNING
         sp.update(output=output, metadata={"error_type": result.error_type},
-                  level="WARNING" if result.error_type else None)
+                  level="WARNING" if is_error(result) else None)
     return result
 
 

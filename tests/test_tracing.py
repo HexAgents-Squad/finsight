@@ -175,10 +175,12 @@ def test_adapter_opens_nested_spans_a_generation_and_tags_the_trace():
         root.update(output="answer", metadata={"tokens": 10})
         root.tag("verdict:verified")
     kinds = [c[0] for c in client.calls]
-    assert kinds == ["span", "trace", "span", "generation", "trace"]           # root, its tags, planner, llm, verdict tag
+    # root, its tags, planner, llm, the root's summary copied to the trace, the verdict tag
+    assert kinds == ["span", "trace", "span", "generation", "trace", "trace"]
     assert client.calls[0][1]["input"].startswith("Mail me at [email]")        # scrubbed before it leaves the process
-    first_trace, last_trace = client.calls[1][1], client.calls[4][1]
+    first_trace, summary, last_trace = client.calls[1][1], client.calls[4][1], client.calls[5][1]
     assert first_trace["tags"] == ["q:B07", "run:r1"] and first_trace["session_id"] == "s1"
+    assert summary == {"output": "answer", "metadata": {"question_id": "B07", "run_id": "r1", "tokens": 10}}
     assert last_trace["tags"] == ["q:B07", "run:r1", "verdict:verified"]
     assert client.calls[3][1]["model"] == "Qwen/Qwen3-8B"
     assert client.exits == [None, None, None]                                  # all three contexts closed cleanly
@@ -205,6 +207,19 @@ def test_a_langfuse_failure_never_changes_the_run(fail_on):
         root.update(output="a")
         root.tag("verdict:verified")
     assert ran == ["body"]
+
+
+def test_after_a_traced_run_nothing_more_is_traced():
+    """The tracer is reset when the run ends, also when it raises: later work in the same context is not traced."""
+    tracer = RecordingTracer()
+    with trace_run(INFO, "q", tracer=tracer):
+        pass
+    with pytest.raises(RuntimeError), trace_run(INFO, "q", tracer=tracer):
+        raise RuntimeError("boom")
+    before = len(tracer.events)
+    with span("later"), generation("llm", model="m"):
+        pass
+    assert len(tracer.events) == before == 2 and tr._current.get() is NOOP_TRACER
 
 
 def test_flush_reaches_the_client():
@@ -256,6 +271,8 @@ def test_executor_records_a_span_per_tool_call_with_its_error_type():
     async def fake_tools(name, arguments):
         if name == "get_financial_fact":
             return {"error": {"type": "not_reported", "message": "Q4 is not reported"}}
+        if name == "compare_periods":
+            return {"error": {"type": "data_missing", "message": "no facts table"}}
         return {"results": []}
 
     tracer = RecordingTracer()
@@ -264,13 +281,17 @@ def test_executor_records_a_span_per_tool_call_with_its_error_type():
         with trace_run(INFO, "q", tracer=tracer):
             await ex._run(fake_tools, ToolCall(name="search_filings", arguments={"query": "revenue"}))
             await ex._run(fake_tools, ToolCall(name="get_financial_fact", arguments={"ticker": "AAPL"}))
+            await ex._run(fake_tools, ToolCall(name="compare_periods", arguments={"ticker": "AAPL"}))
 
     asyncio.run(go())
     tools = [e for e in tracer.events if e["name"].startswith("tool:")]
-    assert [e["name"] for e in tools] == ["tool:search_filings", "tool:get_financial_fact"]
+    assert [e["name"] for e in tools] == ["tool:search_filings", "tool:get_financial_fact", "tool:compare_periods"]
     assert tools[0]["updates"][0]["metadata"] == {"error_type": None} and tools[0]["updates"][0]["level"] is None
+    # not_reported is an answer (ADR-028): recorded, but not a WARNING; a typed error is
     assert tools[1]["updates"][0]["metadata"] == {"error_type": "not_reported"}
-    assert tools[1]["updates"][0]["level"] == "WARNING"
+    assert tools[1]["updates"][0]["level"] is None
+    assert tools[2]["updates"][0]["metadata"] == {"error_type": "data_missing"}
+    assert tools[2]["updates"][0]["level"] == "WARNING"
 
 
 def test_llm_client_records_a_generation_with_tokens_and_cache_flag():

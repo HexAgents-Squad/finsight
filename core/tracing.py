@@ -154,6 +154,17 @@ class _LangfuseSpan:
             self.raw.update(**{k: v for k, v in fields.items() if v is not None})
         except Exception:                                   # noqa: BLE001 - tracing never breaks a run
             log.warning("langfuse: span update failed", exc_info=True)
+        if self.info is None or (output is None and not metadata):
+            return
+        # The root span's output and summary also go on the trace itself: Langfuse's trace list, its filters and
+        # scripts/trace_dashboard.py read trace-level fields, not the root observation's.
+        trace_fields = {"output": fields["output"],
+                        "metadata": {"question_id": self.info.question_id, "run_id": self.info.run_id,
+                                     **(fields["metadata"] or {})}}
+        try:
+            self.client.update_current_trace(**{k: v for k, v in trace_fields.items() if v is not None})
+        except Exception:                                   # noqa: BLE001
+            log.warning("langfuse: trace update failed", exc_info=True)
 
 
 class LangfuseTracer:
