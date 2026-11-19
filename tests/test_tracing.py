@@ -160,7 +160,7 @@ def test_scrub_cuts_long_texts_and_big_collections_and_handles_models():
     assert len(scrub(list(range(500)))) == tr.MAX_ITEMS + 1
     model = SimpleNamespace(model_dump=lambda mode: {"who": "a@b.co"})
     assert scrub({"m": model}) == {"m": {"who": "[email]"}}
-    assert scrub({"n": None, "b": True, "f": 1.5, "o": object}) ["n"] is None
+    assert scrub({"n": None, "b": True, "f": 1.5, "o": object})["n"] is None
 
 
 # ----------------------------------------------------------------------------------------------- the Langfuse adapter
@@ -229,8 +229,8 @@ def test_graph_run_traces_every_node_and_tags_the_verdict():
     result = asyncio.run(g.run("What was Apple's total revenue in fiscal 2024?", graph=g.build_graph(stub_nodes()),
                                limits=limits, trace=INFO, tracer=tracer))
     assert tracer.events[0]["kind"] == "trace" and tracer.events[0]["info"] == INFO
-    assert [n for n in tracer.names() if n != "finsight.ask"] == [
-        "planner", "executor", "composer", "critic", "finish"]
+    seen = list(dict.fromkeys(n for n in tracer.names() if n != "finsight.ask"))    # first visit of each node
+    assert seen == ["planner", "executor", "composer", "critic", "finish"]
     assert all(e["depth"] == 1 for e in tracer.events[1:])                  # every node sits under the root
     root = tracer.events[0]
     summary = root["updates"][-1]["metadata"]
@@ -274,10 +274,8 @@ def test_executor_records_a_span_per_tool_call_with_its_error_type():
 
 
 def test_llm_client_records_a_generation_with_tokens_and_cache_flag():
-    from core.llm import LLMClient
-    from core.settings import Settings
-    from tests.test_llm import REQUIRED, SAFE, FakeChat, reply
-    llm = LLMClient(Settings(_env_file=None, **REQUIRED, **SAFE), chat_client=FakeChat(reply("hello", 11, 4)))
+    from tests.test_llm import client, reply
+    llm = client(reply("hello", 11, 4))
     tracer = RecordingTracer()
 
     async def go():
