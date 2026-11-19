@@ -30,7 +30,9 @@ def trace(qid, verdict="verified", seconds=3.2, visits=None, tool_calls=2, token
 
 
 def api(rows, page_size=2):
-    """A mock transport for the v2 observations endpoint: tag filter, name filter and cursor paging."""
+    """A mock transport for the v2 observations endpoint as it behaves live: tag and name filters, rows newest first,
+    cursor paging, and a last page that is empty but still carries a cursor (the docs allow it; the client must not
+    stop on an empty page, only on a missing cursor)."""
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -38,11 +40,13 @@ def api(rows, page_size=2):
         params = dict(request.url.params)
         calls.append(params)
         wanted = json.loads(params["filter"])[0]["value"][0]
-        matching = [r for r in rows if wanted in r["tags"] and r["name"] == params["name"]]
+        matching = sorted((r for r in rows if wanted in r["tags"] and r["name"] == params["name"]),
+                          key=lambda r: datetime.fromisoformat(r["startTime"].replace("Z", "+00:00")), reverse=True)
         start = int(params.get("cursor") or 0)
         page = matching[start:start + page_size]
-        more = start + page_size < len(matching)
-        return httpx.Response(200, json={"data": page, "meta": {"cursor": str(start + page_size) if more else None}})
+        if not page and start:                           # the empty page after the last one: no more cursor
+            return httpx.Response(200, json={"data": [], "meta": {}})
+        return httpx.Response(200, json={"data": page, "meta": {"cursor": str(start + page_size)}})
 
     return httpx.Client(base_url="https://us.cloud.langfuse.com", transport=httpx.MockTransport(handler)), calls
 
@@ -53,8 +57,8 @@ def test_fetch_reads_every_page_of_the_run_by_its_tag():
     other = dict(trace("Z1"), tags=["q:Z1", "run:other"])
     http, calls = api(rows + [other])
     got = td.fetch_traces(http, "r1", now=datetime(2026, 11, 20, 12, tzinfo=UTC))
-    assert [r["traceId"] for r in got] == [f"t-Q{i}" for i in range(5)]           # run:other is not read
-    assert [c.get("cursor") for c in calls] == [None, "2", "4"]
+    assert [r["traceId"] for r in got] == [f"t-Q{i}" for i in range(5)]   # oldest first; run:other is not read
+    assert [c.get("cursor") for c in calls] == [None, "2", "4", "6"]       # the empty page with a cursor is followed
     first = calls[0]
     assert first["name"] == "finsight.ask" and "trace_context" in first["fields"] and "metadata" in first["fields"]
     assert json.loads(first["filter"]) == [{"type": "arrayOptions", "column": "tags", "operator": "any of",
@@ -62,13 +66,40 @@ def test_fetch_reads_every_page_of_the_run_by_its_tag():
     assert first["fromStartTime"] == "2026-10-21T12:00:00Z" and first["toStartTime"] == "2026-11-20T12:01:00Z"
 
 
-def test_fetch_keeps_one_row_per_trace_the_one_with_the_span_latency():
-    """A v3-SDK trace shows two finsight.ask rows on Langfuse v4: the trace's own row (no latency) and the span."""
-    outer = trace("B07", latency=None, trace_id="t-1", start="2026-11-20T10:00:00Z")
-    inner = dict(trace("B07", latency=4.5, trace_id="t-1", start="2026-11-20T10:00:00.1Z"), id="o-inner")
-    http, _ = api([outer, inner])
+@pytest.mark.parametrize(("outer_start", "inner_start", "page_size"), [
+    ("2026-11-20T10:00:00Z", "2026-11-20T10:00:00.100Z", 2),      # newest first: the span arrives first
+    ("2026-11-20T10:00:00.100Z", "2026-11-20T10:00:00Z", 2),      # the outer row arrives first
+    ("2026-11-20T10:00:00Z", "2026-11-20T10:00:00.100Z", 1),      # the two rows on different pages
+])
+def test_fetch_keeps_one_row_per_trace_the_one_with_the_span_latency(outer_start, inner_start, page_size):
+    """A v3-SDK trace shows two finsight.ask rows on Langfuse v4: an outer row without latency, and the span."""
+    outer = trace("B07", latency=None, trace_id="t-1", start=outer_start)
+    inner = dict(trace("B07", latency=4.5, trace_id="t-1", start=inner_start), id="o-inner")
+    http, _ = api([outer, inner], page_size=page_size)
     got = td.fetch_traces(http, "r1", now=datetime(2026, 11, 20, 12, tzinfo=UTC))
     assert len(got) == 1 and got[0]["id"] == "o-inner"
+
+
+def test_fetch_keeps_a_span_whose_latency_is_zero():
+    """The outer row (newer, so first in the newest-first order) must give way to a span that took 0.0 s."""
+    outer = trace("B07", latency=None, trace_id="t-1", start="2026-11-20T10:00:00.1Z")
+    inner = dict(trace("B07", latency=0.0, trace_id="t-1", start="2026-11-20T10:00:00Z"), id="o-inner")
+    http, _ = api([outer, inner])
+    assert td.fetch_traces(http, "r1", now=datetime(2026, 11, 20, 12, tzinfo=UTC))[0]["id"] == "o-inner"
+
+
+def test_fetch_sorts_by_time_whatever_the_timestamp_precision():
+    rows = [trace("LATE", start="2026-11-20T10:00:00.500Z"), trace("EARLY", start="2026-11-20T10:00:00Z")]
+    http, _ = api(rows)
+    got = td.fetch_traces(http, "r1", now=datetime(2026, 11, 20, 12, tzinfo=UTC))
+    assert [r["traceId"] for r in got] == ["t-EARLY", "t-LATE"]           # string order would put .500Z first
+
+
+def test_fetch_warns_when_it_stops_at_the_page_cap(monkeypatch, capsys):
+    monkeypatch.setattr(td, "MAX_PAGES", 2)
+    http, _ = api([trace(f"Q{i}", start=f"2026-11-20T10:0{i}:00Z") for i in range(6)])
+    assert len(td.fetch_traces(http, "r1", now=datetime(2026, 11, 20, 12, tzinfo=UTC))) == 4
+    assert "stopped after 2 pages" in capsys.readouterr().err
 
 
 def test_fetch_raises_on_an_http_error():
@@ -107,6 +138,12 @@ def test_a_row_decodes_metadata_the_sdk_sent_as_json_text():
     assert td.row(t)["failure"] == "could not verify: x"
     t["metadata"]["tokens"], t["metadata"]["seconds"] = "NaN", "Infinity"      # never read as numbers
     assert td.row(t)["tokens"] is None and td.row(t)["seconds"] == 9.9       # falls back to the span latency
+
+
+def test_the_question_label_comes_from_the_tag_which_is_never_cut():
+    t = trace("B07")
+    t["metadata"]["question_id"] = "a-very-long-request-id" * 10 + "..."      # Langfuse cuts values over 200 chars
+    assert td.row(t)["question"] == "B07"
 
 
 def test_a_trace_without_a_summary_still_gives_a_row():
@@ -154,6 +191,22 @@ def test_dashboard_cli_reads_the_run_and_writes_the_file(monkeypatch, tmp_path, 
     assert "| A01 | verified | 3.2 | 4 | 2 | 1,900 |  |" in out.read_text(encoding="utf-8")
     assert td.main(["--run", "missing"]) == 1                                  # nothing tagged run:missing yet
     assert "no traces tagged run:missing yet" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("status", "hint"), [(401, "LANGFUSE_HOST is the project's region"),
+                                               (410, "removed this API"), (500, "status page")])
+def test_dashboard_cli_reports_an_http_error_without_a_traceback_or_a_key(monkeypatch, capsys, status, hint):
+    import core.settings
+    secret = SimpleNamespace(get_secret_value=lambda: "sk-lf-q7Zx9")
+    monkeypatch.setattr(core.settings, "get_settings", lambda: SimpleNamespace(
+        LANGFUSE_ENABLED=True, LANGFUSE_PUBLIC_KEY=secret, LANGFUSE_SECRET_KEY=secret,
+        LANGFUSE_HOST="https://us.cloud.langfuse.com"))
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, json={"message": "no"}))
+    real_client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: real_client(base_url=kw["base_url"], transport=transport))
+    assert td.main(["--run", "r1"]) == 3
+    err = capsys.readouterr().err
+    assert f"HTTP {status}" in err and hint in err and "q7Zx9" not in err
 
 
 # ----------------------------------------------------------------------------------------------- demo script
@@ -213,6 +266,9 @@ def test_with_the_real_langfuse_sdk_a_graph_run_is_one_trace_with_nested_spans(m
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     monkeypatch.setattr(OTLPSpanExporter, "export", lambda self, spans: SpanExportResult.SUCCESS)
+    import os
+    for name in [n for n in os.environ if n.startswith("LANGFUSE")]:   # a shell LANGFUSE_BASE_URL must not redirect it
+        monkeypatch.delenv(name)
 
     exporter = InMemorySpanExporter()
     provider = otel.get_tracer_provider()
@@ -232,7 +288,7 @@ def test_with_the_real_langfuse_sdk_a_graph_run_is_one_trace_with_nested_spans(m
     from tests.test_llm import client, reply
 
     # a short flush interval: the SDK's consumer threads wait on it, and shutdown() joins them (3600 s hung pytest)
-    lf = Langfuse(public_key="pk-lf-test", secret_key="sk-lf-test", host="http://127.0.0.1:9", flush_interval=0.2)
+    lf = Langfuse(public_key="pk-lf-test", secret_key="sk-lf-test", base_url="http://127.0.0.1:9", flush_interval=0.2)
     llm = client(reply("ok", 12, 3))
     step = PlanStep(tool="get_financial_fact", purpose="x", arguments={
         "ticker": "AAPL", "metric": "revenue", "fiscal_year": 2024, "fiscal_period": "FY", "duration": None})
@@ -249,11 +305,14 @@ def test_with_the_real_langfuse_sdk_a_graph_run_is_one_trace_with_nested_spans(m
         return {"draft": AnswerContract(answer="A draft.", verified=False, refused=False)}
 
     graph = g.build_graph(g.Nodes(planner, ex.make_executor(tools, lambda t: len(t.split())), composer, make_critic()))
-    asyncio.run(g.run("Apple revenue fiscal 2024? call 415-555-2671", graph=graph, limits=g.Limits(),
-                      trace=TraceInfo("A01", "sdk-test"), tracer=LangfuseTracer(lf)))
-    provider.force_flush()
-    lf.shutdown()                                           # flush (stubbed) and stop: nothing left for atexit
-    spans = [s for s in exporter.get_finished_spans()]
+    try:
+        asyncio.run(g.run("Apple revenue fiscal 2024? call 415-555-2671", graph=graph, limits=g.Limits(),
+                          trace=TraceInfo("A01", "sdk-test"), tracer=LangfuseTracer(lf)))
+        provider.force_flush()
+        spans = list(exporter.get_finished_spans())
+    finally:
+        lf.shutdown()                                       # flush (stubbed) and stop, even on failure: nothing for atexit
+        exporter.clear()
     by_id = {s.context.span_id: s for s in spans}
     root = next(s for s in spans if s.name == "finsight.ask")
     assert {s.context.trace_id for s in spans} == {root.context.trace_id}

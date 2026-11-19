@@ -6,7 +6,7 @@ The graph uses the real planner (one or two requests to the shared endpoint), th
 data/: the index and the XBRL facts; a search embeds the query through the embedding endpoint), the composer stub
 (the real one is W2-06, so the answer is a placeholder and ends unverified) and the real critic. Needs
 LANGFUSE_ENABLED=true and the Langfuse keys in .env, and the `langfuse` package. Prints the run id: in Langfuse open
-Traces and filter `tags = run:<id>`, or run scripts/trace_dashboard.py --run <id>.
+Tracing and filter `tags = run:<id>` (a few minutes after the run), or run scripts/trace_dashboard.py --run <id>.
 """
 from __future__ import annotations
 

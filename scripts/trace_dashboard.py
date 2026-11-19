@@ -13,6 +13,9 @@ trace carries every number: the table matches what the agent did, not what Langf
 SDK become readable a few minutes after the run (measured: about 8), so run this after a short wait.
 
 The same view in the Langfuse UI: Tracing, filter `tags = run:<run_id>` (ADR-029).
+
+Exit codes: 0 table written, 1 no trace tagged run:<run_id> yet, 2 tracing is off in .env, 3 Langfuse answered an
+HTTP error or could not be reached.
 """
 from __future__ import annotations
 
@@ -56,17 +59,30 @@ def fetch_traces(http: Any, run_id: str, *, days: int = DEFAULT_DAYS, now: datet
         response = http.get(OBSERVATIONS, params=params)
         response.raise_for_status()
         body = response.json()
-        for obs in body.get("data") or []:
+        for obs in body.get("data") or []:       # newest first; an empty page can still carry a cursor
             trace_id = obs.get("traceId")
-            # a v3-SDK trace can show two finsight.ask rows (the trace's own row and the span); keep the one with
-            # the span's latency, both carry the same trace metadata
-            if trace_id and (trace_id not in rows or (rows[trace_id].get("latency") is None and obs.get("latency"))):
+            # a v3-SDK trace can show two finsight.ask rows (an outer row without latency, and the span); keep the
+            # span, whichever arrives first: both carry the same trace metadata
+            if trace_id and (trace_id not in rows
+                             or (rows[trace_id].get("latency") is None and obs.get("latency") is not None)):
                 rows[trace_id] = obs
         cursor = (body.get("meta") or {}).get("cursor")
         if not cursor:
             break
         params["cursor"] = cursor
-    return sorted(rows.values(), key=lambda obs: obs.get("startTime") or "")
+    else:
+        print(f"warning: stopped after {MAX_PAGES} pages with more rows left; the table is incomplete",
+              file=sys.stderr)
+    return sorted(rows.values(), key=_started)
+
+
+def _started(obs: dict[str, Any]) -> datetime:
+    """The row's start time as a datetime: the API's timestamps vary in precision ("10:00:00Z", "10:00:00.5Z"), so
+    sorting the strings would misorder them."""
+    try:
+        return datetime.fromisoformat(str(obs.get("startTime")).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
 
 
 def _tag(tags: list[str] | None, prefix: str) -> str | None:
@@ -106,7 +122,8 @@ def row(obs: dict[str, Any]) -> dict[str, Any]:
         failure = str(meta["stop_reason"])
     else:
         failure = "; ".join(str(n) for n in notes) or "unverified"
-    return {"question": str(raw.get("question_id") or _tag(tags, "q:") or obs.get("traceId")),
+    # the q: tag arrives whole; a metadata value over 200 characters would come back cut
+    return {"question": str(_tag(tags, "q:") or raw.get("question_id") or obs.get("traceId")),
             "verdict": verdict or "none", "seconds": seconds if seconds is not None else _number(obs.get("latency")),
             "steps": sum(v for v in visits.values() if _number(v) is not None),
             "tool_calls": _number(meta.get("tool_calls")), "tokens": _number(meta.get("tokens")), "failure": failure}
@@ -173,8 +190,19 @@ def main(argv: list[str] | None = None) -> int:
         print("LANGFUSE_ENABLED is false in .env: nothing to read (see .env.example).", file=sys.stderr)
         return 2
     auth = (settings.LANGFUSE_PUBLIC_KEY.get_secret_value(), settings.LANGFUSE_SECRET_KEY.get_secret_value())
-    with httpx.Client(base_url=settings.LANGFUSE_HOST, auth=auth, timeout=60) as http:
-        rows = [row(obs) for obs in fetch_traces(http, args.run, days=args.days)]
+    try:
+        with httpx.Client(base_url=settings.LANGFUSE_HOST, auth=auth, timeout=60) as http:
+            rows = [row(obs) for obs in fetch_traces(http, args.run, days=args.days)]
+    except httpx.HTTPStatusError as err:
+        status = err.response.status_code
+        hint = {401: "check LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY and that LANGFUSE_HOST is the project's region",
+                403: "the API key lacks read access", 410: "Langfuse removed this API: see ADR-029",
+                429: "rate limited: try again in a minute"}.get(status, "see the Langfuse status page")
+        print(f"Langfuse answered HTTP {status} ({hint}).", file=sys.stderr)
+        return 3
+    except httpx.HTTPError as err:                     # no connection, timeout
+        print(f"could not reach Langfuse at {settings.LANGFUSE_HOST}: {type(err).__name__}", file=sys.stderr)
+        return 3
     if not rows:
         print(f"no traces tagged run:{args.run} yet (traces from the v3 SDK take a few minutes to appear; "
               f"looked back {args.days} days)", file=sys.stderr)
