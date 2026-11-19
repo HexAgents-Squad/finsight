@@ -101,8 +101,17 @@ class Settings(SecSettings):
     # spec §9: the agent wraps a whole query in this limit (one LLM call alone can take LLM_TIMEOUT x retries)
     QUERY_TIMEOUT_S: float = Field(60.0, gt=0, description="seconds allowed for one question, end to end")
 
+    # Tracing (W2-08, ADR-029): off unless LANGFUSE_ENABLED=true, so tests and a fresh clone never reach the network.
+    # The keys are SecretStr (never in a repr or an error message); the host is Langfuse Cloud or a self-hosted URL.
+    LANGFUSE_ENABLED: bool = Field(False, description="send traces to Langfuse")
+    LANGFUSE_PUBLIC_KEY: SecretStr | None = Field(None, description="Langfuse project public key (pk-lf-...)")
+    LANGFUSE_SECRET_KEY: SecretStr | None = Field(None, validate_default=True,
+                                                  description="Langfuse project secret key (sk-lf-...)")
+    LANGFUSE_HOST: str = Field("https://cloud.langfuse.com", min_length=1, description="Langfuse URL")
+
     @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", "LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS",
-                     "EMBED_CA_CERT", "EMBED_MAX_INPUT_TOKENS", mode="before")
+                     "EMBED_CA_CERT", "EMBED_MAX_INPUT_TOKENS", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
+                     mode="before")
     @classmethod
     def _empty_is_unset(cls, value: object) -> object:
         """`LLM_CA_CERT=` in .env means "no certificate", not a path to the current folder."""
@@ -117,6 +126,15 @@ class Settings(SecSettings):
         connection is verified. A field validator, not a model validator: a model-level error message would
         quote every input value, the API key included."""
         return _ca_file(value, info.data.get("LLM_BASE_URL"), "LLM_CA_CERT", "LLM_BASE_URL")
+
+    @field_validator("LANGFUSE_SECRET_KEY")
+    @classmethod
+    def _langfuse_keys_when_enabled(cls, value: SecretStr | None, info: ValidationInfo) -> SecretStr | None:
+        """Tracing switched on without both keys must fail at start-up, not as a silent gap in the traces. A field
+        validator, so the message never quotes a value."""
+        if info.data.get("LANGFUSE_ENABLED") and (value is None or info.data.get("LANGFUSE_PUBLIC_KEY") is None):
+            raise ValueError("LANGFUSE_ENABLED is true but LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not both set")
+        return value
 
     @field_validator("EMBED_CA_CERT")
     @classmethod

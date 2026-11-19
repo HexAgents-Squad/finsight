@@ -39,6 +39,8 @@ from langgraph.graph import END, START, StateGraph
 from agent.contract import COULD_NOT_VERIFY, AnswerContract
 from agent.critic_checks import Violation, with_verification
 from agent.state import AgentState, Verdict
+from core import tracing
+from core.tracing import TraceInfo, Tracer, trace_run
 
 log = logging.getLogger(__name__)
 
@@ -182,13 +184,43 @@ def finish(state: AgentState) -> dict[str, Any]:
     return {"answer": with_verification(draft, violations), "stop_reason": stopped or limit}
 
 
+def _node_input(state: AgentState) -> dict[str, Any]:
+    """What a node span records as its input: the per-question counters, not the filing text it works on."""
+    return {"question": state.get("question"), "visits": dict(state.get("visits") or {}),
+            "tokens": state.get("tokens") or 0, "tool_results": len(state.get("tool_results") or [])}
+
+
+def _node_output(update: dict[str, Any]) -> dict[str, Any]:
+    """A node's update as a trace records it: tool outputs are summarised (each tool call has its own span with the
+    full output), the rest is what the node wrote."""
+    out = {key: value for key, value in update.items() if key not in {"tool_results", "messages"}}
+    if update.get("tool_results"):
+        out["tool_results"] = [{"tool": r.call.name, "error": r.error_type} for r in update["tool_results"]]
+    return out
+
+
+async def _traced(name: str, node: Node, state: AgentState) -> dict[str, Any]:
+    """The node run inside its span (a no-op unless the run is traced, W2-08)."""
+    with tracing.span(name, input=_node_input(state)) as sp:
+        update = await node(state)
+        sp.update(output=_node_output(update or {}))
+    return update
+
+
+def _traced_finish(state: AgentState) -> dict[str, Any]:
+    with tracing.span(FINISH, input=_node_input(state)) as sp:
+        update = finish(state)
+        sp.update(output={"verified": update["answer"].verified, "stop_reason": update.get("stop_reason")})
+    return update
+
+
 def _counted(name: str, node: Node) -> Node:
     """The node with the graph's bookkeeping: its run counted; a planner run without a plan clears the old one (a
     replan never silently re-executes it); a new draft clears the old verdict; the executor's round error resets
     when a round has none; only the critic writes a verdict (a Verdict), and a critic run without one fails the
     check."""
     async def run(state: AgentState) -> dict[str, Any]:
-        update = dict(await node(state) or {})
+        update = dict(await _traced(name, node, state) or {})
         forbidden = GRAPH_KEYS & update.keys() | ({"verdict"} & update.keys() if name != CRITIC else set())
         if forbidden:
             raise ValueError(f"node {name!r} wrote {sorted(forbidden)}, which it may not write")
@@ -230,7 +262,7 @@ def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
     graph = StateGraph(AgentState)
     for name in (PLANNER, EXECUTOR, COMPOSER, CRITIC):
         graph.add_node(name, _counted(name, getattr(nodes, name)))
-    graph.add_node(FINISH, finish)
+    graph.add_node(FINISH, _traced_finish)
     graph.add_edge(START, PLANNER)
     graph.add_conditional_edges(PLANNER, route_after_planner, [EXECUTOR, COMPOSER, FINISH])
     graph.add_conditional_edges(EXECUTOR, route_after_executor, [PLANNER, COMPOSER, FINISH])
@@ -248,10 +280,36 @@ def initial_state(question: str, history: Sequence[str] = (), limits: Limits | N
 
 
 async def run(question: str, history: Sequence[str] = (), *, graph: Any = None, limits: Limits | None = None,
-              config: dict[str, Any] | None = None) -> AgentRun:
+              config: dict[str, Any] | None = None, trace: TraceInfo | None = None,
+              tracer: Tracer | None = None) -> AgentRun:
     """Answer one question (with the conversation's earlier questions) within the limits. Always an
     AnswerContract: a run stopped by the time limit or the recursion backstop gives up with a note and keeps the
-    state reached so far. Other exceptions, a node's own timeouts included, are bugs and propagate."""
+    state reached so far. Other exceptions, a node's own timeouts included, are bugs and propagate.
+
+    `trace` (W2-08) sends the run to Langfuse: one trace tagged q:<question_id>, run:<run_id> and the verdict, with a
+    span per node, tool call and LLM call. Without it nothing is traced and no setting is read; `tracer` replaces
+    the one from .env (tests pass a recording fake)."""
+    with trace_run(trace, question, tracer=tracer) as root:
+        result = await _run(question, history, graph=graph, limits=limits, config=config)
+        root.update(output=result.answer.answer, metadata=_trace_summary(result))
+        # the outcome as a tag (verdict:verified / unverified / refused), so the dashboard can filter on it
+        root.tag("verdict:" + ("refused" if result.answer.refused else "verified" if result.answer.verified
+                               else "unverified"))
+    return result
+
+
+def _trace_summary(result: AgentRun) -> dict[str, Any]:
+    """PII-free numbers for the trace: what the dashboard (latency, steps, tokens, failures) is built from."""
+    state = result.state
+    return {"seconds": round(result.seconds, 3), "tokens": state.get("tokens") or 0,
+            "tool_calls": len(state.get("tool_results") or []), "visits": dict(state.get("visits") or {}),
+            "verified": result.answer.verified, "refused": result.answer.refused,
+            "stop_reason": state.get("stop_reason"), "notes": list(result.answer.notes)}
+
+
+async def _run(question: str, history: Sequence[str], *, graph: Any, limits: Limits | None,
+               config: dict[str, Any] | None) -> AgentRun:
+    """run() without tracing."""
     if limits is None:                                  # needs a complete .env (core/settings.py); tests pass limits
         from core.settings import get_settings
         limits = Limits.from_settings(get_settings())
