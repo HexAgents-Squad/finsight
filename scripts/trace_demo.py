@@ -60,7 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"run {run_id}: verified={result.answer.verified} refused={result.answer.refused} "
           f"seconds={result.seconds:.1f} tokens={state.get('tokens') or 0} "
           f"tool calls={len(state.get('tool_results') or [])} visits={dict(state.get('visits') or {})}")
-    print(f"Langfuse: Traces, filter tags = run:{run_id}   ·   python scripts/trace_dashboard.py --run {run_id}")
+    print(f"Langfuse: Tracing, filter tags = run:{run_id} (visible after a few minutes); "
+          f"then: python scripts/trace_dashboard.py --run {run_id}")
     return 0
 
 
