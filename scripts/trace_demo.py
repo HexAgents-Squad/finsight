@@ -33,9 +33,10 @@ def demo_nodes(llm: Any, call_tool: Any = None) -> Any:
                  critic=make_critic())
 
 
-async def traced_run(question: str, info: Any, nodes: Any, tracer: Any = None) -> Any:
+async def traced_run(question: str, info: Any, nodes: Any, tracer: Any = None, limits: Any = None) -> Any:
+    """The traced run; `limits` default to the .env settings (agent.graph.run), tests pass their own."""
     from agent.graph import build_graph, run
-    return await run(question, graph=build_graph(nodes), trace=info, tracer=tracer)
+    return await run(question, graph=build_graph(nodes), trace=info, tracer=tracer, limits=limits)
 
 
 def main(argv: list[str] | None = None) -> int:

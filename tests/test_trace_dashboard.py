@@ -123,9 +123,10 @@ def test_demo_traces_the_run_it_makes():
     async def critic(state):
         return {"verdict": Verdict()}
 
+    from agent.graph import Limits
     tracer = RecordingTracer()
     result = asyncio.run(demo.traced_run("q", TraceInfo("DEMO-1", "demo-x"), Nodes(planner, executor, composer, critic),
-                                         tracer=tracer))
+                                         tracer=tracer, limits=Limits()))      # never the .env (CI has none)
     assert result.answer.answer == "A draft." and tracer.events[0]["info"].run_id == "demo-x"
     assert "verdict:verified" in tracer.tags
 
