@@ -76,7 +76,7 @@ def conversations(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 
 
 def dev_values() -> dict[str, dict[str, Any]]:
-    return {d["id"]: d for d in map(json.loads, DEV_FILE.read_text(encoding="utf-8").splitlines()) if d}
+    return {d["id"]: d for d in load_items(DEV_FILE)}
 
 
 def expectation_met(item: dict[str, Any], record: dict[str, Any], dev_value_ok: bool | None = None) -> tuple[bool, str]:
@@ -84,6 +84,11 @@ def expectation_met(item: dict[str, Any], record: dict[str, Any], dev_value_ok: 
     item has one), a refusal under its rule, a verified partial refusal with the rule, or a verified answer that
     says the figure is not reported (spec §5, category G)."""
     expect, rule = item["expect"], item.get("refusal_rule")
+    if expect in ("answer", "partial", "not_reported") and not record["refused"]:
+        from agent.composer import company
+        unnamed = [t for t in item.get("companies") or [] if company(t).lower() not in record["answer"].lower()]
+        if unnamed:
+            return False, f"the answer does not name {', '.join(company(t) for t in unnamed)}"
     if expect == "answer":
         if dev_value_ok is False:
             return False, "verified, but no value equals the development value"
@@ -114,15 +119,21 @@ def dev_value_check(item: dict[str, Any], record: dict[str, Any], dev: dict[str,
     return any(abs(v["value"] - target) <= tol for v in record["values"])
 
 
-async def run_items(items: list[dict[str, Any]], nodes: Any, limits: Any) -> list[dict[str, Any]]:
+async def run_items(items: list[dict[str, Any]], nodes: Any, limits: Any) -> tuple[list[dict[str, Any]], str | None]:
+    """The records of the queries run, in file order, and why the run stopped early (the request budget), if it
+    did: the queries answered before it are kept."""
     from agent.graph import build_graph, in_memory_checkpointer, run, thread
     from agent.transcript import run_record
     graph = build_graph(nodes, checkpointer=in_memory_checkpointer())
     dev = dev_values()
     records: list[dict[str, Any]] = []
+    order = {d["id"]: n for n, d in enumerate(items)}
     for chain in conversations(items):
         for item in chain:
-            result = await run(item["question"], graph=graph, limits=limits, config=thread(chain[0]["id"]))
+            try:
+                result = await run(item["question"], graph=graph, limits=limits, config=thread(chain[0]["id"]))
+            except BudgetExceeded as err:
+                return sorted(records, key=lambda r: order[r["id"]]), f"stopped before {item['id']}: {err}"
             record = run_record(result, item["question"])
             value_ok = dev_value_check(item, record, dev)
             met, why = expectation_met(item, record, value_ok)
@@ -132,8 +143,18 @@ async def run_items(items: list[dict[str, Any]], nodes: Any, limits: Any) -> lis
                             "under_time_limit": result.seconds < limits.timeout_s, **record})
             print(f"{item['id']}: {record['verdict']:30} met={met!s:5} {record['seconds']:5.1f}s "
                   f"{record['tokens']:6} tokens {record['steps']:2} tool calls", flush=True)
-    order = {d["id"]: n for n, d in enumerate(items)}
-    return sorted(records, key=lambda r: order[r["id"]])
+    return sorted(records, key=lambda r: order[r["id"]]), None
+
+
+async def run_real(items: list[dict[str, Any]], settings: Any, max_requests: int,
+                   limits: Any) -> tuple[list[dict[str, Any]], str | None, Any]:
+    """run_items on the real nodes, with an LLM client opened and closed here (core/llm.py) behind the budget."""
+    from agent.nodes import real_nodes
+    from core.llm import LLMClient
+    async with LLMClient(settings) as client:
+        budgeted = BudgetedLLM(client, max_requests)
+        records, stopped = await run_items(items, real_nodes(budgeted), limits)
+        return records, stopped, budgeted.usage
 
 
 def write_outputs(records: list[dict[str, Any]], out_dir: Path, stem: str, header: str) -> tuple[Path, Path]:
@@ -156,7 +177,7 @@ def write_outputs(records: list[dict[str, Any]], out_dir: Path, stem: str, heade
     return jsonl, md
 
 
-def main(argv: list[str] | None = None, *, nodes: Any = None, limits: Any = None, llm: Any = None) -> int:
+def main(argv: list[str] | None = None, *, nodes: Any = None, limits: Any = None) -> int:
     from eval.validate_gold import safe_console
     safe_console()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -167,10 +188,9 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, limits: Any = None
                         help="send every chat request (honest latency); the reply cache is neither read nor written")
     args = parser.parse_args(argv)
     items = load_items()
-    budgeted = None
+    from agent.graph import Limits
     if nodes is None:
         try:
-            from core.llm import LLMClient
             from core.settings import get_settings
             settings = get_settings()
         except (ValueError, OSError) as err:        # pydantic's ValidationError: an incomplete .env
@@ -178,24 +198,21 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, limits: Any = None
             return 2
         if args.no_cache:
             settings = settings.model_copy(update={"LLM_CACHE_DIR": None})
-        from agent.graph import Limits
-        from agent.nodes import real_nodes
-        budgeted = BudgetedLLM(llm or LLMClient(settings), args.max_requests)
-        nodes, limits = real_nodes(budgeted), limits or Limits.from_settings(settings)
-    if limits is None:                              # nodes given without limits (a test or a script): the defaults
-        from agent.graph import Limits
-        limits = Limits()
-    try:
-        records = asyncio.run(run_items(items, nodes, limits))
-    except BudgetExceeded as err:
-        print(f"stopped: {err}", file=sys.stderr)
-        return 2
-    usage = budgeted.usage if budgeted is not None else None
-    header = (f"Model {settings.LLM_MODEL}; {len(records)} queries; reply cache "
-              f"{'off' if args.no_cache else 'on'}; live chat requests {usage.calls}, cache hits {usage.cache_hits}."
-              if usage is not None else f"{len(records)} queries.")
+        records, stopped, usage = asyncio.run(run_real(items, settings, args.max_requests,
+                                                       limits or Limits.from_settings(settings)))
+        header = (f"Model {settings.LLM_MODEL}; {len(records)} queries; reply cache "
+                  f"{'off' if args.no_cache else 'on'}; live chat requests {usage.calls}, cache hits "
+                  f"{usage.cache_hits}.")
+    else:                                           # given nodes (a test or a script); the default limits
+        records, stopped = asyncio.run(run_items(items, nodes, limits or Limits()))
+        header = f"{len(records)} queries."
+    if stopped:
+        header += f" Incomplete: {stopped}."
     jsonl, md = write_outputs(records, args.out_dir, args.stem, header)
     print(f"wrote {jsonl.name} and {md.name}; " + header)
+    if stopped:
+        print(stopped, file=sys.stderr)
+        return 2
     return 0 if all(r["met"] and r["under_time_limit"] for r in records) else 1
 
 

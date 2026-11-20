@@ -62,7 +62,7 @@ from agent.critic_checks import (
     sentences,
     unbacked_figures,
 )
-from agent.executor import STATEMENT_TITLES, call_key, checked_section_call
+from agent.executor import STATEMENT_OF_QUERY, STATEMENT_TITLES, call_key, checked_section_call
 from agent.guided import CompletionClient, GuidedReply, ask_guided
 from agent.state import AgentState, Plan, ToolCall, ToolResult
 from core.figures import Figure, figures, located_figures
@@ -237,9 +237,24 @@ def _checked_statement(result: ToolResult, results: list[ToolResult]) -> list[di
     found = [r for r in results if call_key(r.call) == call_key(call)]
     hits = [h for h in (found[-1].output if found and isinstance(found[-1].output, list) else [])
             if isinstance(h, dict) and h.get("chunk_id")]
-    title = STATEMENT_TITLES.get(call.arguments["query"])
+    title = STATEMENT_TITLES.get(STATEMENT_OF_QUERY.get(call.arguments["query"], ""))
     pages = [h for h in hits if title is not None and is_statement_page(str(h.get("text", "")), title)]
     return (pages + hits)[:1]
+
+
+def _trend_not_reported(result: ToolResult) -> list[str]:
+    """The years a compare_periods trend returned as not reported (rows with missing = not_reported), as lines for
+    the prompt's NOT REPORTED list."""
+    if result.call.name != "compare_periods" or not isinstance(result.output, list):
+        return []
+    lines = []
+    for row in result.output:
+        if isinstance(row, dict) and row.get("missing") == "not_reported" and isinstance(row.get("fiscal_year"), int):
+            note = next(iter(row.get("notes") or []), "")
+            lines.append(f"{company(str(row.get('ticker', '')))} {metric_text(row)}, "
+                         f"{period_text(row['fiscal_year'], row.get('fiscal_period') or 'FY')}: not reported"
+                         + (f" ({note})" if note else ""))
+    return lines
 
 
 def is_statement_page(text: str, title: re.Pattern[str]) -> bool:
@@ -253,13 +268,17 @@ def is_statement_page(text: str, title: re.Pattern[str]) -> bool:
                                  for line in text.splitlines()[:STATEMENT_HEADING_LINES])
 
 
-def _is_statement_heading(line: str, title: re.Pattern[str]) -> bool:
+@functools.cache
+def _heading(title: str) -> re.Pattern[str]:
+    """A statement title as a whole heading line (compiled once per title)."""
     group = r"[\w.,&'’ ]{2,60}?\s+and\s+subsidiaries"
     lead = r"(?:condensed\s+)?(?:consolidated\s+)?(?:condensed\s+)?"
     tail = r"(?:\s*\((?:continued|unaudited)\))*"
-    heading = re.compile(rf"(?:{group}\s+)?{lead}(?:{title.pattern}){tail}(?:\s*\|?\s*{group})?{tail}\s*[:.]?",
-                         re.IGNORECASE)
-    if not heading.fullmatch(line):
+    return re.compile(rf"(?:{group}\s+)?{lead}(?:{title}){tail}(?:\s*\|?\s*{group})?{tail}\s*[:.]?", re.IGNORECASE)
+
+
+def _is_statement_heading(line: str, title: re.Pattern[str]) -> bool:
+    if not _heading(title.pattern).fullmatch(line):
         return False
     return "consolidated" in line.lower() or re.sub(r"\([^)]*\)", "", line).isupper()
 
@@ -282,6 +301,10 @@ def gather(state: AgentState) -> Evidence:
                 evidence.facts.append(row)
         if result.error_type == "not_reported":
             evidence.not_reported.append(_not_reported(result))
+            evidence.checked += _checked_statement(result, results)
+        trend_gaps = _trend_not_reported(result)
+        if trend_gaps:                                   # a trend over years the company does not report
+            evidence.not_reported += trend_gaps
             evidence.checked += _checked_statement(result, results)
         if result.call.name == "search_filings" and isinstance(result.output, list):
             for hit in result.output:
@@ -669,8 +692,9 @@ def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tup
 
 
 def own_problems(draft: AnswerContract, question: str, evidence: Evidence) -> list[Violation]:
-    """The draft's violations of the rules the composer controls (OWN_RULES). With nothing citable (only "not
-    reported" facts or a measure that is not meaningful), a missing citation is not something a retry can fix."""
+    """The draft's violations of the rules the composer controls (OWN_RULES). With no fact or passage, a missing
+    citation is not something a retry can fix: a measure that is not meaningful, or a "not reported" fact (whose
+    checked statement, when found, structured_parts already cites)."""
     rules = OWN_RULES if (evidence.facts or evidence.passages) else OWN_RULES - {"citations"}
     return [v for v in check_contract(draft, question=question) if v.rule in rules]
 

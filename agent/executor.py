@@ -36,10 +36,12 @@ the measure is undefined), so they do not trigger a replan; a fourth-quarter que
 way. An exception from the tool caller (a bug: call_tool_async does not raise) becomes an internal_error result.
 
 The checked statement (W2-07): a "not reported" answer cites the section that was checked (spec §5, category G),
-so for each not_reported fact the executor also searches that filing's financial statements for the statement the
-metric would be on (checked_section_call: a few passages, of which the composer cites the statement's own; the
-10-K for a fourth quarter). It is a step like any
-other (counted, guarded, never sent twice); its failure is not a tool error, since the fact's answer stands.
+so for each not_reported fact (a get_financial_fact error, or a compare_periods year missing as not_reported) the
+executor also searches that filing's financial statements for the statement the metric would be on
+(checked_section_call: the statement from config/concept_map.yaml, five passages, of which the composer cites the
+statement's own page; the 10-K for a fourth quarter). It runs after the calculation, so it never takes the
+calculation's step or tokens, and is otherwise a step like any other (counted, guarded, never sent twice); its
+failure is not a tool error, since the fact's answer stands.
 
 The calculation (ADR-025): a plan has no numbers, so when `plan.calculation` is set the executor builds the
 calculate call from the figures the plan's fact steps fetched (each figure keeps its company, metric, period and
@@ -61,6 +63,7 @@ calculation and a note in `errors`, never a guessed pair: the composer then answ
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -71,6 +74,8 @@ from typing import Any
 
 from agent.state import AgentState, Plan, ToolCall, ToolResult
 from core import tracing
+from ingest.xbrl import load_concept_map
+from retrieval.statement import statement_item
 from tools.base import INTERNAL_ERROR, NOT_REPORTED, SERVICE_UNAVAILABLE, UNDEFINED, error_result
 
 log = logging.getLogger(__name__)
@@ -87,12 +92,6 @@ PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}   # within a fiscal
 WHOLE_METRIC = "revenue"                             # the whole of a percent (a margin, a share of revenue)
 DEFAULT_MAX_STEPS, DEFAULT_MAX_TOKENS = 10, 12_000   # agent.graph.Limits() defaults, for a state without limits
 STEP_LIMIT, TOKEN_LIMIT = "step limit reached", "token budget exceeded"
-# The statement each metric is on (config/concept_map.yaml: duration flows on the income or cash-flow statement,
-# instants on the balance sheet), and where a filing prints its statements (spec §3)
-CASH_FLOW_METRICS = frozenset({"capex", "operating_cash_flow"})
-BALANCE_SHEET_METRICS = frozenset({"total_assets", "total_liabilities", "stockholders_equity", "cash",
-                                   "long_term_debt"})
-STATEMENTS_ITEM = {"10-K": "Item 8", "10-Q": "Part I Item 1"}
 # The search for each statement, worded like the statement's own page, and its title as filings print it (the
 # composer cites the statement's page, agent.composer.is_statement_page). Measured offline on every 10-K of the
 # corpus (20 companies x 3 years x 3 statements, Item 8, 5 hits): the page is among the hits for 162 of 180 with
@@ -107,13 +106,12 @@ STATEMENT_QUERIES = {
               "income before income taxes net income earnings per share basic diluted",
 }
 STATEMENT_TITLES = {
-    STATEMENT_QUERIES["cash_flows"]: re.compile(r"statements?\s+of\s+cash\s+flows|cash\s+flows?\s+statements?",
-                                                re.IGNORECASE),           # MSFT: "CASH FLOWS STATEMENTS"
-    STATEMENT_QUERIES["balance_sheet"]: re.compile(r"balance\s+sheets?|statements?\s+of\s+(?:financial\s+)?condition",
-                                                   re.IGNORECASE),
-    STATEMENT_QUERIES["income"]: re.compile(r"statements?\s+of\s+(?:income|operations|earnings)|income\s+statements?",
-                                            re.IGNORECASE),
+    "cash_flows": re.compile(r"statements?\s+of\s+cash\s+flows|cash\s+flows?\s+statements?",
+                             re.IGNORECASE),                              # MSFT: "CASH FLOWS STATEMENTS"
+    "balance_sheet": re.compile(r"balance\s+sheets?|statements?\s+of\s+(?:financial\s+)?condition", re.IGNORECASE),
+    "income": re.compile(r"statements?\s+of\s+(?:income|operations|earnings)|income\s+statements?", re.IGNORECASE),
 }
+STATEMENT_OF_QUERY = {query: name for name, query in STATEMENT_QUERIES.items()}
 CHECKED_PASSAGES = 5                 # 162 of 180 pages among the top 5 (top 3: fewer); the search runs last
 
 
@@ -275,24 +273,46 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
     return ToolCall(name="calculate", arguments=arguments), None
 
 
-def checked_section_call(result: ToolResult) -> ToolCall | None:
-    """For a get_financial_fact that came back not_reported: the search of that filing's financial statements
-    for the statement the metric would be on (spec §5: a "not reported" answer cites the section checked). A
-    fourth quarter is checked in the 10-K (Q4 is never filed on its own, spec §4.2). None for anything else."""
-    if result.call.name != "get_financial_fact" or result.error_type != NOT_REPORTED:
-        return None
-    args = result.call.arguments
-    ticker, metric, year = args.get("ticker"), args.get("metric"), args.get("fiscal_year")
+@functools.cache
+def _metrics() -> dict[str, Any]:
+    return load_concept_map()
+
+
+def statement_of(metric: str) -> str:
+    """The statement a metric is on, from config/concept_map.yaml: an instant is on the balance sheet, a flow that
+    10-Qs report only year to date on the cash-flow statement, any other flow on the income statement."""
+    m = _metrics().get(metric)
+    if m is not None and m.period == "instant":
+        return "balance_sheet"
+    return "cash_flows" if m is not None and m.quarterly_ytd_only else "income"
+
+
+def _statement_search(ticker: Any, metric: Any, year: Any, period: Any) -> ToolCall | None:
     if not (isinstance(ticker, str) and isinstance(metric, str) and isinstance(year, int)):
         return None
-    period = args.get("fiscal_period") or "FY"
-    period = "FY" if period == "Q4" else period
-    form = "10-K" if period == "FY" else "10-Q"
-    statement = STATEMENT_QUERIES["cash_flows" if metric in CASH_FLOW_METRICS
-                                  else "balance_sheet" if metric in BALANCE_SHEET_METRICS else "income"]
-    return ToolCall(name="search_filings", arguments={"query": statement, "ticker": ticker, "fiscal_year": year,
-                                                      "fiscal_period": period, "form": form,
-                                                      "item": STATEMENTS_ITEM[form], "k": CHECKED_PASSAGES})
+    period = "FY" if period in (None, "Q4") else period          # Q4 is in the 10-K (never filed alone, spec §4.2)
+    return ToolCall(name="search_filings", arguments={
+        "query": STATEMENT_QUERIES[statement_of(metric)], "ticker": ticker, "fiscal_year": year,
+        "fiscal_period": period, "form": "10-K" if period == "FY" else "10-Q", "item": statement_item(period),
+        "k": CHECKED_PASSAGES})
+
+
+def checked_section_call(result: ToolResult) -> ToolCall | None:
+    """For a fact that came back not reported: the search of that filing's financial statements for the statement
+    the metric would be on (spec §5: a "not reported" answer cites the section checked). A get_financial_fact with
+    a not_reported error, or a compare_periods trend whose years are missing as not_reported (the newest such year:
+    its statement prints the earlier years too). None for anything else."""
+    args = result.call.arguments
+    if result.call.name == "get_financial_fact" and result.error_type == NOT_REPORTED:
+        return _statement_search(args.get("ticker"), args.get("metric"), args.get("fiscal_year"),
+                                 args.get("fiscal_period"))
+    if result.call.name == "compare_periods" and isinstance(result.output, list):
+        gaps = [r for r in result.output if isinstance(r, dict) and r.get("missing") == NOT_REPORTED]
+        if gaps:
+            newest = max(gaps, key=lambda r: r.get("fiscal_year") or 0)
+            return _statement_search(newest.get("ticker"), newest.get("metric"), newest.get("fiscal_year"),
+                                     newest.get("fiscal_period"))
+    return None
 
 
 # ----------------------------------------------------------------------------------------------- node

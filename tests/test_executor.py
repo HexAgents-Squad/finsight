@@ -239,6 +239,26 @@ def test_a_not_reported_fact_is_checked_on_its_statement(metric, period, stateme
     assert ex.checked_section_call(ToolResult(call=call, output={"value": 1.0})) is None
 
 
+def test_every_metric_has_its_statement_from_the_concept_map():
+    from ingest.xbrl import load_concept_map
+    metrics = load_concept_map()
+    assert {ex.statement_of(m) for m in metrics} == {"income", "balance_sheet", "cash_flows"}
+    assert (ex.statement_of("capex"), ex.statement_of("total_assets"), ex.statement_of("revenue")) == (
+        "cash_flows", "balance_sheet", "income")
+    assert all(ex.statement_of(m) == "balance_sheet" for m, d in metrics.items() if d.period == "instant")
+
+
+def test_a_trend_over_unreported_years_is_checked_on_the_newest_statement():
+    """Review: compare_periods reports a declared gap as rows with missing = not_reported, not as an error."""
+    call = ToolCall(name="compare_periods", arguments={"ticker": "WFC", "metric": "capex", "years": [2023, 2024]})
+    rows = [{"ticker": "WFC", "metric": "capex", "fiscal_year": y, "fiscal_period": "FY", "value": None,
+             "missing": "not_reported", "notes": ["no capital-expenditure line"]} for y in (2023, 2024)]
+    checked = ex.checked_section_call(ToolResult(call=call, output=rows))
+    assert checked.arguments["fiscal_year"] == 2024 and checked.arguments["query"] == ex.STATEMENT_QUERIES["cash_flows"]
+    reported = [{**rows[0], "missing": None, "value": 1.0}]
+    assert ex.checked_section_call(ToolResult(call=call, output=reported)) is None
+
+
 def test_the_checked_statement_failing_is_no_tool_error_and_is_not_sent_twice():
     tools = FakeTools({json.dumps(["search_filings", CHECKED_PG], sort_keys=True):
                        {"error": {"type": "no_results", "message": "nothing"}}})

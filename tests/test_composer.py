@@ -273,8 +273,27 @@ def test_the_checked_statement_cited_is_the_statements_own_page():
     ("Notes to consolidated financial statements\nStatements of cash flows\nx | 1", False),
 ])
 def test_a_statement_page_has_its_title_as_a_heading_and_a_table(text, page):
-    from agent.executor import STATEMENT_QUERIES, STATEMENT_TITLES
-    assert cm.is_statement_page(text, STATEMENT_TITLES[STATEMENT_QUERIES["cash_flows"]]) is page
+    from agent.executor import STATEMENT_TITLES
+    assert cm.is_statement_page(text, STATEMENT_TITLES["cash_flows"]) is page
+
+
+def test_a_trend_over_unreported_years_is_said_and_cited():
+    """Review: a trend question on a declared gap (compare_periods rows missing as not_reported) answered "fetched
+    nothing" with no citation; now it is a not-reported answer citing the newest statement checked."""
+    from agent.executor import checked_section_call
+    step = PlanStep(tool="compare_periods", purpose="x", arguments={"ticker": "WFC", "metric": "capex",
+                                                                   "years": [2023, 2024]})
+    rows = [{"ticker": "WFC", "metric": "capex", "fiscal_year": y, "fiscal_period": "FY", "value": None,
+             "missing": "not_reported", "notes": ["no capital-expenditure line"]} for y in (2023, 2024)]
+    trend = done(step, rows)
+    statement = hit("WFC", 2024, "Item 8", 41, "Consolidated Statement of Cash Flows\n(in millions) | 2024 | 2023")
+    st = state("How did Wells Fargo's capital expenditures change from fiscal 2023 to fiscal 2024?", plan(step),
+               [trend, ToolResult(call=checked_section_call(trend), output=[statement])],
+               Entities(("WFC",), (2023, 2024), ("FY",)))
+    ev = cm.gather(st)
+    assert not ev.empty and len(ev.not_reported) == 2 and "fiscal 2024: not reported" in ev.not_reported[1]
+    d = run(st, FakeLLM(reply("Wells Fargo does not report capital expenditures for fiscal 2023 or fiscal 2024."))).draft
+    assert [c.chunk_id for c in d.citations] == [statement["chunk_id"]] and critic_problems(d, st) == []
 
 
 def test_a_not_reported_fact_without_a_checked_statement_has_no_citation_to_add():

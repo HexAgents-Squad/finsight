@@ -21,7 +21,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Meta's net income for fiscal 2025 was $60,458 million.
 
-**Values:** net_income = 60458 USD millions (META FY 2025)
+**Values:** net_income = 60,458 USD millions (META FY 2025)
 **Citations:**
 - [META 10-K FY2025 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/
 **Tool calls:** get_financial_fact
@@ -33,8 +33,8 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Procter & Gamble's operating margin in fiscal 2023 was 22.1%.
 
-**Values:** operating_income = 18134 USD millions (PG FY 2023); revenue = 82006 USD millions (PG FY 2023); percent = 22.1 % (PG FY 2023)
-**Calculation:** percent of [18134.0, 82006.0] = 22.1
+**Values:** operating_income = 18,134 USD millions (PG FY 2023); revenue = 82,006 USD millions (PG FY 2023); percent = 22.1 % (PG FY 2023)
+**Calculation:** percent of 18,134, 82,006 = 22.1
 **Citations:**
 - [PG 10-K FY2023 FY · us-gaap:OperatingIncomeLoss] https://www.sec.gov/Archives/edgar/data/80424/000008042423000073/
 - [PG 10-K FY2023 FY · us-gaap:Revenues] https://www.sec.gov/Archives/edgar/data/80424/000008042423000073/
@@ -47,8 +47,8 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Bank of America's total revenue, net of interest expense, increased by 3% from fiscal 2023 to fiscal 2024, rising from $102,769 million to $105,856 million.
 
-**Values:** revenue = 102769 USD millions (BAC FY 2023); revenue = 105856 USD millions (BAC FY 2024); growth = 3 % (BAC FY 2024)
-**Calculation:** growth of [102769.0, 105856.0] = 3
+**Values:** revenue = 102,769 USD millions (BAC FY 2023); revenue = 105,856 USD millions (BAC FY 2024); growth = 3 % (BAC FY 2024)
+**Calculation:** growth of 102,769, 105,856 = 3
 **Citations:**
 - [BAC 10-K FY2023 FY · us-gaap:Revenues] https://www.sec.gov/Archives/edgar/data/70858/000007085826000157/
 - [BAC 10-K FY2024 FY · us-gaap:Revenues] https://www.sec.gov/Archives/edgar/data/70858/000007085826000157/
@@ -61,8 +61,8 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Johnson & Johnson had a higher net income of $35,153 million in fiscal 2023 compared to Pfizer's $2,119 million.
 
-**Values:** net_income = 2119 USD millions (PFE FY 2023); net_income = 35153 USD millions (JNJ FY 2023); difference (JNJ minus PFE) = 33034 USD millions (PFE FY 2023)
-**Calculation:** difference of [2119.0, 35153.0] = 33034
+**Values:** net_income = 2,119 USD millions (PFE FY 2023); net_income = 35,153 USD millions (JNJ FY 2023); difference (JNJ minus PFE) = 33,034 USD millions (PFE FY 2023)
+**Calculation:** difference of 2,119, 35,153 = 33,034
 **Citations:**
 - [PFE 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/78003/000007800324000039/
 - [JNJ 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/200406/000020040624000013/
@@ -75,7 +75,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Microsoft's revenue in fiscal 2023 increased by $13.6 billion or 7%, driven by growth in Intelligent Cloud and Productivity and Business Processes, offset in part by a decline in More Personal Computing. More Personal Computing revenue decreased due to Windows and Devices.
 
-**Values:** figure stated in the filing (13.6 billion) = 1.36e+10 USD (MSFT FY 2023); figure stated in the filing (7%) = 7 % (MSFT FY 2023)
+**Values:** figure stated in the filing (13.6 billion) = 13,600,000,000 USD (MSFT FY 2023); figure stated in the filing (7%) = 7 % (MSFT FY 2023)
 **Citations:**
 - [MSFT 10-K FY2023 FY · Item 7] https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm
 - [MSFT 10-K FY2023 FY · Item 7] https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm
@@ -90,7 +90,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Amazon's net income in fiscal 2023 was $30,425 million.
 
-**Values:** net_income = 30425 USD millions (AMZN FY 2023)
+**Values:** net_income = 30,425 USD millions (AMZN FY 2023)
 **Citations:**
 - [AMZN 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/1018724/000101872424000008/
 **Tool calls:** get_financial_fact
@@ -104,7 +104,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Microsoft's net income for fiscal 2023 was $72,361 million.
 
-**Values:** net_income = 72361 USD millions (MSFT FY 2023)
+**Values:** net_income = 72,361 USD millions (MSFT FY 2023)
 **Citations:**
 - [MSFT 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/
 **Tool calls:** get_financial_fact
@@ -124,7 +124,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (partial refusal, verified):** Wells Fargo's net income for fiscal 2023 was $19,142 million. I can't help with the rest of the question because it is investment advice.
 
-**Values:** net_income = 19142 USD millions (WFC FY 2023)
+**Values:** net_income = 19,142 USD millions (WFC FY 2023)
 **Citations:**
 - [WFC 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/72971/000007297124000064/
 **Tool calls:** get_financial_fact

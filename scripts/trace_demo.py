@@ -49,7 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     run_id = args.run_id or "demo-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     info = tracing.TraceInfo(question_id=args.question_id, run_id=run_id)
-    result = asyncio.run(traced_run(args.question, info, demo_nodes(LLMClient(settings))))
+    async def traced_with_client() -> Any:          # the client closed in the same loop (core/llm.py)
+        async with LLMClient(settings) as llm:
+            return await traced_run(args.question, info, demo_nodes(llm))
+
+    result = asyncio.run(traced_with_client())
     tracing.flush()
     state = result.state
     print(f"run {run_id}: verified={result.answer.verified} refused={result.answer.refused} "

@@ -75,6 +75,11 @@ def test_a_record_carries_the_run_and_reads_as_markdown():
     text = markdown(record, title="demo-x")
     assert text.startswith("### demo-x") and "**Answer (not verified):**" in text and "**Run:** 0 tool calls" in text
     json.dumps(record)                                                    # serialisable as is
+    big = {**record, "values": [{"name": "x", "value": 1.36e10, "unit": "USD", "ticker": "MSFT", "fiscal_period": "FY",
+                                 "fiscal_year": 2023}],
+           "calculations": [{"operation": "growth", "inputs": [383285.0, 391035.0], "result": 2.0}]}
+    shown = markdown(big)
+    assert "x = 13,600,000,000 USD" in shown and "growth of 383,285, 391,035 = 2" in shown and "e+" not in shown
 
 
 # ----------------------------------------------------------------------------------------------- ask.py
@@ -91,6 +96,26 @@ def test_ask_json_and_history(capsys):
                     nodes=stub_nodes(), limits=LIMITS) == 0
     record = json.loads(capsys.readouterr().out)
     assert record["history"] == ["What was Apple's revenue in fiscal 2024?"] and record["question"] == "And in fiscal 2023?"
+
+
+@pytest.mark.parametrize("question", ["", "   "])
+def test_ask_refuses_an_empty_question(question, capsys):
+    from scripts import ask
+    with pytest.raises(SystemExit) as exit_info:
+        ask.main([question], nodes=stub_nodes(), limits=LIMITS)
+    assert exit_info.value.code == 2 and "empty" in capsys.readouterr().err
+
+
+def test_ask_drops_empty_history_and_needs_no_env_with_given_nodes(monkeypatch, capsys):
+    import core.settings
+    from scripts import ask
+
+    def broken():
+        raise ValueError("2 validation errors for Settings")
+
+    monkeypatch.setattr(core.settings, "get_settings", broken)
+    assert ask.main(["And in fiscal 2023?", "--history", " ", "--json"], nodes=stub_nodes()) == 0
+    assert json.loads(capsys.readouterr().out)["history"] == []
 
 
 def test_ask_reports_an_incomplete_env(monkeypatch, capsys):
@@ -170,6 +195,29 @@ def test_expectation_met(expect, rule, rec, met):
     assert rd.expectation_met({"expect": expect, "refusal_rule": rule}, rec)[0] is met
 
 
+def test_an_answer_that_does_not_name_the_company_is_not_met():
+    item = {"expect": "answer", "refusal_rule": None, "companies": ["PFE", "JNJ"]}
+    assert rd.expectation_met(item, record(answer="Pfizer had the higher net income."))[0] is False
+    assert rd.expectation_met(item, record(answer="Johnson & Johnson's beat Pfizer's."))[0] is True
+
+
+def test_a_budget_stop_keeps_the_queries_already_answered(tmp_path):
+    calls = []
+
+    async def planner(state):
+        calls.append(state["question"])
+        if len(calls) > 2:
+            raise rd.BudgetExceeded("the budget of 2 live requests is used up")
+        return {"plan": Plan(reasoning="x", refuse=True, refusal_rule="R7", steps=[])}
+
+    nodes = stub_nodes()
+    code = rd.main(["--out-dir", str(tmp_path), "--stem", "t"],
+                   nodes=g.Nodes(planner, nodes.executor, nodes.composer, nodes.critic), limits=LIMITS)
+    records = jsonl(tmp_path / "t.jsonl")
+    assert code == 2 and [r["id"] for r in records] == ["demo-01", "demo-02"]
+    assert "Incomplete: stopped before demo-03" in (tmp_path / "t.md").read_text(encoding="utf-8")
+
+
 def test_a_wrong_development_value_is_not_met():
     item = {"expect": "answer", "refusal_rule": None}
     assert rd.expectation_met(item, record(), dev_value_ok=False)[0] is False
@@ -235,7 +283,9 @@ def test_the_runner_meets_expectations_when_the_nodes_answer(tmp_path):
             return {"draft": AnswerContract(answer=refusal_answer(d["refusal_rule"], "Apple's total revenue for "
                                                                   "fiscal 2024"), verified=False, refused=True,
                                             refusal_rule=d["refusal_rule"])}
-        text = "It does not report that figure." if d["expect"] == "not_reported" else "An answer."
+        from agent.composer import company
+        names = " and ".join(company(t) for t in d["companies"])
+        text = f"{names} does not report that figure." if d["expect"] == "not_reported" else f"{names}: an answer."
         dev = rd.dev_values().get(d["source"], {})
         values = [] if dev.get("gold_value") is None else [Value(
             name="x", value=dev["gold_value"], unit="%", ticker=d["companies"][0], fiscal_year=d["fiscal_years"][0],
@@ -253,7 +303,7 @@ def test_the_runner_meets_expectations_when_the_nodes_answer(tmp_path):
     assert code == 0, [(r["id"], r["why"]) for r in records if not r["met"]]
 
 
-def test_the_budget_stops_live_requests_but_not_cached_ones():
+def test_the_budget_refuses_a_request_once_the_live_ones_reach_it():
     class Usage:
         calls = 0
 

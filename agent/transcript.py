@@ -16,7 +16,7 @@ from agent.graph import AgentRun
 
 
 def verdict(run: AgentRun) -> str:
-    """refused / partial refusal / verified / not verified."""
+    """"refused", "partial refusal, verified", "partial refusal, not verified", "verified" or "not verified"."""
     a = run.answer
     if a.refused:
         return "refused"
@@ -55,6 +55,11 @@ def run_record(run: AgentRun, question: str, history: Sequence[str] | None = Non
     }
 
 
+def _number(x: float) -> str:
+    """A figure as a reader writes it: thousands separators, no exponent, no trailing ".0" (13,600,000,000)."""
+    return f"{int(x):,}" if x == int(x) else f"{x:,}"
+
+
 def _citation_line(c: dict[str, Any]) -> str:
     where = c.get("item") or c.get("concept") or ""
     return f"[{c['ticker']} {c['form']} FY{c['fiscal_year']} {c['fiscal_period']} · {where}] {c['url']}"
@@ -69,10 +74,11 @@ def markdown(record: dict[str, Any], title: str | None = None) -> str:
     lines += [f"**Answer ({record['verdict']}):** {record['answer']}", ""]
     if record["values"]:
         lines.append("**Values:** " + "; ".join(
-            f"{v['name']} = {v['value']:g} {v['unit']} ({v['ticker']} {v['fiscal_period']} {v['fiscal_year']})"
+            f"{v['name']} = {_number(v['value'])} {v['unit']} ({v['ticker']} {v['fiscal_period']} {v['fiscal_year']})"
             for v in record["values"]))
     for c in record["calculations"]:
-        lines.append(f"**Calculation:** {c['operation']} of {c['inputs']} = {c['result']:g}")
+        lines.append(f"**Calculation:** {c['operation']} of {', '.join(_number(x) for x in c['inputs'])} = "
+                     f"{_number(c['result'])}")
     if record["citations"]:
         lines += ["**Citations:**", *[f"- {_citation_line(c)}" for c in record["citations"]]]
     if record["tool_calls"]:
