@@ -1,0 +1,9 @@
+# Streamlit settings for ui/app.py (W2-10), read when `streamlit run ui/app.py` starts from the repo root.
+[client]
+toolbarMode = "minimal"        # no "Deploy" button or developer menu for users
+
+[browser]
+gatherUsageStats = false       # no usage statistics sent to Streamlit
+
+[server]
+headless = true                # do not open a browser window on start (servers and containers)

@@ -133,6 +133,13 @@ uvicorn api.main:app --port 8000
 ```
 It needs `.env` and `data/` like `scripts/ask.py`, and loads the index on start-up (GET /health says "starting" until it is ready, then "ok"). Ask with `POST /ask` and the JSON body `{"question": "What was Apple's total revenue in fiscal 2024?"}`; send the `X-Session-Id` it returns with the next question to keep the conversation ("And in fiscal 2023?"). The interactive docs are at http://localhost:8000/docs. Settings: the `API_*` lines in `.env.example` (ADR-032).
 
+## Running the UI (W2-10)
+```bash
+uvicorn api.main:app --port 8000      # in one terminal
+streamlit run ui/app.py               # in another, then open http://localhost:8501
+```
+The UI talks only to the API (`FINSIGHT_API_URL`, default http://127.0.0.1:8000). Ask a question, then a follow-up in the same chat ("And in fiscal 2024?"); "New conversation" starts over. Each answer shows whether it was verified, its calculation, its figures and links to the SEC filings it cites; "Show trace" shows the run behind it. Optional: `FINSIGHT_TRACE_SESSIONS_URL` (your Langfuse project's sessions page) adds a link to the conversation's traces.
+
 ## Running the tests
 ```bash
 pytest -q
