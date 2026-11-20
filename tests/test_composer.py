@@ -224,12 +224,13 @@ def test_a_passage_figure_in_the_prose_is_backed_without_being_listed():
                 "Revenue | 211,915 | 198,270 | 13,645 | 7%\nMicrosoft Cloud revenue increased 22% driven by Azure.")
     st = state("What drove the change in Microsoft's revenue in fiscal 2023?", plan(step), [done(step, [table])],
                Entities(("MSFT",), (2023,), ("FY",)))
-    llm = FakeLLM(reply("Microsoft's revenue rose 7%, or $13.6 billion, in fiscal 2023, driven by Microsoft Cloud "
+    llm = FakeLLM(reply("Microsoft's revenue rose 7%, or $13,645 million, in fiscal 2023, driven by Microsoft Cloud "
                         "growth of 22% from Azure.", ["P1"]))
     result = run(st, llm)
     d = result.draft
     assert len(llm.calls) == 1 and cm.FALLBACK_NOTE not in result.notes
-    assert {(v.unit, v.value) for v in d.values} == {("%", 7.0), ("USD", 13.6e9), ("%", 22.0)}
+    assert {(v.unit, v.value) for v in d.values} == {("%", 7.0), ("USD", 13645e6), ("%", 22.0)}
+    assert backed(st, "Revenue rose $13.6 billion.") == []          # rounded: it could be another row's number
     assert d.citations[0].chunk_id == table["chunk_id"] and critic_problems(d, st) == []
 
 
@@ -530,11 +531,80 @@ def test_a_change_after_a_comparative_year_is_the_passages(answer, expected):
     assert backed(st, answer) == expected
 
 
-@pytest.mark.parametrize(("answer", "expected"), [("Revenue was $12.5 billion.", [("USD", 12.5e9)]),
-                                                ("Revenue was $11.0 billion.", [])])
-def test_an_earlier_year_holds_only_up_to_the_next_figure(answer, expected):
-    st = passage_state("Revenue in 2023 of $11.0 billion grew to $12.5 billion.")
-    assert backed(st, answer) == expected
+@pytest.mark.parametrize("answer", ["Revenue was $12.5 billion.", "Revenue was $11.0 billion."])
+def test_an_earlier_year_in_the_sentence_decides(answer):
+    """Second review: a figure between the year and the number no longer cancels the year."""
+    assert backed(passage_state("Revenue in 2023 of $11.0 billion grew to $12.5 billion."), answer) == []
+
+
+APPLE_LAYOUT = ("The following table shows net sales (dollars in millions):\n2024 | Change | 2023 | Change | 2022\n"
+                "Net sales by category:\nProducts | 300,000 | 5 | 285,000 | (2) | 290,000")
+DOLLAR_CHANGES = ("(In millions)\n2024 | $ Change | 2023 | $ Change | 2022\n"
+                  "Products | 300,000 | 15,000 | 285,000 | (5,000) | 290,000")
+
+
+@pytest.mark.parametrize(("text", "answer", "expected"), [
+    # change columns between the years (second review, a real 10-K layout)
+    (APPLE_LAYOUT, "Products net sales were $300,000 million.", [("USD", 300000e6)]),
+    (APPLE_LAYOUT, "Products net sales were $290,000 million.", []),
+    (APPLE_LAYOUT, "Products net sales were $285,000 million.", []),
+    # a number in the row label does not shift the columns
+    ("(In millions)\n2024 | 2023\nLevel 2 | 1,000 | 900", "Level 2 assets were $1,000 million.", [("USD", 1000e6)]),
+    ("(In millions)\n2024 | 2023\nLevel 2 | 1,000 | 900", "Level 2 assets were $900 million.", []),
+    # a later table the header does not fit
+    ("(In millions)\n | 2024 | 2023\nNet sales | 12,500 | 11,000\nSegment data:\nAmericas | 500 | 400 | 300",
+     "Americas was $300 million.", []),
+    ("(In millions)\n | 2024 | 2023\nNet sales | 12,500 | 11,000\nSegment data:\nAmericas | 500 | 400 | 300",
+     "Americas was $400 million.", []),
+    # a share count is not dollars; another row's rounded number is not this one
+    ("(In millions, except per share data)\n | 2024 | 2023\nDiluted shares | 15,408 | 15,744",
+     "Revenue was $15,408 million.", []),
+    ("(in millions)\n | 2024 | 2023\nOperating income | 1,512 | 1,200", "Net income was $1.5 billion.", []),
+    ("(in thousands)\n | 2024 | 2023\nNet sales | 12,500 | 11,000", "Net sales were $12,500 thousand.", [("USD", 12.5e6)]),
+    ("(in thousands)\n | 2024 | 2023\nNet sales | 12,500 | 11,000", "Net sales were $11,000 thousand.", []),
+    # the date crossing a line no longer breaks the cell positions (second review: a ValueError)
+    ("(In millions)\n | 2024 | 2023\nCharges | 10\nDecember 31, 2024 | 1,234 | 900", "It was $1,234 million.",
+     [("USD", 1234e6)]),
+    # prose
+    ("Revenue was $12.5 billion and $11.0 billion in 2024 and 2023, respectively.", "Revenue was $11.0 billion.", []),
+    ("In 2023, revenue was $10.0 billion and operating income was $2.0 billion.", "It was $2.0 billion.", []),
+    ("In fiscal 2023, revenue in the U.S. was $50.0 billion.", "It was $50.0 billion.", []),
+    ("Prior year revenue was $11.0 billion.", "It was $11.0 billion.", []),
+    ("Revenue was $12.5 billion compared to the year-earlier $11.0 billion.", "It was $11.0 billion.", []),
+    ("In fiscal 2023, net sales saw a decrease of $10.9 billion, or 3%.", "Net sales fell $10.9 billion, or 3%.", []),
+    ("Services net sales increased 9% or $7.1 billion during 2024 compared to 2023.",
+     "Services rose 9%, or $7.1 billion.", [("%", 9.0), ("USD", 7.1e9)]),
+    ("Revenue grew 1.5% in 2024.", "Gross margin rose 1.5 percentage points.", []),
+    ("Revenue was $  12,500 million in 2024.", "Revenue was $12,500 million.", [("USD", 12500e6)]),
+    # dollar change columns: the one after 2024 is the passage's, the one after 2023 is not
+    (DOLLAR_CHANGES, "Products rose $15,000 million.", [("USD", 15000e6)]),
+    (DOLLAR_CHANGES, "Products fell $5,000 million.", []),
+    # a table comparing two earlier years, its change column after them: the first year is not the passage's
+    ("(In millions)\n2023 | 2022 | Change\nRevenue | 12,500 | 11,000 | 1,500", "Revenue rose $1,500 million.", []),
+    # a row two cells longer than the header
+    ("(In millions)\n | 2024 | 2023\nNet sales | 12,500 | 11,000\nAmericas | 500 | 400 | 300 | 200",
+     "Americas was $500 million.", []),
+    # a header above a paragraph with a figure belongs to another table; then only the first value cell counts
+    ("(In millions)\n2023 | 2024\nRevenue was $5 million lower in the prior year than expected.\nNet sales | 12,500 | 11,000",
+     "Net sales were $12,500 million.", [("USD", 12500e6)]),
+    # a line of numbers without cell marks cannot be told apart
+    ("Net sales $12,500 $11,000", "Net sales were $11,000.", []),
+    ("Net sales $12,500 $11,000", "Net sales were $12,500.", []),
+    # no declared scale: a bare table number is not millions; a cell with its own scale word is not rescaled
+    (" | 2024 | 2023\nNet sales | 12,500 | 11,000", "Net sales were $12,500 million.", []),
+    ("(in thousands)\n | 2024 | 2023\nBacklog | 5 million | 4 million", "The backlog was $5 billion.", []),
+])
+def test_second_review_cases(text, answer, expected):
+    assert backed(passage_state(text), answer) == expected
+
+
+def test_a_count_is_not_backed_by_a_longer_dollar_figure():
+    """Second review: "15" (stores) matched "$15" inside "$15.00 per share"."""
+    st = passage_state("The board declared a dividend of $15.00 per share.")
+    assert backed(st, "The company opened 15 stores and paid a dividend of $15.00 per share.") == [
+        ("USD per share", 15.0)]
+    st = passage_state("Each unit costs $25 and debt was $250 million in fiscal 2024.")
+    assert backed(st, "It opened 25 stores and holds $250 million of debt.") == [("USD", 250e6)]
 
 
 @pytest.mark.parametrize("text", ["Revenue was $11.0 billion in the prior year.",

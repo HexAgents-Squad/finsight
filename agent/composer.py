@@ -82,13 +82,21 @@ MAX_ANSWER_CHARS = 900              # ~120 words (spec §8) with room; the promp
 TABLE_SCALES = {"thousands": 1e3, "millions": 1e6}     # what a statement table declares ("in millions")
 SCALE_DECLARATION = re.compile(r"\bin\s+(thousands|millions)\b", re.IGNORECASE)
 YEAR_IN_TEXT = re.compile(r"(?<![\d.$])(?<!\d,)(?:19|20)\d{2}(?!\d|[.,]\d|%)")    # "2024," yes; "2,024", "2024.5" no
-COMPARATIVE_BEFORE = re.compile(r"\b(?:from|compared\s+(?:with|to)|versus|vs\.?)\s*\$?\s*$", re.IGNORECASE)
+COMPARATIVE_BEFORE = re.compile(r"(?:\b(?:from|versus|vs\.?)\s*|\b(?:compared\s+(?:with|to)|prior|previous|preceding|"
+                                r"year-earlier|year-ago|last\s+year|a\s+year\s+(?:earlier|ago))\b[^$\d]{0,25}?)"
+                                r"\$?\s*\(?\s*$", re.IGNORECASE)
+RESPECTIVELY = re.compile(r"\brespectively\b", re.IGNORECASE)
+SENTENCE_BREAK = re.compile(r"\n|(?<!U\.S\.)(?<!\bInc\.)(?<!\bCorp\.)(?<!\bCo\.)(?<!\bNo\.)(?<!\bvs\.)(?<!\bLtd\.)"
+                            r"(?<=[.;!?])\s+")
+DOLLAR_BEFORE = re.compile(r"\$\s*\(?\s*$")
+POINTS = re.compile(r"\b(?:percentage\s+points?|points?|pts?|pp|bps)\b", re.IGNORECASE)
+NON_MONEY = re.compile(r"\b(?:shares?|employees?|headcount|units?|stores?|customers?|members?|locations?|"
+                       r"subscribers?|users?|vehicles?|days|months|years|ratio|percent(?:age)?)\b", re.IGNORECASE)
 COMPARATIVE_AFTER = re.compile(r"\s*,?\s*(?:in|for|during)\s+(?:the\s+)?(?:prior|previous|preceding|last)\s+"
                                r"(?:fiscal\s+)?(?:year|period|quarter)\b", re.IGNORECASE)
 CHANGE_BEFORE = re.compile(r"\b(?:(?:increase|decrease|change|growth|decline|rise|gain|drop)s?\s+(?:of|by)|up|down|or)"
                            r"\s*\$?\s*$", re.IGNORECASE)
 LETTERS = re.compile(r"[A-Za-z]")
-WORD_AFTER = re.compile(r"[ \t]*[A-Za-z]")
 FIGURE_FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
 # The checks the composer itself controls; invariant 4 (scope), 3 (recomputation) and the metric/unit checks are
 # the critic's, and 7 is written by the critic (with_verification).
@@ -350,50 +358,107 @@ def _bounds(text: str, start: int, end: int, marks: tuple[str, ...]) -> tuple[in
     return left, right
 
 
-def _header_years(above: str) -> list[int]:
-    """The years of the nearest line above a table row that names two or more years and prints no figure."""
-    for line in reversed(above.splitlines()):
-        years = [int(m.group()) for m in YEAR_IN_TEXT.finditer(line)]
-        if len(years) >= 2 and not located_figures(line):
-            return years
-    return []
+def _cell_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of a table line's cells (ingest/sections.py joins a row's non-empty cells with " | ")."""
+    spans, left = [], 0
+    for i, ch in enumerate(line):
+        if ch == "|":
+            spans.append((left, i))
+            left = i + 1
+    return [*spans, (left, len(line))]
+
+
+def _table_header(text: str, line_start: int) -> list[str] | None:
+    """The header cells of the table a row sits in: the nearest table line above it that names a year in two or
+    more cells and prints no figure, passing other rows and sub-headings ("Net sales by category:"), not prose
+    with a figure. Leading empty cells are dropped."""
+    for line in reversed(text[:line_start].splitlines()):
+        if "|" not in line:
+            if located_figures(line) or len(line) > 80:
+                return None
+            continue
+        cells = [line[a:b].strip() for a, b in _cell_spans(line)]
+        if sum(bool(YEAR_IN_TEXT.search(c)) for c in cells) >= 2 and not located_figures(line):
+            while cells and not cells[0]:
+                cells.pop(0)
+            return cells
+    return None
+
+
+def _table_cell_is_year(text: str, line_start: int, line: str, pos: int, fiscal_year: Any) -> bool:
+    """A table cell's number is the passage's fiscal year's. A row is its label then its value cells, aligned
+    from the right with the header's cells (the header has no label cell, or one without a year). A year column
+    must be the passage's year; a change column between year columns is the year on its left ("2024 | Change |
+    2023 | Change | 2022"), one after them all is the change into the first year ("2023 | 2022 | Change"). With
+    no header only the first value cell counts (statement tables put the newest year first); a number in the
+    label ("Level 2") or a row the header does not fit never counts."""
+    cells = _cell_spans(line)
+    index = next(i for i, (a, b) in enumerate(cells) if a <= pos <= b)     # 0: the label, never a year column
+    values = len(cells) - 1
+    header = _table_header(text, line_start)
+    if header is None:
+        return index == 1
+    extra = len(header) - values
+    if extra < 0 or any(YEAR_IN_TEXT.search(c) for c in header[:extra]):
+        return False
+    columns = header[extra:]
+    years = [(i, int(m.group())) for i, c in enumerate(columns) if (m := YEAR_IN_TEXT.search(c))]
+    column = index - 1
+    own = dict(years).get(column)
+    if own is not None:
+        return own == fiscal_year
+    if any(i > column for i, _ in years):
+        left = [y for i, y in years if i < column]
+        return bool(left) and left[-1] == fiscal_year
+    return bool(years) and years[0][1] == fiscal_year
+
+
+def _sentence(text: str, start: int, end: int) -> tuple[int, int]:
+    """The sentence around text[start:end] ("U.S." and "Inc." do not end one)."""
+    left = 0
+    for m in SENTENCE_BREAK.finditer(text, 0, start):
+        left = m.end()
+    m = SENTENCE_BREAK.search(text, end)
+    return left, (m.start() if m else len(text))
+
+
+def _prose_is_year(text: str, start: int, end: int, fiscal_year: Any) -> bool:
+    """A number in prose is the passage's fiscal year's: not in a "respectively" sentence; a year in its own
+    clause after it decides ("$1.0 billion during 2023 compared to 2022"); else not after "from"/"versus" or a
+    comparative word with no figure between ("prior year revenue was $11.0 billion"), nor before "in the prior
+    year"; else a change ("an increase of $2.8 billion, or 6%") is the current year's when the sentence names
+    the passage's year or none; else the last year earlier in the sentence decides; else it is the passage's."""
+    s_start, s_end = _sentence(text, start, end)
+    if RESPECTIVELY.search(text, s_start, s_end):
+        return False
+    _, clause_end = _bounds(text, start, end, (", ", "; "))
+    after = YEAR_IN_TEXT.search(text, end, min(clause_end, s_end))
+    if after:
+        return int(after.group()) == fiscal_year
+    before = text[s_start:start]
+    if COMPARATIVE_BEFORE.search(before) or COMPARATIVE_AFTER.match(text[end:s_end]):
+        return False
+    years = [int(m.group()) for m in YEAR_IN_TEXT.finditer(text, s_start, s_end)]
+    if CHANGE_BEFORE.search(before):
+        return not years or fiscal_year in years
+    earlier = [int(m.group()) for m in YEAR_IN_TEXT.finditer(text, s_start, start)]
+    return not earlier or earlier[-1] == fiscal_year
 
 
 def belongs_to_year(text: str, start: int, end: int, fiscal_year: Any) -> bool:
     """Whether the number printed at text[start:end] is the passage's own fiscal year's, not a comparative one
-    (seen in review: a prior-year figure read from a passage would carry the passage's fiscal year).
-    - In a table row (a line of two or more figures with no words between them) the column's year is read from
-      the nearest header line above it (two or more years and no figures): a year column must be the passage's
-      year, a column past the year columns (a change, a percentage change) is the passage's. With no header only
-      the first column is: a filing's statement tables put the newest year first.
-    - In prose, the year the number is attached to: a year in its own clause after it ("$43.0 billion in 2022")
-      decides; else a number right after "from", "compared to" or "versus", or right before "in the prior year",
-      is not; else a change ("an increase of $2.8 billion, or 6%") is the passage's; else a year earlier in its
-      sentence with no figure between them decides; else it is the passage's (live, dev-E02: "$45.8 billion in
-      2023, compared to $43.0 billion in 2022, an increase of $2.8 billion, or 6%")."""
+    (two reviews and the live re-check: a prior-year figure read from a passage would carry the passage's fiscal
+    year). Conservative on purpose: a number refused here costs a re-ask or the template answer, a number wrongly
+    accepted is a wrong answer marked verified. Table lines (with " | ") go by their header
+    (_table_cell_is_year), a line of bare numbers without cell marks never counts, prose goes by _prose_is_year."""
     line_start, line_end = _bounds(text, start, end, ("\n",))
     line = text[line_start:line_end]
-    row = [(s, e) for _, s, e in located_figures(line)]
-    if len(row) >= 2 and not any(LETTERS.search(line[a[1]:b[0]]) for a, b in zip(row, row[1:], strict=False)):
-        column = [s for s, _ in row].index(start - line_start)
-        header = _header_years(text[:line_start])
-        if not header:
-            return column == 0
-        return column >= len(header) or header[column] == fiscal_year
-    s_start, s_end = _bounds(text, start, end, ("\n", ". ", "; "))
-    _, clause_end = _bounds(text, start, end, ("\n", ". ", "; ", ", "))
-    after = YEAR_IN_TEXT.search(text, end, clause_end)
-    if after:
-        return int(after.group()) == fiscal_year
-    before = text[max(s_start, start - 30):start]
-    if COMPARATIVE_BEFORE.search(before) or COMPARATIVE_AFTER.match(text[end:s_end]):
+    if "|" in line:
+        return _table_cell_is_year(text, line_start, line, start - line_start, fiscal_year)
+    found = located_figures(line)
+    if len(found) >= 2 and not any(LETTERS.search(line[a[2]:b[1]]) for a, b in zip(found, found[1:], strict=False)):
         return False
-    if CHANGE_BEFORE.search(before):
-        return True
-    earlier = list(YEAR_IN_TEXT.finditer(text, s_start, start))
-    if earlier and not located_figures(text[earlier[-1].end():start]):
-        return int(earlier[-1].group()) == fiscal_year
-    return True
+    return _prose_is_year(text, start, end, fiscal_year)
 
 
 def _printed_in(hit: dict[str, Any], figure: PassageFigure) -> bool:
@@ -424,12 +489,12 @@ def backing_unit(fig: Figure, answer: str) -> str | None:
     """How the answer writes a figure it took from a passage without listing it: a percentage, a dollar amount
     per share, or a dollar amount ("$" before it). Anything else (a count, a note number, a product name's
     number) is not backed automatically: the model has to list it."""
-    compact = answer.replace("$ ", "$")
     if fig.percent:
-        return "%"
-    if f"${fig.text} per share" in compact:
+        return None if POINTS.search(fig.text) else "%"         # percentage points are not a percentage
+    number = re.escape(fig.text)
+    if re.search(rf"\$\s?{number}\s+per\s+share", answer):
         return "USD per share"
-    if f"${fig.text}" in compact:
+    if re.search(rf"\$\s?{number}(?![.,]?\d)", answer):         # not "$15" inside "$15.00"
         return "USD"
     return None
 
@@ -440,25 +505,38 @@ def _table_scales(text: str) -> list[float]:
 
 
 def passage_printing(fig: Figure, unit: str, hits: list[tuple[str, dict[str, Any]]]) -> tuple[str, dict[str, Any]] | None:
-    """The first of the passages the answer used that prints its figure for the passage's own fiscal year: a
-    percentage as a percentage; a dollar amount with "$" before it, or (dollars only) a bare number in a table
-    the passage declares in thousands or millions ("$13.6 billion" from "13,623" under "in millions"), not
-    followed by a word ("2,100 employees")."""
+    """The first of the passages the answer used that prints its figure, at the same precision (an answer that
+    rounds could be reading another row), for the passage's own fiscal year (belongs_to_year): a percentage as a
+    percentage; a dollar amount with "$" before it; or (dollars only) a bare number in a table
+    cell when the passage declares "in thousands" or "in millions" and the row's label is not a count ("13,623"
+    under "in millions" for "$13,623 million"; never "Diluted shares | 15,408")."""
     for pid, hit in hits:
         text = shown_text(hit)
         scales = [1.0, *(_table_scales(text) if unit == "USD" else [])]
         for printed, start, end in located_figures(text):
-            if printed.percent != fig.percent or not belongs_to_year(text, start, end, hit.get("fiscal_year")):
+            if printed.percent != fig.percent:
                 continue
             for s in scales:
                 if abs(printed.value * s - fig.value) > fig.tolerance + printed.tolerance * s + 1e-9 * max(1.0, fig.value):
                     continue
-                if s == 1.0 and unit != "%" and "$" not in text[max(0, start - 2):start]:
+                if fig.tolerance > printed.tolerance * s * (1 + 1e-9):
                     continue
-                if s != 1.0 and (LETTERS.search(printed.text) or WORD_AFTER.match(text, end)):
+                if s == 1.0 and unit != "%" and not DOLLAR_BEFORE.search(text, max(0, start - 4), start):
                     continue
-                return pid, hit
+                if s != 1.0 and not _money_cell(text, start, end, printed):
+                    continue
+                if belongs_to_year(text, start, end, hit.get("fiscal_year")):
+                    return pid, hit
     return None
+
+
+def _money_cell(text: str, start: int, end: int, printed: Figure) -> bool:
+    """A bare number in a table cell whose row label is not a count of something (shares, employees, stores)."""
+    if LETTERS.search(printed.text):
+        return False
+    line_start, line_end = _bounds(text, start, end, ("\n",))
+    line = text[line_start:line_end]
+    return "|" in line and not NON_MONEY.search(line[:line.index("|")])
 
 
 def _backing_value(fig: Figure, unit: str, hit: dict[str, Any]) -> Value:
