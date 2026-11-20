@@ -191,12 +191,40 @@ def copies(sheet: Path, names: list[str], out_dir: Path, pending: bool = False) 
 
 
 # --------------------------------------------------------------------------------------------- handout
-def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: bool = False) -> str:
+def agent_evidence(runs_dir: Path, run_ids: set[str]) -> dict[str, list[tuple[str, str, str]]]:
+    """Question id -> what the agent runs' tools returned for it, once each, in call order: (tool, source, text).
+    The agent (W2-11, A runs) retrieved for itself, so its answers rest on these, not on the pack's passages."""
+    from eval.runs_schema import RunRecord
+    out: dict[str, list[tuple[str, str, str]]] = {}
+    for run_id in sorted(run_ids):
+        path = runs_dir / f"{run_id}.jsonl"
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            rec = RunRecord.model_validate_json(line)
+            seen = out.setdefault(rec.id, [])
+            for call in rec.tool_calls or []:
+                for e in call.evidence:
+                    if (call.tool, e.source, e.text) not in seen:
+                        seen.append((call.tool, e.source, e.text))
+    return out
+
+
+def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: bool = False,
+            runs_dir: Path | None = None) -> str:
     """Markdown: for every question with a "grade" row, the question, the gold answer and the passages a RAG run
-    saw, passages from the gold source first. It names no model: a question's passages are the same for every run
-    (the closed-book run saw none), and questions appear in sheet order. pending: only the ungraded rows'."""
+    saw, passages from the gold source first; where an agent run (A1, ...) has a grade row for the question, also
+    what its tools returned (it searched for itself). It names no model: a question's passages are the same for
+    every RAG run (the closed-book run saw none), and questions appear in sheet order. pending: only the ungraded
+    rows'. `runs_dir` holds the agent runs files (default eval/results/model_runs)."""
     rows = base_rows(sheet, pending)
-    ids = {r["key"]: r["id"] for r in csv.DictReader(key.open(encoding="utf-8"))}
+    keyed = {r["key"]: (r["run_id"], r["id"]) for r in csv.DictReader(key.open(encoding="utf-8"))}
+    ids = {k: qid for k, (_, qid) in keyed.items()}
+    agent_rows = {k for k, (run_id, _) in keyed.items() if run_id.startswith("A")}
+    graded = {r["key"] for r in rows if r["task"] == GRADE}
+    retrieved = agent_evidence(runs_dir or RESULTS_DIR / "model_runs",
+                               {keyed[k][0] for k in graded & agent_rows})
+    agent_questions = {keyed[k][1] for k in graded & agent_rows}
     gold = {i.id: i for i in validate_file(gold_file).items}
     packs = {p["id"]: p for p in (json.loads(x) for x in pack_file.read_text(encoding="utf-8").splitlines() if x)}
     seen, out = [], ["# Passages for the grade rows (W1-14)", "",
@@ -221,6 +249,15 @@ def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: b
             out += [f"**{star}{p['citation']}**", "", p["text"].strip(), ""]
         if not passages:
             out += ["(no passages)", ""]
+        if qid in agent_questions:
+            found = retrieved.get(qid, [])
+            out += ["### What a system that searched for itself retrieved", "",
+                    "One of the answers to this question did not see the passages above: it rests on these.", ""]
+            for tool, source, text in found:
+                label = source.replace("_", " ")         # a chunk id read as words: AAPL 10-K 2024 Item7 C3 0012
+                out += [f"**{label}** ({tool})", "", text.strip() or "(no figures)", ""]
+            if not found:
+                out += ["(nothing: it answered without a tool)", ""]
     return "\n".join(out)
 
 
