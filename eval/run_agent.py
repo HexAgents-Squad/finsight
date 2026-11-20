@@ -17,7 +17,9 @@ tools on data/. Each question is a RunRecord (eval/runs_schema.py) with:
 The meta file pins the prompts (planner and composer sha256, tests/test_planner.py and tests/test_composer.py),
 the limits, the retrieval settings, the requests sent and the packs read. Nothing is written until every question
 has a record; a run stopped by the budget is re-run with a larger one and replays the answered questions from
-the reply cache for free.
+the reply cache for free. After a fix to how a run is recorded or mapped (not to the agent), `--replay-of <the
+earlier runs file>` re-derives the file from the cache and keeps the earlier run's timings, requests and dates,
+only if every answer and tool call is the same; the meta's `replay` says when and with which code.
 Exit codes: 0 = every question answered, 1 = some questions raised (recorded as errors), 2 = setup or budget.
 """
 from __future__ import annotations
@@ -53,9 +55,7 @@ from eval.runs_schema import (  # noqa: E402
 RUNS_DIR = RESULTS_DIR / "model_runs"
 DEV_RUNS_DIR = RESULTS_DIR / "dev" / "model_runs"
 RUN_ID = "A1_qwen3-8b_agent_think-off_a-v1"
-# Keys whose numbers are not figures a model could quote: years, periods, counts
-NON_FIGURE_KEYS = frozenset({"fiscal_year", "years", "fiscal_period", "k", "rank", "n_tokens"})
-PERCENT_KEYS = frozenset({"value", "result", "original_value"})
+CALCULATOR = "calculate"
 
 
 @dataclass(frozen=True)
@@ -84,26 +84,48 @@ def figure_text(value: Any) -> str:
     return format(value, "f").rstrip("0").rstrip(".") or "0"
 
 
-def numbers_text(d: dict[str, Any]) -> str:
-    """The figures of one tool output (a fact, a calculation): every number but years and counts, a percentage
-    marked as one (a calculator's 22.1 with unit "%" is "22.1%", which is what an answer prints)."""
-    percent = d.get("unit") == "%"
-    out = []
-    for key, v in d.items():
-        if key in NON_FIGURE_KEYS:
-            continue
-        for x in v if isinstance(v, list) else [v]:
-            if isinstance(x, (int, float)) and not isinstance(x, bool):
-                out.append(figure_text(x) + ("%" if percent and key in PERCENT_KEYS else ""))
-    return " ".join(out)
+def is_number(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def percent_text(x: Any) -> str:
+    return figure_text(x) + "%"
+
+
+def fact_evidence(x: dict[str, Any]) -> Evidence:
+    """One XBRL fact (a get_financial_fact result, or a compare_periods row): its value, its original value only when
+    a later filing restated it, and on a period row the tool's year-on-year growth as a percentage (computed from
+    the fetched facts, so it is evidence like them). The label says whose figure it is, for a grader."""
+    nums = [figure_text(x["value"])] if is_number(x.get("value")) else []
+    if is_number(x.get("original_value")) and x["original_value"] != x.get("value"):
+        nums.append(figure_text(x["original_value"]))
+    if is_number(x.get("yoy_growth_pct")):
+        nums.append(percent_text(x["yoy_growth_pct"]))
+    what = x.get("label") or x.get("metric") or x["concept"]
+    label = " ".join(str(p) for p in (x.get("ticker"), x.get("form"), f"FY{x.get('fiscal_year')}",
+                                      x.get("fiscal_period"), "·", what, f"({x.get('unit')})") if p)
+    return Evidence(source=f"{x['concept']} {x.get('accession_no') or ''}".strip(), text=" ".join(nums), label=label)
+
+
+def calculation_evidence(x: dict[str, Any]) -> list[Evidence]:
+    """A calculation's result, never its inputs (the planner chose them): the scorer counts it as evidence only when
+    each input is a figure the run fetched (score_answers.agent_texts), so an invented input passed through the
+    calculator is not "supported"."""
+    if not is_number(x.get("result")):
+        return []
+    text = percent_text(x["result"]) if x.get("unit") == "%" else figure_text(x["result"])
+    inputs = ", ".join(figure_text(i) for i in x.get("inputs") or [] if is_number(i))
+    return [Evidence(source=CALCULATOR, text=text, label=f"{x.get('operation', '')} of {inputs}".strip())]
 
 
 def evidence(tool: str, output: Any) -> list[Evidence]:
-    """What a tool call returned, as the scorer reads it: each passage (search_filings), each XBRL fact (a fact or a
-    period comparison's rows) by "<concept> <accession_no>", and a calculation's numbers by the tool's name. An
-    error returned nothing."""
+    """What a tool call returned, as the scorer reads it: each passage (search_filings) by chunk_id, each XBRL fact
+    (a fact or a period comparison's rows) by "<concept> <accession_no>" (fact_evidence), a calculation's result by
+    the tool's name (calculation_evidence). An error returned nothing."""
     if isinstance(output, dict) and isinstance(output.get("error"), dict):
         return []
+    if tool == CALCULATOR:
+        return calculation_evidence(output) if isinstance(output, dict) else []
     found: list[Evidence] = []
 
     def walk(x: Any) -> None:
@@ -112,19 +134,16 @@ def evidence(tool: str, output: Any) -> list[Evidence]:
                 walk(y)
         elif isinstance(x, dict):
             if isinstance(x.get("chunk_id"), str) and isinstance(x.get("text"), str):
-                found.append(Evidence(source=x["chunk_id"], text=x["text"]))
+                label = " ".join(str(x[k]) for k in ("ticker", "form", "fiscal_year", "fiscal_period", "item")
+                                 if x.get(k))
+                found.append(Evidence(source=x["chunk_id"], text=x["text"], label=label or None))
             elif isinstance(x.get("concept"), str):
-                found.append(Evidence(source=f"{x['concept']} {x.get('accession_no') or ''}".strip(),
-                                      text=numbers_text(x)))
+                found.append(fact_evidence(x))
             else:
                 for y in x.values():
                     walk(y)
 
     walk(output)
-    if not found and isinstance(output, dict):
-        text = numbers_text(output)
-        if text:
-            found.append(Evidence(source=tool, text=text))
     return found
 
 
@@ -148,24 +167,33 @@ def b0_answer(record: dict[str, Any]) -> B0Answer:
     - answer, refused, refusal_rule: as the agent gave them;
     - value and unit: the last calculation's result (a ratio, a change) when there is a calculation, else the one
       value when the answer has exactly one, else none (several values without a calculation: the scorer then says
-      "no value" and a grader can overturn it on the label row);
+      "no value" and a grader can overturn it on the label row); and only when the answer's text states that
+      figure and does not say the figure asked is not reported (B0's model chose whether to fill `value`; the
+      mapping must not give an answer a figure it does not state, nor turn the related figure a "not reported"
+      answer offers, "it reports current liabilities of $179,431 million", into its answer);
     - company: the one ticker of the values (else of the citations), when they name exactly one;
     - fiscal_year: the one fiscal year of the values (else of the citations), when they name exactly one;
     - citations: each source's name (citation_id)."""
+    from core.figures import figures
+    from eval.score_answers import NOT_REPORTED_RE, supported, value_figure
     calcs, values, cites = record["calculations"], record["values"], record["citations"]
     value = unit = None
     if calcs:
         value, unit = calcs[-1].get("result"), calcs[-1].get("unit")
     elif len(values) == 1:
         value, unit = values[0].get("value"), values[0].get("unit")
+    if not is_number(value):
+        value = unit = None
     source = values or cites
-    return B0Answer(answer=record["answer"],
-                    value=value if isinstance(value, (int, float)) and not isinstance(value, bool) else None,
-                    unit=unit if isinstance(unit, str) else None,
-                    company=only([x.get("ticker") for x in source if x.get("ticker")]),
-                    fiscal_year=only([x.get("fiscal_year") for x in source if isinstance(x.get("fiscal_year"), int)]),
-                    citations=[citation_id(c) for c in cites],
-                    refused=bool(record["refused"]), refusal_rule=record["refusal_rule"])
+    answer = B0Answer(answer=record["answer"], value=value, unit=unit if isinstance(unit, str) else None,
+                      company=only([x.get("ticker") for x in source if x.get("ticker")]),
+                      fiscal_year=only([x.get("fiscal_year") for x in source if isinstance(x.get("fiscal_year"), int)]),
+                      citations=[citation_id(c) for c in cites],
+                      refused=bool(record["refused"]), refusal_rule=record["refusal_rule"])
+    if answer.value is not None and (NOT_REPORTED_RE.search(answer.answer)
+                                     or not supported(value_figure(answer), figures(answer.answer))):
+        answer = answer.model_copy(update={"value": None, "unit": None})
+    return answer
 
 
 # --------------------------------------------------------------------------------------------- one question
@@ -204,7 +232,7 @@ def run_record(item: Item, run_id: str, result: Any, spent: Counts) -> RunRecord
                      calculations=rec["calculations"], citations=rec["citations"], notes=rec["notes"],
                      history=rec["history"], plan=rec["plan"], visits=rec["visits"], stop_reason=rec["stop_reason"],
                      node_notes=[str(n) for n in rec["node_notes"]], tool_steps=rec["steps"], tokens=rec["tokens"],
-                     llm_calls=replies, live_requests=spent.calls)
+                     llm_calls=replies, live_requests=spent.calls, cache_hits=spent.cache_hits)
     contract = {k: rec[k] for k in ("answer", "verified", "refused", "refusal_rule", "values", "calculations",
                                     "citations", "notes")}
     return RunRecord(id=item.id, run_id=run_id, raw_reply=json.dumps(contract, ensure_ascii=False),
@@ -274,6 +302,32 @@ def run_meta(run_id: str, pack_files: list[Path], settings: Any, limits: Any, st
         git_commit=git_commit(), started=started, finished=datetime.now(UTC).isoformat(timespec="seconds"))
 
 
+def carry_over(records: list[RunRecord], previous: Path) -> tuple[list[RunRecord], dict[str, Any]]:
+    """`records`, re-derived from the reply cache after a runner fix (`--replay-of`), with the earlier run's timings
+    and cost: a replay's cache hits take no time and send nothing, but the answers are the earlier run's, so its
+    seconds, requests and tokens are the ones to report. Refused (ValueError) unless every question has the same
+    answer and the same tool calls as in `previous` (that runs file, read as JSON: it may predate fields added since).
+    Returns the records and the earlier meta."""
+    prev = {r["id"]: r for r in map(json.loads, previous.read_text(encoding="utf-8").splitlines()) if r}
+    prev_meta = json.loads(previous.with_name(previous.stem + ".meta.json").read_text(encoding="utf-8"))
+    if set(prev) != {r.id for r in records}:
+        raise ValueError(f"{previous.name} has other questions")
+    out = []
+    for r in records:
+        p = prev[r.id]
+        same_calls = [(c.tool, c.arguments, c.error) for c in r.tool_calls or []] == \
+            [(c["tool"], c["arguments"], c.get("error")) for c in p.get("tool_calls") or []]
+        if r.error or p.get("error") or json.loads(r.raw_reply) != json.loads(p["raw_reply"]) or not same_calls:
+            raise ValueError(f"{r.id}: the replay's answer or tool calls differ from {previous.name}; not a replay")
+        pa = p["agent"]
+        out.append(r.model_copy(update={
+            "latency_s": p["latency_s"], "cached": p["cached"], "retries": p["retries"],
+            "prompt_tokens": p["prompt_tokens"], "completion_tokens": p["completion_tokens"],
+            "agent": r.agent.model_copy(update={"llm_calls": pa["llm_calls"], "live_requests": pa["live_requests"],
+                                                "cache_hits": pa.get("cache_hits", 0)})}))
+    return out, prev_meta
+
+
 async def run_real(items: list[Item], settings: Any, max_requests: int, limits: Any,
                    run_id: str) -> tuple[list[RunRecord], str | None, Any]:
     from agent.nodes import real_nodes
@@ -294,6 +348,9 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     ap.add_argument("--max-requests", type=int, default=400, help="live chat requests this run may send")
     ap.add_argument("--out-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_RUNS_DIR})")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
+    ap.add_argument("--replay-of", type=Path, help="an earlier runs file of this run: re-derive it from the reply "
+                    "cache after a runner fix, keeping its timings and cost (refused unless every answer and tool "
+                    "call is the same)")
     args = ap.parse_args(argv)
     dev = args.questions == "dev"
     out_dir = args.out_dir or (DEV_RUNS_DIR if dev else RUNS_DIR)
@@ -314,17 +371,28 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     started = datetime.now(UTC).isoformat(timespec="seconds")
     if nodes is None:
         records, stopped, usage = asyncio.run(run_real(items, settings, args.max_requests, limits, args.run_id))
-        totals = {"live": usage.calls, "cache_hits": usage.cache_hits, "http_retries": usage.http_retries,
-                  "embed_calls": usage.embed_calls}
+        # chat requests only: a search embeds its query through the search tool's own embedder, not this client
+        totals = {"live": usage.calls, "cache_hits": usage.cache_hits, "http_retries": usage.http_retries}
     else:                                           # given nodes (a test): no client, no requests
         records, stopped = asyncio.run(run_items(items, nodes, limits, args.run_id))
-        totals = {"live": 0, "cache_hits": 0, "http_retries": 0, "embed_calls": 0}
+        totals = {"live": 0, "cache_hits": 0, "http_retries": 0}
     if stopped:
         print(f"{stopped}; {len(records)}/{len(items)} answered, nothing written (re-run with a larger "
               f"--max-requests: the answered questions replay from the reply cache)", file=sys.stderr)
         return 2
     from eval.run_models import write_run  # the runners' one writer: meta, then records, never half a file
-    meta =run_meta(args.run_id, pack_files, settings, limits, started, totals, args.questions)
+    meta = run_meta(args.run_id, pack_files, settings, limits, started, totals, args.questions)
+    if args.replay_of:
+        try:
+            records, prev = carry_over(records, args.replay_of)
+        except (ValueError, OSError, KeyError) as err:
+            print(f"--replay-of {args.replay_of}: {err}; nothing written", file=sys.stderr)
+            return 2
+        replay = {"replayed": meta.finished, "git_commit": meta.git_commit, "requests": totals}
+        # chat requests only (an older meta also had embed_calls, which never saw the search tool's embedder)
+        totals = {k: v for k, v in prev["requests"].items() if k in ("live", "cache_hits", "http_retries")}
+        meta = meta.model_copy(update={"started": prev["started"], "finished": prev["finished"], "requests": totals,
+                                       "git_commit": prev["git_commit"], "replay": replay})
     path = write_run(records, meta, out_dir)
     errors = [r.id for r in records if r.error]
     print(f"wrote {path} ({len(records)} questions; live requests {totals['live']}, cache hits "

@@ -192,8 +192,10 @@ def copies(sheet: Path, names: list[str], out_dir: Path, pending: bool = False) 
 
 # --------------------------------------------------------------------------------------------- handout
 def agent_evidence(runs_dir: Path, run_ids: set[str]) -> dict[str, list[tuple[str, str, str]]]:
-    """Question id -> what the agent runs' tools returned for it, once each, in call order: (tool, source, text).
-    The agent (W2-11, A runs) retrieved for itself, so its answers rest on these, not on the pack's passages."""
+    """Question id -> what the agent runs' tools returned for it, once each, in call order: (tool, what it is,
+    text), "what it is" being the evidence's label (whose figure, which year and unit; a passage's filing and Item)
+    or else its source. The agent (W2-11, A runs) retrieved for itself, so its answers rest on these, not on the
+    pack's passages."""
     from eval.runs_schema import RunRecord
     out: dict[str, list[tuple[str, str, str]]] = {}
     for run_id in sorted(run_ids):
@@ -205,8 +207,9 @@ def agent_evidence(runs_dir: Path, run_ids: set[str]) -> dict[str, list[tuple[st
             seen = out.setdefault(rec.id, [])
             for call in rec.tool_calls or []:
                 for e in call.evidence:
-                    if (call.tool, e.source, e.text) not in seen:
-                        seen.append((call.tool, e.source, e.text))
+                    item = (call.tool, e.label or e.source.replace("_", " "), e.text)
+                    if item not in seen:
+                        seen.append(item)
     return out
 
 
@@ -253,9 +256,8 @@ def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: b
             found = retrieved.get(qid, [])
             out += ["### What a system that searched for itself retrieved", "",
                     "One of the answers to this question did not see the passages above: it rests on these.", ""]
-            for tool, source, text in found:
-                label = source.replace("_", " ")         # a chunk id read as words: AAPL 10-K 2024 Item7 C3 0012
-                out += [f"**{label}** ({tool})", "", text.strip() or "(no figures)", ""]
+            for tool, what, text in found:
+                out += [f"**{what}** ({tool})", "", text.strip() or "(no figures)", ""]
             if not found:
                 out += ["(nothing: it answered without a tool)", ""]
     return "\n".join(out)

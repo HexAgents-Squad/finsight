@@ -59,11 +59,14 @@ class Step(BaseModel):
 
 class Evidence(BaseModel):
     """One thing a tool returned, as the scorer reads it: a passage (source = its chunk_id, text = the passage) or
-    figures (source = "<concept> <accession_no>" for an XBRL fact, the tool's name otherwise; text = the numbers)."""
+    figures (source = "<concept> <accession_no>" for an XBRL fact, "calculate" for a calculation's result; text =
+    the numbers). `label` says it in words for a grader (whose figure, which year, which unit); the scorer never
+    reads it."""
     model_config = ConfigDict(extra="forbid", strict=True)
 
     source: str = Field(min_length=1)
     text: str
+    label: str | None = None
 
 
 class ToolCallRecord(BaseModel):
@@ -79,7 +82,7 @@ class ToolCallRecord(BaseModel):
 class AgentInfo(BaseModel):
     """An agent run's own record of a question (agent/transcript.run_record): the whole answer contract, the plan,
     the critic's verdict and the run's cost. `llm_calls` counts chat replies (cache hits included);
-    `live_requests` the HTTP requests sent (retries included)."""
+    `live_requests` the HTTP requests sent (retries included); `cache_hits` the replies served by the cache."""
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     verdict: str
@@ -97,6 +100,7 @@ class AgentInfo(BaseModel):
     tokens: int = Field(ge=0)
     llm_calls: int = Field(ge=0)
     live_requests: int = Field(ge=0)
+    cache_hits: int = Field(ge=0)
 
 
 class RunRecord(BaseModel):

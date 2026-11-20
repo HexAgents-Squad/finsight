@@ -22,9 +22,10 @@ LIMITS = g.Limits(max_steps=10, max_tokens=12_000, timeout_s=10)
 PACKS = [ra.RESULTS_DIR / ra.GOLD_PACK, ra.RESULTS_DIR / ra.REFUSAL_PACK]
 B0 = sa.B0_REFERENCE
 CHUNK = "AAPL_10-K_2024_Item7_C3_0012"
-FACT = {"value": 391035000000.0, "unit": "USD", "ticker": "AAPL", "fiscal_year": 2024, "fiscal_period": "FY",
-        "concept": "us-gaap:Revenues", "accession_no": "0000320193-24-000123", "filed": "2024-11-01",
-        "url": "https://www.sec.gov/x"}
+FACT = {"value": 391035.0, "unit": "USD millions", "ticker": "AAPL", "fiscal_year": 2024, "fiscal_period": "FY",
+        "duration": "12M", "concept": "us-gaap:Revenues", "accession_no": "0000320193-24-000123", "filed": "2024-11-01",
+        "url": "https://www.sec.gov/x", "metric": "revenue", "label": "total net sales", "form": "10-K",
+        "restated": False, "original_value": 391035.0}          # tools/financial_facts.py's shape (USD millions)
 
 
 def settings(**kw):
@@ -65,23 +66,36 @@ def test_the_agent_sees_only_questions_never_a_gold_answer_or_a_passage():
 
 # ----------------------------------------------------------------------------------------------- evidence
 def test_a_search_returns_its_passages_by_chunk_id():
-    out = [{"chunk_id": CHUNK, "text": "Net sales rose 2% to $391.0 billion.", "ticker": "AAPL"}]
-    assert ra.evidence("search_filings", out) == [Evidence(source=CHUNK, text="Net sales rose 2% to $391.0 billion.")]
+    out = [{"chunk_id": CHUNK, "text": "Net sales rose 2% to $391.0 billion.", "ticker": "AAPL", "form": "10-K",
+            "fiscal_year": 2024, "fiscal_period": "FY", "item": "Item 7", "score": 0.03}]
+    assert ra.evidence("search_filings", out) == [Evidence(source=CHUNK, text="Net sales rose 2% to $391.0 billion.",
+                                                           label="AAPL 10-K 2024 FY Item 7")]
 
 
-def test_a_fact_is_named_by_concept_and_accession_and_keeps_its_figures_but_not_its_year():
+def test_a_fact_is_named_by_concept_and_accession_and_keeps_only_its_value():
     [e] = ra.evidence("get_financial_fact", FACT)
-    assert e.source == "us-gaap:Revenues 0000320193-24-000123" and e.text == "391035000000"
+    assert e.source == "us-gaap:Revenues 0000320193-24-000123" and e.text == "391035"
+    assert e.label == "AAPL 10-K FY2024 FY · total net sales (USD millions)"           # for a grader
 
 
-def test_a_period_comparison_returns_each_year_as_a_fact():
-    rows = [FACT, FACT | {"value": 383285000000.0, "fiscal_year": 2023, "accession_no": "0000320193-23-000106"}]
-    assert [e.text for e in ra.evidence("compare_periods", rows)] == ["391035000000", "383285000000"]
+def test_a_restated_fact_keeps_its_original_value_too():
+    [e] = ra.evidence("get_financial_fact", FACT | {"restated": True, "original_value": 390000.0})
+    assert e.text == "391035 390000"
 
 
-def test_a_calculation_marks_a_percentage_as_one():
+def test_a_period_comparison_returns_each_year_with_its_growth_as_a_percentage():
+    rows = [FACT | {"value": 383285.0, "original_value": 383285.0, "fiscal_year": 2023, "yoy_growth_pct": None,
+                    "yoy_calculation": None},
+            FACT | {"yoy_growth_pct": 2.0, "yoy_calculation": {"operation": "growth", "inputs": [383285.0, 391035.0],
+                                                               "result": 2.0, "unit": "%"}}]
+    assert [e.text for e in ra.evidence("compare_periods", rows)] == ["383285", "391035 2%"]
+
+
+def test_a_calculation_gives_its_result_never_its_inputs():
     out = {"operation": "growth", "inputs": [383285.0, 391035.0], "years": None, "result": 2.02, "unit": "%"}
-    assert ra.evidence("calculate", out) == [Evidence(source="calculate", text="383285 391035 2.02%")]
+    assert ra.evidence("calculate", out) == [Evidence(source="calculate", text="2.02%",
+                                                      label="growth of 383285, 391035")]
+    assert ra.evidence("calculate", out | {"unit": None, "result": 1.69})[0].text == "1.69"
 
 
 def test_an_error_returned_nothing():
@@ -111,14 +125,35 @@ def record(**kw):
 
 
 def test_one_value_is_the_answers_value():
-    a = ra.b0_answer(record(values=[value(391035.0)]))
+    a = ra.b0_answer(record(answer="Apple's total net sales were $391,035 million.", values=[value(391035.0)]))
     assert (a.value, a.unit, a.company, a.fiscal_year) == (391035.0, "USD millions", "AAPL", 2024)
 
 
 def test_a_calculation_wins_over_its_inputs():
-    a = ra.b0_answer(record(values=[value(383285.0, year=2023), value(391035.0)],
+    a = ra.b0_answer(record(answer="Net sales grew 2.02%.", values=[value(383285.0, year=2023), value(391035.0)],
                             calculations=[{"operation": "growth", "result": 2.02, "unit": "%"}]))
     assert (a.value, a.unit, a.company, a.fiscal_year) == (2.02, "%", "AAPL", None)       # two years: no one year
+
+
+def test_a_value_the_answer_does_not_state_is_not_its_value():
+    """B08: the answer says the ratio is not reported; the one fact it fetched (revenue) is no answer to it."""
+    a = ra.b0_answer(record(answer="The ratio is not reported separately.", values=[value(400278.0)]))
+    assert (a.value, a.unit) == (None, None)
+    a = ra.b0_answer(record(answer="It grew.", calculations=[{"operation": "growth", "result": 2.02, "unit": "%"}]))
+    assert a.value is None
+
+
+def test_a_not_reported_answer_has_no_value_even_when_it_offers_a_related_figure():
+    a = ra.b0_answer(record(answer="Amazon does not report total liabilities; it reports total current liabilities "
+                                   "of $179,431 million.", values=[value(179431.0, ticker="AMZN")]))
+    assert a.value is None and a.company == "AMZN"
+    s = sa.check(QUESTIONS["G08"], agent_record("G08", a, []), {}, False, MATCHERS)
+    assert s["correct"] is True                                       # the trap is answered, not given a value
+
+
+def test_a_rounded_statement_of_the_value_counts_as_stating_it():
+    a = ra.b0_answer(record(answer="Apple's total net sales were $391.0 billion.", values=[value(391035.0)]))
+    assert a.value == 391035.0
 
 
 def test_several_values_without_a_calculation_give_no_value_and_two_companies_no_company():
@@ -231,6 +266,52 @@ def test_a_question_that_raises_is_recorded_and_the_run_goes_on(tmp_path, capsys
     assert "errors: " + bad[0].id in capsys.readouterr().out
 
 
+def earlier_run(tmp_path, change=None):
+    """A first run's files, with its own timings and cost (as a live run records them)."""
+    first = tmp_path / "first"
+    assert run_cli(first) == 0
+    path = first / f"{ra.RUN_ID}.jsonl"
+    lines = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+        r = json.loads(line)
+        r["latency_s"], r["cached"] = 4.5 + n, False
+        r["agent"].update(llm_calls=2, live_requests=2)
+        r["agent"].pop("cache_hits")                                   # an older runs file has no such field
+        if change and n == 0:
+            change(r)
+        lines.append(json.dumps(r))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    meta = json.loads((first / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
+    meta.update(started="2026-11-20T20:51:02+00:00", finished="2026-11-20T21:00:21+00:00", git_commit="abc",
+                requests={"live": 204, "cache_hits": 0, "http_retries": 0, "embed_calls": 0})
+    (first / f"{ra.RUN_ID}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    return path
+
+
+def test_a_replay_keeps_the_earlier_runs_timings_cost_and_dates(tmp_path):
+    previous = earlier_run(tmp_path)
+    out = tmp_path / "replay"
+    assert run_cli(out, "--replay-of", str(previous)) == 0
+    recs = [RunRecord.model_validate_json(x) for x in (out / f"{ra.RUN_ID}.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r.latency_s for r in recs[:2]] == [4.5, 5.5] and not any(r.cached for r in recs)
+    assert (recs[0].agent.llm_calls, recs[0].agent.live_requests, recs[0].agent.cache_hits) == (2, 2, 0)
+    meta = json.loads((out / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
+    assert (meta["started"], meta["git_commit"]) == ("2026-11-20T20:51:02+00:00", "abc")
+    assert meta["requests"] == {"live": 204, "cache_hits": 0, "http_retries": 0}       # embed_calls dropped
+    assert meta["replay"]["requests"] == {"live": 0, "cache_hits": 0, "http_retries": 0}
+
+
+@pytest.mark.parametrize("change", [
+    lambda r: r.update(raw_reply=json.dumps(json.loads(r["raw_reply"]) | {"answer": "another answer"})),
+    lambda r: r.update(tool_calls=[{"tool": "calculate", "arguments": {}, "evidence": []}]),
+])
+def test_a_replay_whose_answers_or_tool_calls_differ_is_refused(tmp_path, capsys, change):
+    previous = earlier_run(tmp_path, change)
+    out = tmp_path / "replay"
+    assert run_cli(out, "--replay-of", str(previous)) == 2 and not out.exists()
+    assert "not a replay" in capsys.readouterr().err
+
+
 def test_the_budget_stops_the_run_and_writes_nothing(tmp_path, monkeypatch, capsys):
     from eval.run_demo import BudgetExceeded
 
@@ -245,9 +326,9 @@ def test_the_budget_stops_the_run_and_writes_nothing(tmp_path, monkeypatch, caps
 
 # ----------------------------------------------------------------------------------------------- scoring an agent run
 def agent_record(qid, parsed, calls, **kw):
-    info = AgentInfo(verdict="verified", verified=True, values=[], calculations=[], citations=[], notes=[],
-                     history=[], plan=None, visits={"planner": 1}, stop_reason=None, node_notes=[],
-                     tool_steps=len(calls), tokens=2700, llm_calls=2, live_requests=1)
+    info = AgentInfo(verdict="verified", verified=True, values=[], calculations=kw.pop("calculations", []),
+                     citations=[], notes=[], history=[], plan=None, visits={"planner": 1}, stop_reason=None,
+                     node_notes=[], tool_steps=len(calls), tokens=2700, llm_calls=2, live_requests=1, cache_hits=1)
     fields = {"id": qid, "run_id": ra.RUN_ID, "raw_reply": "{}", "parsed": parsed, "json_valid": True, "retries": 0,
               "prompt_tokens": 2500, "completion_tokens": 200, "latency_s": 3.0, "cached": False,
               "tool_calls": calls, "agent": info} | kw
@@ -258,11 +339,53 @@ QUESTIONS = sa.load_questions(sa.GOLD_FILE, sa.REFUSALS_FILE)
 GOLD_PACKS = sa.load_pack(sa.RESULTS_DIR / sa.GOLD_PACK) | sa.load_pack(sa.RESULTS_DIR / sa.REFUSAL_PACK)
 MATCHERS = sa.company_matchers()
 FACT_CALL = ToolCallRecord(tool="get_financial_fact", arguments={}, evidence=[
-    Evidence(source="us-gaap:Revenues 0000320193-24-000123", text="391035000000")])
+    Evidence(source="us-gaap:Revenues 0000320193-24-000123", text="391035")])
 
 
-def score(qid, parsed, calls):
-    return sa.check(QUESTIONS[qid], agent_record(qid, parsed, calls), GOLD_PACKS.get(qid, {}), False, MATCHERS)
+def score(qid, parsed, calls, **kw):
+    return sa.check(QUESTIONS[qid], agent_record(qid, parsed, calls, **kw), GOLD_PACKS.get(qid, {}), False, MATCHERS)
+
+
+def fact_call(*values):
+    return ToolCallRecord(tool="get_financial_fact", arguments={},
+                          evidence=[Evidence(source=f"us-gaap:X {n}", text=ra.figure_text(v)) for n, v in enumerate(values)])
+
+
+def calc_call(inputs, result, unit="%"):
+    out = {"operation": "growth", "inputs": inputs, "result": result, "unit": unit}
+    return ToolCallRecord(tool="calculate", arguments={"operation": "growth", "inputs": inputs},
+                          evidence=ra.evidence("calculate", out))
+
+
+def test_a_calculation_is_evidence_only_when_its_inputs_were_fetched():
+    """The planner chooses a calculation's inputs: an invented input passed through the calculator must not make
+    the result "supported" (B0's derived numbers never had that benefit)."""
+    fetched = sa.agent_texts(agent_record("C01", None, [fact_call(8516.0, 14276.0), calc_call([8516.0, 14276.0], 67.6)]))
+    assert fetched == ["8516", "14276", "67.6%"]
+    invented = sa.agent_texts(agent_record("C01", None, [fact_call(8516.0), calc_call([8516.0, 14000.0], 64.4)]))
+    assert invented == ["8516"]
+    chained = sa.agent_texts(agent_record("C01", None, [fact_call(10.0, 20.0), calc_call([10.0, 20.0], 30.0, None),
+                                                        calc_call([30.0, 20.0], 50.0)]))
+    assert chained == ["10", "20", "30", "50%"]                       # an earlier result may feed a later one
+    assert sa.agent_texts(agent_record("C01", None, [calc_call([], 5.0)])) == []         # no inputs: nothing
+
+
+def test_a_derived_number_from_an_invented_input_is_unsupported():
+    q = QUESTIONS["C01"]
+    a = B0Answer(answer=f"It grew 64.4%. {q.gold_answer}", value=64.4, unit="%", refused=False)
+    s = score("C01", a, [fact_call(8516.0), calc_call([8516.0, 14000.0], 64.4)])
+    assert "64.4%" in s["checks"]["unsupported_numbers"]
+
+
+def test_a_wrong_calculated_value_is_a_wrong_line_item_or_an_invented_number_never_a_slip():
+    calc = [{"operation": "growth", "inputs": [1.0, 2.0], "result": 100.0, "unit": "%"}]
+    a = B0Answer(answer="It grew 100%.", value=100.0, unit="%", refused=False)
+    fetched = score("C01", a, [fact_call(1.0, 2.0), calc_call([1.0, 2.0], 100.0)], calculations=calc)
+    assert fetched["correct"] is False and fetched["suggested_label"] == "wrong_line_item"
+    invented = score("C01", a, [fact_call(1.0), calc_call([1.0, 2.0], 100.0)], calculations=calc)
+    assert invented["suggested_label"] == "invented_number"
+    pack_run = sa.check(QUESTIONS["C01"], agent_record("C01", a, [], tool_calls=None, agent=None), {}, False, MATCHERS)
+    assert pack_run["suggested_label"] != "wrong_line_item"           # B0's labelling is unchanged
 
 
 def test_an_agent_answer_is_checked_against_what_its_tools_returned():
@@ -290,12 +413,27 @@ def test_an_agent_never_saw_the_earlier_answer_so_its_figures_are_not_evidence()
     assert rag["checks"]["unsupported_numbers"] == []                  # a pack run saw the history's answer
 
 
-def test_gold_figures_count_as_retrieved_when_a_fact_holds_them_in_units():
+def test_gold_figures_count_as_retrieved_digit_for_digit_in_a_facts_millions():
     q = QUESTIONS["A01"]                                               # gold $391,035 million
-    assert sa.gold_figures_in_pack(q, {}, ["391035000000"]) is True
-    assert sa.gold_figures_in_pack(q, {}, ["391035"]) is True
-    assert sa.gold_figures_in_pack(q, {}, ["3910350000000", "1391035000000"]) is False
+    assert sa.gold_figures_in_pack(q, {}, ["391035"]) is True and sa.gold_figures_in_pack(q, {}, ["391,035"]) is True
+    assert sa.gold_figures_in_pack(q, {}, ["391035000000", "1391035", "391035.5"]) is False
     assert sa.gold_figures_in_pack(q, {}, []) is False
+
+
+def test_the_agent_table_counts_cache_hits_as_recorded_even_with_retries():
+    meta = RunMeta(run_id=ra.RUN_ID, model="m", endpoint="hosted", context="agent", thinking=False, temperature=0.0,
+                   max_tokens=1, prompt_version="a", context_pack="p", context_pack_sha256={})
+    scored = [{"id": "A01", "answer_type": "short_numeric", "correct": True, "verified": True, "tool_steps": 1,
+               "tool_errors": 0, "stop_reason": None, "live_requests": 2, "cache_hits": 0, "calls": 1,
+               "several_values": False},                         # 2 requests (1 HTTP retry) for 1 reply
+              {"id": "A02", "answer_type": "short_numeric", "correct": False, "verified": False, "tool_steps": 2,
+               "tool_errors": 1, "stop_reason": "timeout", "live_requests": 0, "cache_hits": 2, "calls": 2,
+               "several_values": False}]
+    text = sa.agent_table([(meta, scored)])
+    assert "| live requests / cache hits (chat replies) | 2 / 2 |" in text
+    assert "| correct among the not verified (decided) | 0/1 |" in text and "| tool calls that returned an error | 1/3 |" in text
+    assert "| stopped by a limit (time, steps, tokens) | 1 (timeout 1) |" in text
+    assert sa.agent_table([(RunMeta(**(meta.model_dump() | {"context": "rag"})), scored)]) == ""
 
 
 # ----------------------------------------------------------------------------------------------- the report
@@ -343,10 +481,12 @@ def test_adding_the_agent_run_changes_no_b0_score(tmp_path):
 def test_the_handout_shows_what_the_agent_retrieved_without_naming_it(tmp_path):
     runs = tmp_path / "runs"
     passage = Evidence(source="MSFT_10-K_2023_Item7_C3_0004", text="Revenue increased $13.6 billion or 7%.")
+    fact = ra.evidence("get_financial_fact", FACT)[0]
     summary = next(q for q in QUESTIONS.values() if q.answer_type == "summary")
     recs = [agent_record(qid, B0Answer(answer=f"answer {qid}", refused=False),
-                         [ToolCallRecord(tool="search_filings", arguments={}, evidence=[passage])] if qid == summary.id
-                         else []) for qid in QUESTIONS]
+                         [ToolCallRecord(tool="search_filings", arguments={}, evidence=[passage]),
+                          ToolCallRecord(tool="get_financial_fact", arguments={}, evidence=[fact])]
+                         if qid == summary.id else []) for qid in QUESTIONS]
     from eval.run_models import write_run
     write_run(recs, RunMeta(run_id=ra.RUN_ID, model="m", endpoint="hosted", context="agent", thinking=False,
                             temperature=0.0, max_tokens=1, prompt_version="a",
@@ -357,5 +497,6 @@ def test_the_handout_shows_what_the_agent_retrieved_without_naming_it(tmp_path):
     key.write_text(f"key,run_id,id\n{k},{ra.RUN_ID},{summary.id}\n", encoding="utf-8")
     text = grading.handout(sheet, key, sa.RESULTS_DIR / sa.GOLD_PACK, sa.GOLD_FILE, runs_dir=runs)
     assert "### What a system that searched for itself retrieved" in text
-    assert "**MSFT 10-K 2023 Item7 C3 0004** (search_filings)" in text and passage.text in text
+    assert "**MSFT 10-K 2023 Item7 C3 0004** (search_filings)" in text and passage.text in text   # no label: id
+    assert "**AAPL 10-K FY2024 FY · total net sales (USD millions)** (get_financial_fact)" in text  # whose figure
     assert ra.RUN_ID not in text and "agent" not in text.lower()

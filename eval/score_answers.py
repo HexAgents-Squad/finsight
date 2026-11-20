@@ -294,9 +294,29 @@ def display_answer(rec: RunRecord) -> str:
     return CITATION_MARK.sub("", text).strip()
 
 
+def input_supported(x: object, refs: list[Figure]) -> bool:
+    """Whether a calculator input is a figure the run fetched (at the precision it was given, either as a plain
+    figure or as a percentage)."""
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    value, tolerance = abs(float(x)), 0.5 * printed_step(x)
+    return any(supported(Figure(value, tolerance, percent, str(x)), refs) for percent in (False, True))
+
+
 def agent_texts(rec: RunRecord) -> list[str]:
-    """What an agent run's tools returned (W2-11): its passages and figures, in call order."""
-    return [e.text for call in rec.tool_calls or [] for e in call.evidence]
+    """What an agent run's tools returned (W2-11), in call order: its passages and fetched figures, and a
+    calculation's result only when every input of that calculation is among them (or is an earlier such result).
+    The planner chooses a calculation's inputs, so counting every result would make any derived number "supported",
+    an invented input included; B0's derived numbers never had that benefit."""
+    fetched = [e.text for call in rec.tool_calls or [] if call.tool != "calculate" for e in call.evidence]
+    refs = [f for t in fetched for f in figures(t)]
+    for call in rec.tool_calls or []:
+        if call.tool == "calculate" and call.evidence and \
+                all(input_supported(x, refs) for x in call.arguments.get("inputs") or [None]):
+            for e in call.evidence:
+                fetched.append(e.text)
+                refs += figures(e.text)
+    return fetched
 
 
 def agent_sources(rec: RunRecord) -> set[str]:
@@ -323,16 +343,13 @@ def gold_figures_in_pack(q: Question, pack: dict, agent: list[str] | None = None
     conversation history (None: the gold answer has no such figure); for an agent run, in what its tools returned
     (`agent`): its own retrieval. Stricter than the hallucination check's rounding match on purpose: "$12.5
     billion" in a passage is not the 12,455 a Q3 question needs (A12), and the context pack's evidence_in_pack only
-    says a passage came from the right section, not that it holds the line. An XBRL fact's figure is in units
-    (391035000000), so a gold figure also counts when it appears with its millions' zeros (391,035 million)."""
+    says a passage came from the right section, not that it holds the line. An XBRL fact is in the gold answers'
+    scale (USD millions: 391035 for $391,035 million), so the same digit-for-digit match applies."""
     wanted = GROUPED_FIGURE.findall(q.gold_answer)
     if q.answer_type != "short_numeric" or not wanted:
         return None
-    if agent is not None:
-        text = " ".join(agent)
-        return all(re.search(rf"(?<![\d,.])(?:{re.escape(f)}|{f.replace(',', '')}(?:000){{0,3}})(?!\d|[,.]\d)", text)
-                   for f in wanted)
-    text = " ".join([p["text"] for p in pack.get("passages", [])] + [h["answer"] for h in pack.get("history", [])])
+    text = " ".join(agent) if agent is not None else \
+        " ".join([p["text"] for p in pack.get("passages", [])] + [h["answer"] for h in pack.get("history", [])])
     return all(re.search(rf"(?<![\d,.])(?:{re.escape(f)}|{f.replace(',', '')})(?!\d|[,.]\d)", text) for f in wanted)
 
 
@@ -370,7 +387,8 @@ def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str
         return out
     if q.answer_type == "short_entity":
         return entity_outcome(q, a, named_field, companies_named(a.answer, matchers), out)
-    return numeric_outcome(q, a, refs, out)
+    exact = agent and rec.agent is not None and bool(rec.agent.calculations)    # its value is the calculator's
+    return numeric_outcome(q, a, refs, out, exact_arithmetic=exact)
 
 
 def refusal_outcome(q: Question, a: B0Answer, out: dict) -> dict:
@@ -425,7 +443,10 @@ def entity_outcome(q: Question, a: B0Answer, in_field: set[str], in_answer: set[
     return out
 
 
-def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> dict:
+def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict, exact_arithmetic: bool = False) -> dict:
+    """`exact_arithmetic`: the value is an agent calculator's result (W2-11), whose arithmetic is exact, so a wrong
+    derived value came from its inputs: a wrong line item when they were fetched figures, an invented number when
+    they were not (never an arithmetic slip)."""
     if a.value is None:
         label = "wrong_line_item" if NOT_REPORTED_RE.search(a.answer) else "malformed_output"
         out.update(reason="no value", suggested_label=label)
@@ -468,6 +489,8 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
         out["suggested_label"] = "wrong_fiscal_year"
     elif checks["wrong_company"]:
         out["suggested_label"] = "wrong_company"
+    elif exact_arithmetic:
+        out["suggested_label"] = "invented_number" if checks["unsupported_numbers"] else "wrong_line_item"
     elif q.category in ("ratio", "period_comparison") or q.unit == "%":
         derived_close = abs(value - gold) <= ARITHMETIC_SLIP_PCT / 100 * abs(gold)
         out["suggested_label"] = "arithmetic_slip" if derived_close or not checks["unsupported_numbers"] \
@@ -511,7 +534,7 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
             a = rec.agent
             s.update(calls=a.llm_calls, verified=a.verified, verdict=a.verdict, stop_reason=a.stop_reason,
                      tool_steps=a.tool_steps, tool_errors=sum(c.error is not None for c in rec.tool_calls or []),
-                     live_requests=a.live_requests,
+                     live_requests=a.live_requests, cache_hits=a.cache_hits,
                      several_values=not a.calculations and len(a.values) > 1)
         scored.append(s)
     return scored
@@ -864,8 +887,8 @@ def agent_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
         stops = Counter(s["stop_reason"] for s in sc if s.get("stop_reason"))
         rows["stopped by a limit (time, steps, tokens)"].append(
             f"{sum(stops.values())}" + (f" ({', '.join(f'{k} {n}' for k, n in sorted(stops.items()))})" if stops else ""))
-        live = sum(s.get("live_requests", 0) for s in sc)
-        rows["live requests / cache hits (chat replies)"].append(f"{live} / {sum(s.get('calls', 0) for s in sc) - live}")
+        rows["live requests / cache hits (chat replies)"].append(
+            f"{sum(s.get('live_requests', 0) for s in sc)} / {sum(s.get('cache_hits', 0) for s in sc)}")
         rows["short numeric answers with several values and no calculation (no single value to score)"].append(
             str(sum(bool(s.get("several_values")) and s["answer_type"] == "short_numeric" for s in sc)))
     out += [f"| {k} | " + " | ".join(v) + " |" for k, v in rows.items()]
