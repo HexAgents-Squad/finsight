@@ -46,18 +46,27 @@ def figures(text: str) -> list[Figure]:
     """The figures in `text`, without dates, bare years, ordinals, footnote markers, Item/form/quarter names and
     passage ids; a percentage range counts as two percentages."""
     clean = PERCENT_RANGE.sub(r"\1% \2%", NOT_A_FIGURE.sub(" ", text))
-    out = []
-    for m in FIGURE.finditer(clean):
-        whole, frac, pct, word = m.group(1), m.group(2) or "", m.group(3), m.group(4)
-        number = float(whole.replace(",", "") + frac)
-        if not math.isfinite(number):                 # hundreds of digits: no figure, and int() would overflow
-            continue
-        if not frac and not pct and not word and "," not in whole and int(number) in YEAR_RANGE:
-            continue                                  # a bare year such as 2024
-        scale = SCALE_WORDS[word.lower()] if word else 1.0
-        decimals = len(frac) - 1 if frac else 0
-        out.append(Figure(number * scale, 0.5 * 10 ** -decimals * scale, bool(pct), m.group(0).strip()))
-    return out
+    return [f for m in FIGURE.finditer(clean) if (f := _figure(m)) is not None]
+
+
+def located_figures(text: str) -> list[tuple[Figure, int, int]]:
+    """figures(text) with where each one is printed (text[start:end]), for checking what a number belongs to
+    (agent/composer.py). The skipped spans are blanked in place, so the positions are the text's own; a
+    percentage range "10-12%" reads as 10 and 12%."""
+    clean = NOT_A_FIGURE.sub(lambda m: " " * len(m.group(0)), text)
+    return [(f, m.start(), m.end()) for m in FIGURE.finditer(clean) if (f := _figure(m)) is not None]
+
+
+def _figure(m: re.Match[str]) -> Figure | None:
+    whole, frac, pct, word = m.group(1), m.group(2) or "", m.group(3), m.group(4)
+    number = float(whole.replace(",", "") + frac)
+    if not math.isfinite(number):                     # hundreds of digits: no figure, and int() would overflow
+        return None
+    if not frac and not pct and not word and "," not in whole and int(number) in YEAR_RANGE:
+        return None                                   # a bare year such as 2024
+    scale = SCALE_WORDS[word.lower()] if word else 1.0
+    decimals = len(frac) - 1 if frac else 0
+    return Figure(number * scale, 0.5 * 10 ** -decimals * scale, bool(pct), m.group(0).strip())
 
 
 def contains_figure(text: str, figure: str) -> bool:

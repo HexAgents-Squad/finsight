@@ -41,6 +41,7 @@ from agent.critic_checks import Violation, with_verification
 from agent.state import AgentState, Verdict
 from core import tracing
 from core.tracing import TraceInfo, Tracer, trace_run
+from retrieval.entities import extract
 
 log = logging.getLogger(__name__)
 
@@ -273,7 +274,7 @@ def thread(session_id: str) -> dict[str, Any]:
 
 async def thread_history(graph: Any, config: dict[str, Any] | None) -> list[str]:
     """The conversation's earlier questions, oldest first, as the checkpointer thread named in `config` keeps them
-    (the last turn's history plus its question); [] without a checkpointer or a thread. Capped at the last
+    (the last turn's history plus its question); [] without a checkpointer or a thread. Capped (cap_history) at the last
     MAX_HISTORY_TURNS questions, so a long conversation does not grow the prompts without bound."""
     thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
     if getattr(graph, "checkpointer", None) is None or not thread_id:
@@ -281,7 +282,27 @@ async def thread_history(graph: Any, config: dict[str, Any] | None) -> list[str]
     snapshot = await graph.aget_state(config)
     values = snapshot.values or {}
     question = values.get("question")
-    return [*(values.get("history") or []), *([question] if question else [])][-MAX_HISTORY_TURNS:]
+    return cap_history([*(values.get("history") or []), *([question] if question else [])])
+
+
+def cap_history(questions: Sequence[str]) -> list[str]:
+    """The last MAX_HISTORY_TURNS questions, oldest first, plus (before them) the latest older question that names
+    a company, a fiscal year or a period when none of the kept ones does: a long run of follow-ups ("And Q3?",
+    "And the margin?") keeps the turn that named the company, so retrieval.entities.from_turns reads the same
+    entities from the capped history as from the whole conversation."""
+    questions = list(questions)
+    kept, older = questions[-MAX_HISTORY_TURNS:], questions[:-MAX_HISTORY_TURNS]
+    if not older:
+        return kept
+    named = [extract(q) for q in kept]
+    anchors: set[int] = set()
+    for field_name in ("tickers", "years", "periods"):
+        if any(getattr(e, field_name) for e in named):
+            continue
+        latest = next((i for i in range(len(older) - 1, -1, -1) if getattr(extract(older[i]), field_name)), None)
+        if latest is not None:
+            anchors.add(latest)
+    return [older[i] for i in sorted(anchors)] + kept
 
 
 def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
@@ -319,7 +340,9 @@ async def run(question: str, history: Sequence[str] | None = None, *, graph: Any
     Memory (W2-06): `history=None` takes the earlier questions from the checkpointer thread in `config` (a graph
     built with in_memory_checkpointer(), config=thread(session_id)), so a follow-up ("And in the third quarter?")
     keeps the company and year of the turn before; without a thread there are none. A given `history` is used as
-    is (the evaluation replays gold chains that way). Either way at most MAX_HISTORY_TURNS earlier questions.
+    is (the evaluation replays gold chains that way). Either way capped by cap_history (the last MAX_HISTORY_TURNS
+    questions and the older turns that named the company, year or period). Runs on one thread must not overlap:
+    the API (W2-09) serialises a session's questions.
 
     `trace` (W2-08) sends the run to Langfuse: one trace tagged q:<question_id>, run:<run_id> and the verdict, with a
     span per node, tool call and LLM call. Without it nothing is traced and no setting is read; `tracer` replaces
@@ -349,7 +372,7 @@ async def _run(question: str, history: Sequence[str] | None, *, graph: Any, limi
         from core.settings import get_settings
         limits = Limits.from_settings(get_settings())
     graph = graph or build_graph()
-    history = (await thread_history(graph, config) if history is None else list(history))[-MAX_HISTORY_TURNS:]
+    history = await thread_history(graph, config) if history is None else cap_history(history)
     state: dict[str, Any] = {}
     started = time.monotonic()
     try:

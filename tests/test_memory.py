@@ -96,8 +96,31 @@ def test_the_history_is_capped():
         result = ask(f"What was Apple's revenue in fiscal {year}?")
     assert len(result.state["history"]) == g.MAX_HISTORY_TURNS
     assert result.state["history"][-1].endswith(f"fiscal {year - 1}?")
-    long = ask("And in fiscal 2023?", history=[f"q{i}" for i in range(20)])
-    assert long.state["history"] == [f"q{i}" for i in range(20 - g.MAX_HISTORY_TURNS, 20)]
+    filler = [f"And the margin, take {chr(97 + i)}?" for i in range(20)]       # names no company, year or period
+    long = ask("And in fiscal 2023?", history=filler)
+    assert long.state["history"] == filler[-g.MAX_HISTORY_TURNS:]
+
+
+def test_the_cap_keeps_the_turn_that_named_the_company():
+    """Review: an anchor turn then seven follow-ups naming no company; the plain cap would drop the anchor."""
+    _, ask = conversation()
+    ask("What was Meta's revenue in the second quarter of fiscal 2025?")
+    for i in range(g.MAX_HISTORY_TURNS + 1):
+        result = ask(f"And its operating income, view {chr(97 + i)}?")
+    assert seen(result) == (("META",), (2025,), ("Q2",))
+    assert result.state["history"][0].startswith("What was Meta's revenue")
+    assert len(result.state["history"]) == g.MAX_HISTORY_TURNS + 1
+    later = ask("And in the third quarter?")                    # the anchor survives the next turn too
+    assert seen(later) == (("META",), (2025,), ("Q3",))
+
+
+def test_cap_history_reads_the_same_entities_as_the_whole_conversation():
+    from retrieval.entities import from_turns
+    turns = ["What was Apple's revenue in fiscal 2023?", "And in the second quarter of fiscal 2024?",
+             *[f"And the margin, take {chr(97 + i)}?" for i in range(9)], "What about Microsoft?"]
+    for n in range(1, len(turns) + 1):
+        history = turns[:n]
+        assert from_turns([*g.cap_history(history), "And then?"]) == from_turns([*history, "And then?"])
 
 
 def test_a_thread_needs_a_session_id():
