@@ -14,5 +14,6 @@ rank-bm25>=0.2.2         # retrieval/bm25.py (chromadb stays out of CI: dense te
 langgraph>=1.2,<2        # agent/graph.py (tests run the graph with scripted nodes, no LLM)
 fastapi>=0.115,<1        # api/main.py (W2-09; tests use its TestClient with a fake graph, no server)
 slowapi>=0.1.9,<0.2      # api/main.py: the per-session rate limit
+streamlit>=1.50,<2       # ui/app.py (W2-10; tests drive it with Streamlit's AppTest and a fake API)
 pytest>=8.0
 ruff==0.17.2           # pinned: a new ruff release can add lint rules and turn CI red without a code change
