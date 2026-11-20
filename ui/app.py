@@ -9,10 +9,12 @@ and periods FinSight covers with example questions, and "New conversation". The 
 is kept in the Streamlit session and replaced by each response's; follow-ups ("And in fiscal 2024?") rely on it.
 
 A question is asked in two runs, so that no click can lose its answer: the run that receives it stores it as the
-conversation's `pending` question and reruns with the inputs disabled; the next run asks the API and records the
-reply and the session id on the conversation object (ui/client.py Conversation) it fetched before the request, then
-reruns to show it. Streamlit stops a run at its next st.* call or st.session_state access once the user interacts,
-so nothing between the API's answer and the recording touches Streamlit.
+conversation's `pending` question and reruns with the question box and the example questions disabled; the next run
+asks the API and records the reply and the session id on the conversation object (ui/client.py Conversation) it
+fetched before the request, then reruns to show it. Streamlit stops a run at its next st.* call or st.session_state
+access once the user interacts, so nothing between the API's answer and the recording touches Streamlit. Anything the
+call raises is recorded as an error reply, so the question never stays pending; "New conversation" stays enabled as
+the way out.
 """
 from __future__ import annotations
 
@@ -31,7 +33,8 @@ from ui import client as api  # noqa: E402
 from ui import render  # noqa: E402
 
 MAX_QUESTION_CHARS = 1000                          # the API's own limit (api/main.py AskRequest)
-HEALTH_TTL_S = 15.0                                # the status is re-read at most this often, not on every rerun
+HEALTH_TTL_S = 15.0                                # a ready status is re-read at most this often, not on every rerun
+HEALTH_RETRY_S = 5.0                               # any other status sooner (each read can wait up to 3 s)
 
 st.set_page_config(page_title="FinSight", page_icon=":material/description:", layout="centered")
 
@@ -56,7 +59,8 @@ def state() -> Any:
 
 def health(s: Any) -> dict[str, Any] | None:
     now = time.monotonic()
-    if s.health_at is None or now - s.health_at > HEALTH_TTL_S or (s.health or {}).get("status") != "ok":
+    ttl = HEALTH_TTL_S if (s.health or {}).get("status") == "ok" else HEALTH_RETRY_S
+    if s.health_at is None or now - s.health_at > ttl:
         s.health, s.health_at = s.client.health(), now
     return s.health
 
@@ -77,7 +81,7 @@ def answer_card(body: dict[str, Any], session_id: str | None) -> None:
     links = render.citation_links(answer)
     if links:
         st.markdown("**Sources**\n" + "\n".join(f"- {link}" for link in links))
-    for note in answer.get("notes") or []:
+    for note in render.as_list(answer.get("notes")):
         st.caption(render.escape(note))
     with st.expander("Show trace"):
         run = render.trace(body)
@@ -86,7 +90,8 @@ def answer_card(body: dict[str, Any], session_id: str | None) -> None:
         cols[1].metric("Tool calls", run["steps"])
         cols[2].metric("Tokens", f"{run['tokens']:,}" if isinstance(run["tokens"], int) else str(run["tokens"]))
         seconds = run["request_seconds"] if run["cached"] else run["run_seconds"]
-        cols[3].metric("Seconds", seconds if seconds is not None else "-")
+        cols[3].metric("Seconds", seconds if seconds is not None else "-",
+                       help="The cached reply's request" if run["cached"] else "The agent's run, without the queue")
         st.caption(render.escape(f"Nodes: {run['nodes'] or '-'}"
                                  + (f" · stopped: {run['stop_reason']}" if run["stop_reason"] else "")))
         if run["cached"]:
@@ -132,8 +137,9 @@ def sidebar(s: Any, busy: bool) -> str | None:
         else:
             st.warning(f"API degraded: warm-up failed ({status.get('warm_up') or 'unknown'}); answers may fail",
                        icon=":material/warning:")
-        if st.button("New conversation", icon=":material/add_comment:", width="stretch", disabled=busy):
+        if st.button("New conversation", icon=":material/add_comment:", width="stretch"):   # always: the way out
             s.chat.clear()
+            st.rerun()                             # this run decided `busy` before the click: start clean
         st.subheader("What you can ask about")
         st.caption(f"10-K fiscal years {', '.join(map(str, hints['tenk_years']))}; 10-Q "
                    f"{', '.join(hints['tenq_quarters'])}. Fiscal years are each company's own.")
@@ -162,7 +168,11 @@ def main() -> None:
         st.rerun()                                        # show the question, with the inputs disabled, then ask
     if busy:
         with st.chat_message("assistant"), st.spinner("Checking the filings..."):
-            chat.record(client.ask(chat.pending, chat.session_id))
+            try:
+                reply = client.ask(chat.pending, chat.session_id)
+            except Exception:                             # never leave the question pending with the inputs off
+                reply = api.Reply(ok=False, error="Something went wrong asking FinSight. Try again.")
+            chat.record(reply)
         st.rerun()
 
 

@@ -60,10 +60,15 @@ def escape(text: Any) -> str:
     for i, piece in enumerate(BARE_URL.split(str(text))):
         if i % 2:
             url = piece.rstrip(".,;:!?)]}'\"")             # a sentence's punctuation after a URL is not part of it
-            parts.append(f"`{url.replace('`', '')}`" + MARKDOWN_SPECIAL.sub(r"\\\1", piece[len(url):]))
+            parts.append(f"`{code(url)}`" + MARKDOWN_SPECIAL.sub(r"\\\1", piece[len(url):]))
         elif piece:
             parts.append(MARKDOWN_SPECIAL.sub(r"\\\1", piece))
     return "".join(parts)
+
+
+def code(text: Any) -> str:
+    """Text for inside a code span: no backtick (it would end the span) and no line break (a blank line would too)."""
+    return " ".join(str(text).replace("`", "").split())
 
 
 def refusal_words(rule: Any) -> str:
@@ -112,8 +117,13 @@ def period(fiscal_year: Any, fiscal_period: Any) -> str:
     return f"FY{fiscal_year}" if fiscal_period in ("FY", None) else f"{fiscal_period} FY{fiscal_year}"
 
 
+def as_list(items: Any) -> list[Any]:
+    """A list field as a list: anything else (a string would be iterated letter by letter) as none."""
+    return items if isinstance(items, list) else []
+
+
 def _dicts(items: Any) -> list[dict[str, Any]]:
-    return [x for x in items if isinstance(x, dict)] if isinstance(items, list) else []
+    return [x for x in as_list(items) if isinstance(x, dict)]
 
 
 def figure_rows(answer: dict[str, Any]) -> list[dict[str, str]]:
@@ -125,12 +135,12 @@ def figure_rows(answer: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def calculation_lines(answer: dict[str, Any]) -> list[str]:
-    """Each calculation as markdown: the operation, its inputs, the expression (a code span, so shown verbatim; a
-    backtick inside it would end the span, so it is dropped) and the result."""
+    """Each calculation as markdown: the operation, its inputs, the expression (a code span, so shown verbatim; see
+    code()) and the result."""
     lines = []
     for c in _dicts(answer.get("calculations")):
-        inputs = ", ".join(number(x, None) for x in c.get("inputs") or [])
-        expression = str(c.get("expression", "")).replace("`", "").strip() or "-"
+        inputs = ", ".join(number(x, None) for x in as_list(c.get("inputs")))
+        expression = code(c.get("expression", "")) or "-"
         lines.append(f"**{escape(c.get('operation', ''))}** of {escape(inputs)}: `{expression}` = "
                      f"**{escape(number(c.get('result'), c.get('unit')))}**")
     return lines
@@ -169,10 +179,10 @@ def trace(body: dict[str, Any]) -> dict[str, Any]:
         "steps": run.get("steps") or 0,
         "nodes": ", ".join(f"{k} ×{v}" for k, v in visits.items()),
         "stop_reason": run.get("stop_reason"),
-        "tool_calls": [{"tool": str(t.get("tool", "")),
-                        "arguments": json.dumps(t.get("arguments") or {}, sort_keys=True, default=str),
-                        "result": str(t.get("error") or "ok")} for t in _dicts(run.get("tool_calls"))],
-        "history": [str(h) for h in body.get("history") or []],
+        "tool_calls": [{"tool": str(t.get("tool", "")), "result": str(t.get("error") or "ok"),   # result before the
+                        "arguments": json.dumps(t.get("arguments") or {}, sort_keys=True, default=str)}   # long arguments
+                       for t in _dicts(run.get("tool_calls"))],
+        "history": [str(h) for h in as_list(body.get("history"))],
     }
 
 

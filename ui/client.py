@@ -6,12 +6,14 @@
 Every outcome is a Reply, never an exception: an answer (ok), or a message the UI can show as it is: a refused
 request (422), the rate limit with its wait (429), the API busy or starting with its wait (503), an error inside the
 agent (500), a response that is not an answer, or the API unreachable. The session id of the latest response is the
-one to send next (W2-09: after an API restart an old id starts a new session). The read timeout leaves room for a
+one to send next (W2-09: after an API restart an old id starts a new session), when it has the API's own shape (an
+id that does not would make every later question fail, so it is ignored). The read timeout leaves room for a
 session's queue: 30 s waiting for a slot plus a 60 s run; connecting gets 5 s, so a stopped API is reported at once.
 """
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +24,7 @@ SESSION_HEADER = "X-Session-Id"
 TIMEOUT_S = 120.0
 CONNECT_TIMEOUT_S = 5.0
 HEALTH_TIMEOUT_S = 3.0
+SESSION_ID_SHAPE = re.compile(r"[A-Za-z0-9._-]{1,128}")     # api/main.py SESSION_HEADER_SHAPE
 
 
 def api_url() -> str:
@@ -68,7 +71,7 @@ class Conversation:
 def _json(response: httpx.Response) -> Any:
     try:
         return response.json()
-    except ValueError:
+    except Exception:                               # not JSON, bad encoding, or nested past the recursion limit
         return None
 
 
@@ -84,7 +87,12 @@ def _detail(response: httpx.Response) -> str:
 
 def _seconds(value: str | None, default: int) -> int:
     """A Retry-After in seconds (the API sends whole seconds; anything else falls back to the default)."""
-    return int(value) if value and value.isdigit() else default
+    return int(value) if value and value.isascii() and value.isdigit() else default
+
+
+def _session_id(value: Any) -> str | None:
+    """A session id with the API's shape, else None (sending anything else would fail every later question)."""
+    return value if isinstance(value, str) and value.isascii() and SESSION_ID_SHAPE.fullmatch(value) else None
 
 
 def is_answer(body: Any) -> bool:
@@ -106,6 +114,7 @@ class ApiClient:
         self._http.close()
 
     def ask(self, question: str, session_id: str | None = None) -> Reply:
+        session_id = _session_id(session_id)
         headers = {SESSION_HEADER: session_id} if session_id else {}
         try:
             response = self._http.post("/ask", json={"question": question}, headers=headers)
@@ -113,13 +122,15 @@ class ApiClient:
             return Reply(ok=False, error="The answer took too long. Try again in a moment.")
         except httpx.HTTPError:
             return Reply(ok=False, error=f"The FinSight API is not reachable at {self.base_url}.")
-        sid = response.headers.get(SESSION_HEADER)
+        except Exception:                           # e.g. a question httpx cannot encode
+            return Reply(ok=False, error="The question could not be sent. Try rephrasing it.")
+        sid = _session_id(response.headers.get(SESSION_HEADER))
         if response.status_code == 200:
             body = _json(response)
             if not is_answer(body):
                 return Reply(ok=False, status=200, session_id=sid,
                              error="The API's response was not an answer FinSight can show. Try again.")
-            return Reply(ok=True, status=200, body=body, session_id=body.get("session_id") or sid)
+            return Reply(ok=True, status=200, body=body, session_id=_session_id(body.get("session_id")) or sid)
         wait = response.headers.get("Retry-After")
         status = response.status_code
         if status == 503:
@@ -139,6 +150,6 @@ class ApiClient:
         """The API's /health body (also when it answers 503 while starting), or None when unreachable or not JSON."""
         try:
             body = self._http.get("/health", timeout=HEALTH_TIMEOUT_S).json()
-        except (httpx.HTTPError, ValueError):
+        except Exception:                           # unreachable, or a body that is not JSON
             return None
         return body if isinstance(body, dict) else None

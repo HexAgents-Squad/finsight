@@ -122,6 +122,14 @@ def test_an_unreachable_or_slow_api_is_a_message():
     assert "took too long" in client(slow).ask("Q?").error
 
 
+def test_any_other_failure_while_sending_is_a_message():
+    def broken(request):
+        raise RuntimeError("not an httpx error")
+
+    reply = client(broken).ask("Q?")
+    assert not reply.ok and "could not be sent" in reply.error
+
+
 def test_connecting_is_bounded_separately_from_the_answer():
     timeout = api.ApiClient("http://api")._http.timeout
     assert timeout.connect == api.CONNECT_TIMEOUT_S and timeout.read == api.TIMEOUT_S
@@ -137,6 +145,43 @@ def test_health_reads_the_body_even_while_starting():
     assert client(down).health() is None
     assert client(lambda r: httpx.Response(200, json=["ok"])).health() is None
     assert client(lambda r: httpx.Response(200, text="ok")).health() is None
+    deep = "[" * 100_000 + "]" * 100_000                                         # past the recursion limit
+    assert client(lambda r: httpx.Response(200, text=deep)).health() is None
+
+
+@pytest.mark.parametrize("status", [200, 500, 503])
+def test_a_body_nested_past_the_recursion_limit_is_a_message(status):
+    deep = "[" * 100_000 + "]" * 100_000
+    reply = client(lambda r: httpx.Response(status, text=deep, headers={"content-type": "application/json"})).ask("Q?")
+    assert not reply.ok and reply.error
+
+
+@pytest.mark.parametrize("bad", [123, ["x"], "séssion", "a\nb", "x" * 129, "a b", ""])
+def test_a_session_id_without_the_apis_shape_is_ignored(bad):
+    """Sent back, it would make every later question fail (httpx refuses it, or the API answers 422)."""
+    reply = client(lambda r: httpx.Response(200, json=BODY | {"session_id": bad})).ask("Q?")
+    assert reply.ok and reply.session_id is None
+    if isinstance(bad, str) and bad.isascii() and "\n" not in bad:
+        header = client(lambda r: httpx.Response(503, json={"detail": "busy"}, headers={api.SESSION_HEADER: bad}))
+        assert header.ask("Q?").session_id is None
+    seen = {}
+
+    def handler(request):
+        seen["sid"] = request.headers.get(api.SESSION_HEADER)
+        return httpx.Response(200, json=BODY)
+
+    assert client(handler).ask("Q?", session_id=bad).ok and seen["sid"] is None      # never sent either
+
+
+def test_a_valid_session_id_from_the_header_is_used_when_the_body_has_none():
+    b = {k: v for k, v in BODY.items() if k != "session_id"}
+    reply = client(lambda r: httpx.Response(200, json=b, headers={api.SESSION_HEADER: "abc.DEF_1-2"})).ask("Q?")
+    assert reply.session_id == "abc.DEF_1-2"
+
+
+def test_a_retry_after_that_is_not_ascii_digits_falls_back():
+    reply = client(lambda r: httpx.Response(429, json={"detail": "x"}, headers={"Retry-After": b"\xb2"})).ask("Q?")
+    assert "Try again in 60 seconds" in reply.error
 
 
 def test_the_api_url_comes_from_the_environment(monkeypatch):
@@ -273,6 +318,24 @@ def test_the_card_parts_tolerate_odd_fields():
                         )["tool_calls"] == [{"tool": "t", "arguments": '{"d": "{1}"}', "result": "ok"}]
 
 
+def test_a_string_where_a_list_belongs_is_not_spelled_out():
+    assert render.trace({"history": "abc", "run": {}})["history"] == []
+    assert render.figure_rows({"values": "abc"}) == [] and render.as_list("abc") == []
+    assert render.calculation_lines({"calculations": [{"operation": "x", "inputs": "12", "result": 1}]})[0].startswith(
+        "**x** of : ")
+
+
+def test_a_blank_line_cannot_end_a_code_span():
+    line = render.calculation_lines({"calculations": [
+        {"operation": "x", "inputs": [], "result": 1, "expression": "a\n\n# [click](https://evil.example) *x*"}]})[0]
+    assert "\n" not in line and "`a # [click](https://evil.example) *x*`" in line
+    assert render.code("a`b\n\n c") == "ab c"
+
+
+def test_the_trace_table_puts_the_result_before_the_long_arguments():
+    assert list(render.trace(BODY)["tool_calls"][0]) == ["tool", "result", "arguments"]
+
+
 def test_trace_summarises_the_run():
     t = render.trace(body() | {"cached": True, "history": ["Earlier?"]})
     assert t["verdict"] == "verified" and t["cached"] and t["tokens"] == 2685 and t["steps"] == 1
@@ -383,9 +446,12 @@ def test_a_ready_status_is_not_re_read_on_every_rerun():
     assert fake.health_calls == 1                      # five runs within the TTL, one /health
 
 
-def test_a_status_that_is_not_ready_is_re_read():
+def test_a_status_that_is_not_ready_is_re_read_after_a_short_wait():
     fake = FakeApi(health={"status": "starting", "warm_up": "pending"})
     at = app(fake)
+    at.run()
+    assert fake.health_calls == 1                      # not on every run: each read can wait up to 3 s
+    at.session_state["health_at"] -= 6                 # past HEALTH_RETRY_S, well inside the ready TTL
     at.run()
     assert fake.health_calls == 2
 
@@ -499,8 +565,44 @@ def test_the_inputs_are_disabled_while_a_question_is_asked():
     at = app(fake)
     at.chat_input[0].set_value("Q?").run()
     assert fake.calls == [("Q?", None)] and at.session_state["chat"].pending == "Q?"
-    assert at.chat_input[0].disabled and all(b.disabled for b in at.sidebar.button)
+    assert at.chat_input[0].disabled and all(b.disabled for b in at.sidebar.button[1:])     # the examples
     assert [c.name for c in at.chat_message] == ["user", "assistant"]   # the question, and the spinner's message
+    assert not at.sidebar.button[0].disabled                           # New conversation is always the way out
+    at.sidebar.button[0].click().run()
+    assert at.session_state["chat"] == api.Conversation() and not at.chat_input[0].disabled
+    assert fake.calls == [("Q?", None)]                                # clearing does not ask again
+
+
+def test_an_exception_while_asking_is_a_message_and_the_chat_goes_on():
+    def broken():
+        raise RuntimeError("bug")
+
+    fake = FakeApi(ok(), ok(), during_ask=broken)
+    at = app(fake)
+    at.chat_input[0].set_value("Q1?").run()
+    assert not at.exception and "Something went wrong" in at.error[0].value
+    assert at.session_state["chat"].pending is None and not at.chat_input[0].disabled
+    assert fake.calls == [("Q1?", None)]
+    fake.during_ask = None
+    at.chat_input[0].set_value("Q2?").run()
+    assert not at.exception and len(assistants(at)) == 2
+
+
+def test_a_malformed_session_id_never_breaks_the_follow_up():
+    """End to end with the real client: an id httpx cannot send is ignored, so the follow-up is still asked."""
+    def handler(request):
+        return httpx.Response(200, json=BODY | {"session_id": "séssion"})
+
+    at = app(client(handler))
+    at.chat_input[0].set_value("Q1?").run()
+    at.chat_input[0].set_value("Q2?").run()
+    assert not at.exception and len(assistants(at)) == 2 and not at.error
+
+
+def test_notes_that_are_not_a_list_are_not_spelled_out():
+    at = app(FakeApi(ok(body(notes="abc"))))
+    at.chat_input[0].set_value("Q?").run()
+    assert not at.exception and not [c for c in at.caption if c.value in ("a", "b", "c")]
 
 
 def test_the_trace_link_appears_when_configured(monkeypatch):
