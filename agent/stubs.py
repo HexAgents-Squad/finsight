@@ -2,7 +2,8 @@
 
 Each Week 2 ticket replaces one stub with its node: the planner (W2-02), the executor (W2-04:
 agent/executor.make_executor, not wired here so the graph tests need no index; W2-07 wires the real nodes),
-the critic (W2-05: agent/critic.make_critic, wired here), and the composer (W2-06). The remaining stubs make
+the critic (W2-05: agent/critic.make_critic, wired here), and the composer (W2-06: agent/composer.make_composer,
+not wired here, so the graph tests make no LLM call; W2-07 wires the real nodes). The remaining stubs make
 no LLM or tool call:
 - planner: reads the companies, years and periods (retrieval.entities.from_turns, ADR-017) and plans no steps;
 - executor: runs nothing;

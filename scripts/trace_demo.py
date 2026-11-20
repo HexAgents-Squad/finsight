@@ -2,9 +2,9 @@
 
     python scripts/trace_demo.py "What was Apple's total revenue in fiscal 2024?" [--question-id DEMO-1] [--run-id ID]
 
-The graph uses the real planner (one or two requests to the shared endpoint), the real executor and its tools (needs
-data/: the index and the XBRL facts; a search embeds the query through the embedding endpoint), the composer stub
-(the real one is W2-06, so the answer is a placeholder and ends unverified) and the real critic. Needs
+The graph uses the real nodes: the planner and the composer (one or two requests each to the shared endpoint), the
+executor and its tools (needs data/: the index and the XBRL facts; a search embeds the query through the embedding
+endpoint) and the critic. Needs
 LANGFUSE_ENABLED=true and the Langfuse keys in .env, and the `langfuse` package. Prints the run id: in Langfuse open
 Tracing and filter `tags = run:<id>` (a few minutes after the run), or run scripts/trace_dashboard.py --run <id>.
 """
@@ -23,13 +23,13 @@ if str(ROOT) not in sys.path:
 
 
 def demo_nodes(llm: Any, call_tool: Any = None) -> Any:
-    """The nodes that exist today: real planner, executor and critic; the composer is still the stub (W2-06)."""
+    """The real nodes: planner, executor, composer (W2-06) and critic."""
+    from agent.composer import make_composer
     from agent.critic import make_critic
     from agent.executor import make_executor
     from agent.graph import Nodes
     from agent.planner import make_planner
-    from agent.stubs import compose_stub
-    return Nodes(planner=make_planner(llm), executor=make_executor(call_tool), composer=compose_stub,
+    return Nodes(planner=make_planner(llm), executor=make_executor(call_tool), composer=make_composer(llm),
                  critic=make_critic())
 
 

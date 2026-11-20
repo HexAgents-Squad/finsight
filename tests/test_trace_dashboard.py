@@ -210,11 +210,11 @@ def test_dashboard_cli_reports_an_http_error_without_a_traceback_or_a_key(monkey
 
 
 # ----------------------------------------------------------------------------------------------- demo script
-def test_demo_uses_the_real_planner_executor_and_critic_with_the_composer_stub():
+def test_demo_uses_the_real_nodes():
     from agent.stubs import compose_stub
     nodes = demo.demo_nodes(llm=SimpleNamespace())
-    assert nodes.composer is compose_stub
-    assert all(callable(getattr(nodes, n)) for n in ("planner", "executor", "critic"))
+    assert nodes.composer is not compose_stub and nodes.composer.__qualname__.startswith("make_composer")
+    assert all(callable(getattr(nodes, n)) for n in ("planner", "executor", "composer", "critic"))
 
 
 def test_demo_traces_the_run_it_makes():

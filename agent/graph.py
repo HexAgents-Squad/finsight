@@ -60,6 +60,9 @@ LIMIT_AFTER_CHECK = "limit reached after the answer was checked: "
 # Per-question fields, reset at the start of every question (None resets a reducer field, see agent/state.py)
 PER_QUESTION = ("messages", "entities", "plan", "tool_results", "tool_error", "draft", "verdict", "answer", "tokens",
                 "visits", "errors", "stop_reason")
+# Earlier questions a turn sees (W2-06): the gold set's follow-ups go back one turn, entities are filled from the
+# latest turn that names them; six keeps a long conversation's prompts bounded (~30 tokens per question)
+MAX_HISTORY_TURNS = 6
 
 
 @dataclass(frozen=True)
@@ -254,6 +257,33 @@ def checkpoint_serde() -> Any:
     return JsonPlusSerializer(allowed_msgpack_modules=list(CHECKPOINT_TYPES))
 
 
+def in_memory_checkpointer() -> Any:
+    """Conversation memory for one process (W2-06): build_graph(nodes, checkpointer=in_memory_checkpointer()), then
+    run(question, graph=graph, config=thread(session_id)) per turn. Lost on restart, by design for now (ADR-030)."""
+    from langgraph.checkpoint.memory import InMemorySaver
+    return InMemorySaver(serde=checkpoint_serde())
+
+
+def thread(session_id: str) -> dict[str, Any]:
+    """The run config that keeps one conversation on its own checkpointer thread."""
+    if not session_id or not session_id.strip():
+        raise ValueError("a conversation needs a non-empty session id")
+    return {"configurable": {"thread_id": session_id}}
+
+
+async def thread_history(graph: Any, config: dict[str, Any] | None) -> list[str]:
+    """The conversation's earlier questions, oldest first, as the checkpointer thread named in `config` keeps them
+    (the last turn's history plus its question); [] without a checkpointer or a thread. Capped at the last
+    MAX_HISTORY_TURNS questions, so a long conversation does not grow the prompts without bound."""
+    thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
+    if getattr(graph, "checkpointer", None) is None or not thread_id:
+        return []
+    snapshot = await graph.aget_state(config)
+    values = snapshot.values or {}
+    question = values.get("question")
+    return [*(values.get("history") or []), *([question] if question else [])][-MAX_HISTORY_TURNS:]
+
+
 def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
     """The compiled graph (nodes default to the stubs). The limits come with each run's state (run())."""
     if nodes is None:
@@ -279,12 +309,17 @@ def initial_state(question: str, history: Sequence[str] = (), limits: Limits | N
             "limits": asdict(limits or Limits())}
 
 
-async def run(question: str, history: Sequence[str] = (), *, graph: Any = None, limits: Limits | None = None,
+async def run(question: str, history: Sequence[str] | None = None, *, graph: Any = None, limits: Limits | None = None,
               config: dict[str, Any] | None = None, trace: TraceInfo | None = None,
               tracer: Tracer | None = None) -> AgentRun:
     """Answer one question (with the conversation's earlier questions) within the limits. Always an
     AnswerContract: a run stopped by the time limit or the recursion backstop gives up with a note and keeps the
     state reached so far. Other exceptions, a node's own timeouts included, are bugs and propagate.
+
+    Memory (W2-06): `history=None` takes the earlier questions from the checkpointer thread in `config` (a graph
+    built with in_memory_checkpointer(), config=thread(session_id)), so a follow-up ("And in the third quarter?")
+    keeps the company and year of the turn before; without a thread there are none. A given `history` is used as
+    is (the evaluation replays gold chains that way). Either way at most MAX_HISTORY_TURNS earlier questions.
 
     `trace` (W2-08) sends the run to Langfuse: one trace tagged q:<question_id>, run:<run_id> and the verdict, with a
     span per node, tool call and LLM call. Without it nothing is traced and no setting is read; `tracer` replaces
@@ -307,13 +342,14 @@ def _trace_summary(result: AgentRun) -> dict[str, Any]:
             "stop_reason": state.get("stop_reason"), "notes": list(result.answer.notes)}
 
 
-async def _run(question: str, history: Sequence[str], *, graph: Any, limits: Limits | None,
+async def _run(question: str, history: Sequence[str] | None, *, graph: Any, limits: Limits | None,
                config: dict[str, Any] | None) -> AgentRun:
     """run() without tracing."""
     if limits is None:                                  # needs a complete .env (core/settings.py); tests pass limits
         from core.settings import get_settings
         limits = Limits.from_settings(get_settings())
     graph = graph or build_graph()
+    history = (await thread_history(graph, config) if history is None else list(history))[-MAX_HISTORY_TURNS:]
     state: dict[str, Any] = {}
     started = time.monotonic()
     try:
