@@ -102,6 +102,15 @@ class Settings(SecSettings):
     # spec §9: the agent wraps a whole query in this limit (one LLM call alone can take LLM_TIMEOUT x retries)
     QUERY_TIMEOUT_S: float = Field(60.0, gt=0, description="seconds allowed for one question, end to end")
 
+    # API (W2-09, api/main.py, ADR-032). The rate limit is slowapi's syntax ("10/minute", "100/hour; 10/minute"),
+    # per session (the X-Session-Id header, else the client address); the reply cache is in memory, per process.
+    API_RATE_LIMIT: str = Field("10/minute", min_length=1, description="requests per session (slowapi syntax)")
+    API_CACHE_TTL_S: float = Field(3600.0, ge=0, description="seconds a cached answer stays valid (0 = no cache)")
+    API_CACHE_MAX_ENTRIES: int = Field(512, ge=0, description="answers kept in the reply cache (0 = no cache)")
+    API_MAX_CONCURRENT: int = Field(2, gt=0, description="questions the agent answers at once (the shared key)")
+    API_SESSION_TTL_S: float = Field(3600.0, gt=0, description="seconds a session's earlier questions are kept")
+    API_MAX_SESSIONS: int = Field(1000, gt=0, description="sessions kept in memory (least recently used dropped)")
+
     # Tracing (W2-08, ADR-029): off unless LANGFUSE_ENABLED=true, so tests and a fresh clone never reach the network.
     # The keys are SecretStr (never in a repr or an error message); the host is Langfuse Cloud or a self-hosted URL.
     LANGFUSE_ENABLED: bool = Field(False, description="send traces to Langfuse")

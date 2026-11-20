@@ -127,6 +127,12 @@ removed from replies either way. The provided endpoint currently ignores the swi
 
 To go back to Ollama, restore the three `LLM_*` lines from `.env.example` and empty `LLM_CA_CERT`.
 
+## Running the API (W2-09)
+```bash
+uvicorn api.main:app --port 8000
+```
+It needs `.env` and `data/` like `scripts/ask.py`, and loads the index on start-up (GET /health says "starting" until it is ready, then "ok"). Ask with `POST /ask` and the JSON body `{"question": "What was Apple's total revenue in fiscal 2024?"}`; send the `X-Session-Id` it returns with the next question to keep the conversation ("And in fiscal 2023?"). The interactive docs are at http://localhost:8000/docs. Settings: the `API_*` lines in `.env.example` (ADR-032).
+
 ## Running the tests
 ```bash
 pytest -q
