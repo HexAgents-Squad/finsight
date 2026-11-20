@@ -62,6 +62,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.state import AgentState, Plan, ToolCall, ToolResult
+from core import tracing
 from tools.base import INTERNAL_ERROR, NOT_REPORTED, SERVICE_UNAVAILABLE, UNDEFINED, error_result
 
 log = logging.getLogger(__name__)
@@ -111,12 +112,17 @@ def output_tokens(results: list[ToolResult], count: TokenCounter) -> int:
 
 
 async def _run(call_tool: ToolCaller, call: ToolCall) -> ToolResult:
-    try:
-        output = await call_tool(call.name, call.arguments)
-    except Exception as err:                           # noqa: BLE001 - the graph must never see a tool exception
-        log.exception("tool %s raised (call_tool_async should return a typed error)", call.name)
-        output = error_result(INTERNAL_ERROR, f"{type(err).__name__}: {err}")
-    return ToolResult(call=call, output=output)
+    with tracing.span(f"tool:{call.name}", input=call.arguments) as sp:     # no-op unless the run is traced (W2-08)
+        try:
+            output = await call_tool(call.name, call.arguments)
+        except Exception as err:                       # noqa: BLE001 - the graph must never see a tool exception
+            log.exception("tool %s raised (call_tool_async should return a typed error)", call.name)
+            output = error_result(INTERNAL_ERROR, f"{type(err).__name__}: {err}")
+        result = ToolResult(call=call, output=output)
+        # not_reported and undefined are answers (ADR-028), not failures: only a typed error is a WARNING
+        sp.update(output=output, metadata={"error_type": result.error_type},
+                  level="WARNING" if is_error(result) else None)
+    return result
 
 
 # ----------------------------------------------------------------------------------------------- calculation

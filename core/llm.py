@@ -45,6 +45,7 @@ import openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
+from core import tracing
 from core.exceptions import FinSightError
 from core.settings import Settings
 
@@ -417,6 +418,23 @@ class LLMClient(AbstractLLMClient):
     async def complete(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,
                        sample: int = 0, seed: int | None = None,
                        response_format: dict[str, Any] | None = None) -> Reply:
+        """One completion with what a runner records (and, when a run is being traced, one Langfuse generation with
+        the model, tokens, cache hit and retries: core/tracing.py, a no-op otherwise). See `_complete`."""
+        target_model = model or self.settings.LLM_MODEL
+        with tracing.generation("llm", model=target_model, input=messages,
+                                metadata={"temperature": temperature, "sample": sample}) as gen:
+            reply = await self._complete(messages, temperature=temperature, model=model, sample=sample, seed=seed,
+                                         response_format=response_format)
+            # a cached reply cost no endpoint tokens: its counts stay in metadata, not in Langfuse's usage/cost totals
+            counts = {"input": reply.prompt_tokens, "output": reply.completion_tokens}
+            gen.update(output=reply.text, usage=None if reply.cached else counts,
+                       metadata={"cached": reply.cached, "retries": reply.retries, "seconds": round(reply.seconds, 3),
+                                 **({"cached_tokens": counts} if reply.cached else {})})
+            return reply
+
+    async def _complete(self, messages: list[Message], *, temperature: float = 0.0, model: str | None = None,
+                        sample: int = 0, seed: int | None = None,
+                        response_format: dict[str, Any] | None = None) -> Reply:
         """One completion with what a runner records. `sample` numbers repeated samples of the same request
         (self-consistency at temperature > 0): each has its own cache entry, so a re-run replays every sample.
         `seed` is sent to the server (the hosted endpoint honours it at temperature > 0, ADR-016) and
