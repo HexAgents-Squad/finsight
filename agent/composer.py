@@ -50,11 +50,18 @@ from agent.contract import (
     decoding_schema,
     refusal_answer,
 )
-from agent.critic_checks import UNIT_SCALE, Violation, check_contract, same_number
+from agent.critic_checks import (
+    UNIT_SCALE,
+    Violation,
+    check_contract,
+    same_number,
+    sentences,
+    unbacked_figures,
+)
 from agent.executor import call_key
 from agent.guided import CompletionClient, GuidedReply, ask_guided
 from agent.state import AgentState, Plan, ToolCall, ToolResult
-from core.figures import figures
+from core.figures import Figure, figures
 from core.spec import Unit
 from ingest.edgar import COMPANIES_FILE, load_scope
 from retrieval.entities import Entities
@@ -68,6 +75,7 @@ MAX_PASSAGES = 8                    # numbered passages shown to the model
 MAX_PASSAGE_CHARS = 1500            # of one passage's text (a statement table is longer; its head has the rows)
 MAX_PASSAGE_FIGURES = 6
 MAX_ANSWER_CHARS = 900              # ~120 words (spec §8) with room; the prompt asks for 120 words
+TABLE_SCALES = (1.0, 1e3, 1e6)      # a statement table prints its figures in units, thousands or millions
 FIGURE_FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
 # The checks the composer itself controls; invariant 4 (scope), 3 (recomputation) and the metric/unit checks are
 # the critic's, and 7 is written by the critic (with_verification).
@@ -265,13 +273,19 @@ def structured_parts(evidence: Evidence) -> tuple[list[Value], list[Citation], l
     return values, citations, calculations, notes
 
 
+def duration_text(duration: str | None) -> str:
+    """A duration in words (", 3 months"): seen live, the model copied "12M" into its answer, where it reads as a
+    figure; "12 months" is not one (agent/critic_checks.py FIGURE_REWRITES)."""
+    return f", {duration[:-1]} months" if duration and duration.endswith("M") else ""
+
+
 def figure_lines(evidence: Evidence) -> list[str]:
     lines = []
     for fact in evidence.facts:
         label = f" (the filing's line: {fact['label']})" if fact.get("label") else ""
         lines.append(f"- {company(fact['ticker'])} {metric_text(fact)}{label}, "
                      f"{period_text(fact['fiscal_year'], fact['fiscal_period'])}"
-                     f"{', ' + fact['duration'] if fact.get('duration') else ''}: {display(fact['value'], fact['unit'])}"
+                     f"{duration_text(fact.get('duration'))}: {display(fact['value'], fact['unit'])}"
                      f"{' (negative)' if fact['value'] < 0 else ''} [{fact['form']}, XBRL]")
     calc = evidence.calculation
     if calc is not None:
@@ -314,6 +328,41 @@ def _printed_in(passage_text: str, figure: PassageFigure) -> bool:
                for f in figures(passage_text))
 
 
+def _states(stated: list[Figure], figure: PassageFigure) -> bool:
+    """The answer states the passage figure (as written in its unit, or scaled: "$249.6 billion")."""
+    scale = UNIT_SCALE.get(figure.unit, 1.0)
+    percent = figure.unit == "%"
+    return any(f.percent == percent and any(abs(f.value - c) <= f.tolerance + 1e-9 * max(1.0, c)
+                                            for c in (abs(figure.value), abs(figure.value) * scale))
+               for f in stated)
+
+
+def _passage_printing(fig: Figure, hits: list[tuple[str, dict[str, Any]]]) -> tuple[str, dict[str, Any]] | None:
+    """The first passage (as the model saw it) that prints the answer's figure: as written, or from a statement
+    table printed in units, thousands or millions ("$13.6 billion" from a table's "13,623" in millions)."""
+    for pid, hit in hits:
+        for printed in figures(str(hit.get("text", ""))[:MAX_PASSAGE_CHARS]):
+            if printed.percent != fig.percent:
+                continue
+            scales = (1.0,) if fig.percent else TABLE_SCALES
+            if any(abs(printed.value * s - fig.value) <= fig.tolerance + printed.tolerance * s
+                   + 1e-9 * max(1.0, fig.value) for s in scales):
+                return pid, hit
+    return None
+
+
+def _backing_value(fig: Figure, answer: str, hit: dict[str, Any]) -> Value:
+    """A value for a figure the answer took from a passage: a percentage, a dollar amount ("$" before it) in
+    dollars, or else a plain count, with the passage's company and period."""
+    if fig.percent:
+        unit, number = "%", fig.value
+    else:
+        unit, number = ("USD" if f"${fig.text}" in answer.replace("$ ", "$") else "count"), fig.value
+    return Value(name=f"figure stated in the filing ({fig.text})", value=number, unit=unit, ticker=hit["ticker"],
+                 fiscal_year=hit["fiscal_year"], fiscal_period=hit["fiscal_period"], duration=None,
+                 period_end=hit["period_end"])
+
+
 def decline_sentence(rule: str) -> str:
     """The partial refusal's one declining sentence (spec §6), with the rule's reason."""
     if rule == "R3":
@@ -329,11 +378,14 @@ def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tup
     used = [pid for pid in dict.fromkeys(reply.passages) if pid in by_id]
     if len(used) < len(set(reply.passages)):
         notes.append("composer: the answer named a passage that was not given; ignored")
+    stated = figures(" ".join(reply.answer.split()))
     for fig in reply.passage_figures:
         hit = by_id.get(fig.passage)
         if hit is None or not _printed_in(str(hit.get("text", "")), fig):
             notes.append(f"composer: {fig.name} = {fig.value} {fig.unit} is not printed in {fig.passage}; left out")
             continue
+        if not _states(stated, fig):        # listed but not in the answer (seen live: a comparative year's figure,
+            continue                        # which would carry the passage's fiscal year, not its own)
         try:
             values.append(Value(name=fig.name, value=fig.value, unit=fig.unit, ticker=hit["ticker"],
                                 fiscal_year=hit["fiscal_year"], fiscal_period=hit["fiscal_period"], duration=None,
@@ -343,6 +395,23 @@ def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tup
             continue
         if fig.passage not in used:
             used.append(fig.passage)
+    # A figure the prose states that no value backs yet: a value from the passage that prints it, if one does
+    # (the model often writes a passage's figure without listing it in passage_figures)
+    text = " ".join(reply.answer.split())
+    probe = AnswerContract(answer=text, values=values, calculations=calculations, verified=False, refused=False)
+    ordered = [(pid, by_id[pid]) for pid in used] + [(pid, h) for pid, h in by_id.items() if pid not in used]
+    for fig in unbacked_figures(probe):
+        found = _passage_printing(fig, ordered)
+        if found is None:
+            continue
+        pid, hit = found
+        try:
+            values.append(_backing_value(fig, text, hit))
+        except (ValidationError, KeyError) as err:
+            notes.append(f"composer: {fig.text} from {pid} did not fit the contract ({err!s:.120})")
+            continue
+        if pid not in used:
+            used.append(pid)
     for pid in used:
         try:
             citation = Citation.from_search(by_id[pid])
@@ -446,13 +515,15 @@ async def compose(state: AgentState, llm: CompletionClient, *, llm_model: str | 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt()},
                                       {"role": "user", "content": user_message(state, evidence, _feedback(state))}]
     result = ComposeResult(AnswerContract(answer=NOTHING_FOUND, verified=False, refused=False))
+    last: ComposerReply | None = None
     for attempt in range(2):
         reply = await ask_guided(llm, messages, ComposerReply, reply_schema(), llm_model=llm_model)
         result.add(reply)
         if reply.parsed is None:
             result.notes.append(f"composer: {reply.error}")
             break
-        draft, notes = assemble(state, evidence, typing.cast(ComposerReply, reply.parsed))
+        last = typing.cast(ComposerReply, reply.parsed)
+        draft, notes = assemble(state, evidence, last)
         problems = own_problems(draft, state["question"], evidence)
         if not problems:
             result.draft, result.notes = draft, [*result.notes, *notes]
@@ -463,9 +534,35 @@ async def compose(state: AgentState, llm: CompletionClient, *, llm_model: str | 
                         {"role": "user", "content": "Your answer has these problems, fix every one and reply with "
                                                     "the whole JSON object again:\n"
                                                     + "\n".join(f"- {p}" for p in problems)}]
+    trimmed = trimmed_draft(state, evidence, last) if last is not None else None
+    if trimmed is not None:
+        draft, notes, dropped = trimmed
+        result.draft = draft
+        result.notes = [*result.notes, f"composer: dropped {dropped} sentence(s) whose figures no evidence backs",
+                        *notes]
+        return result
     draft, notes = fallback_draft(state, evidence)
     result.draft, result.notes = draft, [*result.notes, FALLBACK_NOTE, *notes]
     return result
+
+
+def trimmed_draft(state: AgentState, evidence: Evidence,
+                  reply: ComposerReply) -> tuple[AnswerContract, list[str], int] | None:
+    """The model's answer without the sentences whose figures nothing backs, if what is left passes the composer's
+    checks (a qualitative answer keeps its grounded sentences instead of becoming the template); else None."""
+    kept, dropped = [], 0
+    for sentence in sentences(reply.answer):
+        draft, _ = assemble(state, evidence, reply.model_copy(update={"answer": sentence}))
+        if unbacked_figures(draft.model_copy(update={"answer": sentence})):
+            dropped += 1
+        else:
+            kept.append(sentence)
+    if not kept or not dropped:
+        return None
+    draft, notes = assemble(state, evidence, reply.model_copy(update={"answer": " ".join(kept)}))
+    if own_problems(draft, state["question"], evidence):
+        return None
+    return draft, notes, dropped
 
 
 def make_composer(llm: CompletionClient, *, llm_model: str | None = None) -> Any:

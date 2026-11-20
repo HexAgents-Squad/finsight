@@ -141,12 +141,17 @@ def _shown(fig: Figure, contract: AnswerContract) -> bool:
                for number, percent in candidates)
 
 
-def check_numbers_in_values(contract: AnswerContract) -> list[Violation]:
+def unbacked_figures(contract: AnswerContract) -> list[Figure]:
+    """The figures the answer states that no value matches (invariant 1), as the critic reads them."""
     text = _norm(contract.answer).replace(_norm(SCOPE_TEXT), " ")       # FinSight's own coverage, not figures
     for pattern, replacement in FIGURE_REWRITES:
         text = pattern.sub(replacement, text)
+    return [fig for fig in figures(text) if not _shown(fig, contract)]
+
+
+def check_numbers_in_values(contract: AnswerContract) -> list[Violation]:
     return [Violation("1", f"the answer states {fig.text!r} but no value in values matches it")
-            for fig in figures(text) if not _shown(fig, contract)]
+            for fig in unbacked_figures(contract)]
 
 
 # ----------------------------------------------------------------------------------------------- invariant 2

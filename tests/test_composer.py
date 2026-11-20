@@ -215,6 +215,73 @@ def test_passages_become_filing_citations_and_a_printed_passage_figure_a_value()
     assert any("not printed in P2" in n for n in result.notes) and critic_problems(d, st) == []
 
 
+def test_a_passage_figure_in_the_prose_is_backed_without_being_listed():
+    """Seen live (dev-E01): the model writes a passage's figure, rescaled from a table in millions, without listing
+    it in passage_figures. The composer finds the passage that prints it, adds the value and cites the passage."""
+    step = search_step("Microsoft revenue change", "MSFT", 2023)
+    table = hit("MSFT", 2023, "Item 7", 7, "Revenue | 211,915 | 198,270 | 13,645 | 7%\nMicrosoft Cloud revenue "
+                "increased 22% driven by Azure.")
+    st = state("What drove the change in Microsoft's revenue in fiscal 2023?", plan(step), [done(step, [table])],
+               Entities(("MSFT",), (2023,), ("FY",)))
+    llm = FakeLLM(reply("Microsoft's revenue rose 7%, or $13.6 billion, in fiscal 2023, driven by Microsoft Cloud "
+                        "growth of 22% from Azure.", ["P1"]))
+    result = run(st, llm)
+    d = result.draft
+    assert len(llm.calls) == 1 and cm.FALLBACK_NOTE not in result.notes
+    assert {(v.unit, v.value) for v in d.values} == {("%", 7.0), ("USD", 13.6e9), ("%", 22.0)}
+    assert d.citations[0].chunk_id == table["chunk_id"] and critic_problems(d, st) == []
+
+
+def test_a_listed_passage_figure_the_answer_does_not_state_is_left_out():
+    """Seen live (dev-E02): a comparative year's figure listed but not written would carry the wrong fiscal year."""
+    step = search_step("Coca-Cola revenue", "KO", 2023)
+    table = hit("KO", 2023, "Item 7", 2, "Net operating revenues | 45,754 | 43,004")
+    st = state("What were Coca-Cola's net operating revenues in fiscal 2023?", plan(step), [done(step, [table])],
+               Entities(("KO",), (2023,), ("FY",)))
+    figs = [{"passage": "P1", "name": "net operating revenues 2023", "value": 45754, "unit": "USD millions"},
+            {"passage": "P1", "name": "net operating revenues 2022", "value": 43004, "unit": "USD millions"}]
+    d = run(st, FakeLLM(reply("Coca-Cola's net operating revenues were $45,754 million in fiscal 2023.", ["P1"],
+                              figs))).draft
+    assert [v.value for v in d.values] == [45754] and critic_problems(d, st) == []
+
+
+def test_durations_are_written_in_words_so_the_model_does_not_copy_a_figure():
+    line = cm.figure_lines(cm.Evidence(facts=[fact()]))[0]
+    assert ", 12 months:" in line and "12M" not in line
+    assert cm.duration_text(None) == "" and cm.duration_text("3M") == ", 3 months"
+
+
+def test_a_backed_prose_figure_cites_its_passage_when_the_model_listed_none():
+    step = search_step("Microsoft revenue change", "MSFT", 2023)
+    table = hit("MSFT", 2023, "Item 7", 7, "Revenue | 211,915 | 198,270 | 13,645 | 7%")
+    st = state("What drove the change in Microsoft's revenue in fiscal 2023?", plan(step), [done(step, [table])],
+               Entities(("MSFT",), (2023,), ("FY",)))
+    d = run(st, FakeLLM(reply("Microsoft's revenue rose 7% in fiscal 2023.", []))).draft
+    assert [c.chunk_id for c in d.citations] == [table["chunk_id"]] and critic_problems(d, st) == []
+
+
+def test_a_figure_no_passage_prints_is_still_a_problem():
+    step = search_step("Microsoft revenue change", "MSFT", 2023)
+    st = state("What drove the change in Microsoft's revenue in fiscal 2023?", plan(step),
+               [done(step, [hit("MSFT", 2023, "Item 7", 7, "Revenue increased driven by Azure.")])],
+               Entities(("MSFT",), (2023,), ("FY",)))
+    draft, _ = cm.assemble(st, cm.gather(st), cm.ComposerReply(answer="Revenue rose $9.9 billion.", passages=["P1"]))
+    assert [v.rule for v in cm.own_problems(draft, st["question"], cm.gather(st))] == ["1"]
+
+
+def test_after_two_failures_the_grounded_sentences_are_kept():
+    step = search_step("Coca-Cola revenue growth", "KO", 2023)
+    st = state("What explains the growth in Coca-Cola's net operating revenues in fiscal 2023?", plan(step),
+               [done(step, [hit("KO", 2023, "Item 7", 2, "Net operating revenues grew 6% due to price increases.")])],
+               Entities(("KO",), (2023,), ("FY",)))
+    bad = reply("Net operating revenues grew 6%, driven by price increases. Unit case volume added $9,999 million.",
+                ["P1"])
+    result = run(st, FakeLLM(bad, bad))
+    assert result.draft.answer == "Net operating revenues grew 6%, driven by price increases."
+    assert any("dropped 1 sentence" in n for n in result.notes) and cm.FALLBACK_NOTE not in result.notes
+    assert critic_problems(result.draft, st) == []
+
+
 def test_a_figure_not_in_the_evidence_is_sent_back_once_and_then_fixed():
     step = fact_step()
     st = state("What was Apple's total revenue in fiscal 2024?", plan(step), [done(step, fact())],
