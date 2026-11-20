@@ -212,8 +212,45 @@ def test_a_typed_tool_error_stops_the_round_for_a_replan(kind):
 
 def test_not_reported_is_an_answer_not_a_replan():
     out, tools = run(plan(fact("PG", "revenue", 2024, "Q4"), search()))      # a Q4 question asked as Q4
-    assert out["tool_error"] is None and len(tools.calls) == 2
+    assert out["tool_error"] is None and len(tools.calls) == 3
     assert out["tool_results"][0].error_type == "not_reported"
+    # W2-07: the statement it was checked on, in the 10-K (Q4 is never filed on its own)
+    assert tools.calls[2] == ("search_filings", CHECKED_PG)
+
+
+CHECKED_PG = {"query": ex.STATEMENT_QUERIES["income"], "ticker": "PG", "fiscal_year": 2024, "fiscal_period": "FY",
+              "form": "10-K", "item": "Item 8", "k": ex.CHECKED_PASSAGES}
+
+
+@pytest.mark.parametrize(("metric", "period", "statement", "form", "item"), [
+    ("capex", "FY", "cash_flows", "10-K", "Item 8"),
+    ("total_liabilities", "FY", "balance_sheet", "10-K", "Item 8"),
+    ("gross_profit", "Q2", "income", "10-Q", "Part I Item 1"),
+])
+def test_a_not_reported_fact_is_checked_on_its_statement(metric, period, statement, form, item):
+    call = ToolCall(name="get_financial_fact", arguments={"ticker": "WFC", "metric": metric, "fiscal_year": 2025,
+                                                         "fiscal_period": period, "duration": None})
+    checked = ex.checked_section_call(ToolResult(call=call, output={"error": {"type": "not_reported", "message": "x"}}))
+    assert checked.name == "search_filings" and checked.arguments["query"] == ex.STATEMENT_QUERIES[statement]
+    assert (checked.arguments["form"], checked.arguments["item"], checked.arguments["fiscal_period"]) == (
+        form, item, period)
+    missing = ToolResult(call=call, output={"error": {"type": "data_missing", "message": "x"}})
+    assert ex.checked_section_call(missing) is None
+    assert ex.checked_section_call(ToolResult(call=call, output={"value": 1.0})) is None
+
+
+def test_the_checked_statement_failing_is_no_tool_error_and_is_not_sent_twice():
+    tools = FakeTools({json.dumps(["search_filings", CHECKED_PG], sort_keys=True):
+                       {"error": {"type": "no_results", "message": "nothing"}}})
+    q4 = fact("PG", "revenue", 2024, "Q4")
+    out, _ = run(plan(q4, fact("PG", "revenue", 2024, "Q4")), tools)       # the same fact twice: one check
+    assert out["tool_error"] is None and [n for n, _ in tools.calls].count("search_filings") == 1
+
+
+def test_the_checked_statement_respects_the_step_cap():
+    out, tools = run(plan(fact("PG", "revenue", 2024, "Q4")), max_steps=1)
+    assert [n for n, _ in tools.calls] == ["get_financial_fact"]
+    assert any("checked statement was not fetched: step limit" in n for n in out["errors"])
 
 
 def test_an_exception_from_the_tool_caller_becomes_an_internal_error_result():

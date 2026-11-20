@@ -3,6 +3,7 @@
     make_executor(call_tool=None, count_tokens=None)   -> the node for agent.graph.Nodes(executor=...)
     execute(state, call_tool, count_tokens=None)       the work (tests pass a fake call_tool and counter)
     calculation_call(op, results)                      the calculate call ADR-025 asks for (fetched figures)
+    checked_section_call(result)                       the statement a "not reported" fact was checked on (W2-07)
 
 Each step of the plan (search_filings, get_financial_fact, compare_periods; ADR-025) runs in order through
 tools.registry.call_tool_async, the agent's single entry point, which returns a typed error instead of raising
@@ -34,6 +35,12 @@ the calculator's `undefined` are answers, not errors (spec §4.2, §7.2, §7.5: 
 the measure is undefined), so they do not trigger a replan; a fourth-quarter question asked as Q4 is answered this
 way. An exception from the tool caller (a bug: call_tool_async does not raise) becomes an internal_error result.
 
+The checked statement (W2-07): a "not reported" answer cites the section that was checked (spec §5, category G),
+so for each not_reported fact the executor also searches that filing's financial statements for the statement the
+metric would be on (checked_section_call: a few passages, of which the composer cites the statement's own; the
+10-K for a fourth quarter). It is a step like any
+other (counted, guarded, never sent twice); its failure is not a tool error, since the fact's answer stands.
+
 The calculation (ADR-025): a plan has no numbers, so when `plan.calculation` is set the executor builds the
 calculate call from the figures the plan's fact steps fetched (each figure keeps its company, metric, period and
 duration; the same figure fetched twice counts once; a not_reported fact is a planned figure with no value):
@@ -56,6 +63,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -79,6 +87,27 @@ PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}   # within a fiscal
 WHOLE_METRIC = "revenue"                             # the whole of a percent (a margin, a share of revenue)
 DEFAULT_MAX_STEPS, DEFAULT_MAX_TOKENS = 10, 12_000   # agent.graph.Limits() defaults, for a state without limits
 STEP_LIMIT, TOKEN_LIMIT = "step limit reached", "token budget exceeded"
+# The statement each metric is on (config/concept_map.yaml: duration flows on the income or cash-flow statement,
+# instants on the balance sheet), and where a filing prints its statements (spec §3)
+CASH_FLOW_METRICS = frozenset({"capex", "operating_cash_flow"})
+BALANCE_SHEET_METRICS = frozenset({"total_assets", "total_liabilities", "stockholders_equity", "cash",
+                                   "long_term_debt"})
+STATEMENTS_ITEM = {"10-K": "Item 8", "10-Q": "Part I Item 1"}
+# The search for each statement, and its title as filings print it (the composer cites the passage with the title:
+# the plain statement name finds the auditor's report or the index first, checked on WFC and AMZN 2023)
+STATEMENT_QUERIES = {
+    "cash_flows": "consolidated statement of cash flows: cash flows from operating, investing and financing activities",
+    "balance_sheet": "consolidated balance sheet: total assets, total liabilities and equity",
+    "income": "consolidated statement of income: revenues, expenses and net income",
+}
+STATEMENT_TITLES = {
+    STATEMENT_QUERIES["cash_flows"]: re.compile(r"statements?\s+of\s+cash\s+flows", re.IGNORECASE),
+    STATEMENT_QUERIES["balance_sheet"]: re.compile(r"balance\s+sheets?|statements?\s+of\s+(?:financial\s+)?condition",
+                                                   re.IGNORECASE),
+    STATEMENT_QUERIES["income"]: re.compile(r"statements?\s+of\s+(?:income|operations|earnings)|income\s+statements?",
+                                            re.IGNORECASE),
+}
+CHECKED_PASSAGES = 5
 
 
 def call_key(call: ToolCall) -> str:
@@ -239,6 +268,26 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
     return ToolCall(name="calculate", arguments=arguments), None
 
 
+def checked_section_call(result: ToolResult) -> ToolCall | None:
+    """For a get_financial_fact that came back not_reported: the search of that filing's financial statements
+    for the statement the metric would be on (spec §5: a "not reported" answer cites the section checked). A
+    fourth quarter is checked in the 10-K (Q4 is never filed on its own, spec §4.2). None for anything else."""
+    if result.call.name != "get_financial_fact" or result.error_type != NOT_REPORTED:
+        return None
+    args = result.call.arguments
+    ticker, metric, year = args.get("ticker"), args.get("metric"), args.get("fiscal_year")
+    if not (isinstance(ticker, str) and isinstance(metric, str) and isinstance(year, int)):
+        return None
+    period = args.get("fiscal_period") or "FY"
+    period = "FY" if period == "Q4" else period
+    form = "10-K" if period == "FY" else "10-Q"
+    statement = STATEMENT_QUERIES["cash_flows" if metric in CASH_FLOW_METRICS
+                                  else "balance_sheet" if metric in BALANCE_SHEET_METRICS else "income"]
+    return ToolCall(name="search_filings", arguments={"query": statement, "ticker": ticker, "fiscal_year": year,
+                                                      "fiscal_period": period, "form": form,
+                                                      "item": STATEMENTS_ITEM[form], "k": CHECKED_PASSAGES})
+
+
 # ----------------------------------------------------------------------------------------------- node
 async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None) -> dict[str, Any]:
     """One executor round (see the module docstring). Returns the new results, the round's tool error (None when
@@ -305,6 +354,13 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         used.append(result)
         if is_error(result):                           # a new error: the graph replans once, then "not found"
             return _update(state, new, result.error_type, notes, None)
+    checks = {call_key(c): c for r in used if (c := checked_section_call(r)) is not None}
+    for call in checks.values():
+        _, stop = await attempt(call)                  # its own failure is no tool error: the fact's answer stands
+        if stop:
+            notes.append("executor: the checked statement was not fetched: "
+                         + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
+            break
     if plan.calculation:
         call, why = calculation_call(plan.calculation, used)
         lost = [c for c in failed_before if c.name in FACT_TOOLS]

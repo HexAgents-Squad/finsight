@@ -62,7 +62,7 @@ from agent.critic_checks import (
     sentences,
     unbacked_figures,
 )
-from agent.executor import call_key
+from agent.executor import STATEMENT_TITLES, call_key, checked_section_call
 from agent.guided import CompletionClient, GuidedReply, ask_guided
 from agent.state import AgentState, Plan, ToolCall, ToolResult
 from core.figures import Figure, figures, located_figures
@@ -189,6 +189,8 @@ class Evidence:
     undefined: str | None = None                                         # why the calculation is not meaningful
     not_reported: list[str] = field(default_factory=list)                # "Apple revenue, the fourth quarter ..."
     passages: list[dict[str, Any]] = field(default_factory=list)         # search hits, numbered P1, P2 ...
+    checked: list[dict[str, Any]] = field(default_factory=list)          # the statement a not-reported fact was
+                                                                         # checked on (one hit each, W2-07)
 
     @property
     def empty(self) -> bool:
@@ -223,6 +225,22 @@ def _not_reported(result: ToolResult) -> str:
     return f"{what}{f', {when}' if when else ''}: not reported" + (f" ({message})" if message else "")
 
 
+def _checked_statement(result: ToolResult, results: list[ToolResult]) -> list[dict[str, Any]]:
+    """The statement passage the executor fetched for a not_reported fact (agent.executor.checked_section_call),
+    if it found one: what a "not reported" answer cites (spec §5, category G). The passage carrying the statement's
+    title, else one with a table, else the first."""
+    call = checked_section_call(result)
+    if call is None:
+        return []
+    found = [r for r in results if call_key(r.call) == call_key(call)]
+    hits = [h for h in (found[-1].output if found and isinstance(found[-1].output, list) else [])
+            if isinstance(h, dict) and h.get("chunk_id")]
+    title = STATEMENT_TITLES.get(call.arguments["query"])
+    ranked = ([h for h in hits if title is not None and title.search(str(h.get("text", "")))]
+              + [h for h in hits if " | " in str(h.get("text", ""))] + hits)       # the statement's own page first
+    return ranked[:1]
+
+
 def gather(state: AgentState) -> Evidence:
     """The current plan's evidence. Facts are kept once per (company, metric, year, period, duration)."""
     plan = state.get("plan")
@@ -241,6 +259,7 @@ def gather(state: AgentState) -> Evidence:
                 evidence.facts.append(row)
         if result.error_type == "not_reported":
             evidence.not_reported.append(_not_reported(result))
+            evidence.checked += _checked_statement(result, results)
         if result.call.name == "search_filings" and isinstance(result.output, list):
             for hit in result.output:
                 chunk = hit.get("chunk_id") if isinstance(hit, dict) else None
@@ -296,6 +315,14 @@ def structured_parts(evidence: Evidence) -> tuple[list[Value], list[Citation], l
             calculations.append(calculation)
         except (ValidationError, ValueError, KeyError) as err:
             notes.append(f"composer: the calculation did not fit the contract and was left out ({err!s:.120})")
+    for hit in evidence.checked:                # a "not reported" answer cites the section checked (spec §5, G)
+        try:
+            citation = Citation.from_search(hit)
+        except (ValidationError, KeyError) as err:
+            notes.append(f"composer: the checked statement could not be cited ({err!s:.120})")
+            continue
+        if citation not in citations:
+            citations.append(citation)
     return values, citations, calculations, notes
 
 

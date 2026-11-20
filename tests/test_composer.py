@@ -201,6 +201,73 @@ def test_not_reported_is_said_and_no_citation_is_demanded_of_the_model():
     assert cm.FALLBACK_NOTE not in result.notes and result.draft.values == []
 
 
+def checked_capex(ticker="WFC", year=2023):
+    """A capex fact the company does not report and the statement the executor checked it on (W2-07)."""
+    step = fact_step(ticker, "capex", year)
+    gap = done(step, {"error": {"type": "not_reported", "message": "no capital-expenditure line"}})
+    from agent.executor import checked_section_call
+    statement = hit(ticker, year, "Item 8", 40, "Consolidated Statement of Cash Flows | 2023 | 2022")
+    return step, [gap, ToolResult(call=checked_section_call(gap), output=[statement])], statement
+
+
+def test_a_not_reported_answer_cites_the_statement_that_was_checked():
+    """Spec §5 (G): "not reported" cites the section checked. Seen in the W2-07 demo (dev-G02): without it the
+    critic could never verify the answer, and a send-back round was spent for nothing."""
+    step, results, statement = checked_capex()
+    st = state("How much did Wells Fargo spend on capital expenditures in fiscal 2023?", plan(step), results,
+               Entities(("WFC",), (2023,), ("FY",)))
+    llm = FakeLLM(reply("Wells Fargo does not report capital expenditures for fiscal 2023."))
+    d = run(st, llm).draft
+    assert [c.chunk_id for c in d.citations] == [statement["chunk_id"]] and d.values == []
+    assert critic_problems(d, st) == [] and len(llm.calls) == 1
+    template = cm.fallback_draft(st, cm.gather(st))[0]                      # the template cites it too
+    assert template.citations == d.citations and critic_problems(template, st) == []
+
+
+def test_the_checked_statement_cited_is_the_statements_own_page():
+    """Seen on real filings: the auditor's report and the statements' index rank above the statement itself."""
+    step, results, _ = checked_capex()
+    auditor = hit("WFC", 2023, "Item 8", 7, "Report of Independent Registered Public Accounting Firm")
+    index = hit("WFC", 2023, "Item 8", 8, "Index | Page\nNotes | 120")
+    own = hit("WFC", 2023, "Item 8", 9, "Consolidated Statement of Cash Flows\n(in millions) | 2023 | 2022")
+    results[1] = results[1].model_copy(update={"output": [auditor, index, own]})
+    assert [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked] == [own["chunk_id"]]
+    results[1] = results[1].model_copy(update={"output": [auditor, index]})
+    assert [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked] == [index["chunk_id"]]
+    results[1] = results[1].model_copy(update={"output": [auditor]})
+    assert [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked] == [auditor["chunk_id"]]
+
+
+def test_a_not_reported_fact_without_a_checked_statement_has_no_citation_to_add():
+    step = fact_step("WFC", "capex", 2023)
+    gap = done(step, {"error": {"type": "not_reported", "message": "no capital-expenditure line"}})
+    assert cm.gather(state("q", plan(step), [gap])).checked == []
+
+
+def test_through_the_graph_a_not_reported_answer_ends_verified():
+    """The real executor (fake tools), composer (fake LLM) and critic: dev-G02's shape is verified in one round."""
+    from agent import executor as ex
+    from agent import graph as g
+    from agent.critic import make_critic
+    step, _, statement = checked_capex()
+
+    async def tools(name, arguments):
+        if name == "get_financial_fact":
+            return {"error": {"type": "not_reported", "message": "no capital-expenditure line"}}
+        return [statement]
+
+    async def planner(state):
+        return {"plan": plan(step), "entities": Entities(("WFC",), (2023,), ("FY",))}
+
+    llm = FakeLLM(reply("Wells Fargo does not report capital expenditures for fiscal 2023."))
+    graph = g.build_graph(g.Nodes(planner, ex.make_executor(tools, lambda t: len(t.split())), cm.make_composer(llm),
+                                  make_critic()))
+    result = asyncio.run(g.run("How much did Wells Fargo spend on capital expenditures in fiscal 2023?", graph=graph,
+                               limits=g.Limits()))
+    assert result.answer.verified, result.answer.notes
+    assert result.state["visits"] == {"planner": 1, "executor": 1, "composer": 1, "critic": 1}
+
+
 def test_passages_become_filing_citations_and_a_printed_passage_figure_a_value():
     step = search_step("Costco net sales", "COST", 2024)
     hits = [hit("COST", 2024, "Item 7", 3, "Net sales increased 5% to $249,625 million in fiscal 2024."),

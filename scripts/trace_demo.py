@@ -23,14 +23,9 @@ if str(ROOT) not in sys.path:
 
 
 def demo_nodes(llm: Any, call_tool: Any = None) -> Any:
-    """The real nodes: planner, executor, composer (W2-06) and critic."""
-    from agent.composer import make_composer
-    from agent.critic import make_critic
-    from agent.executor import make_executor
-    from agent.graph import Nodes
-    from agent.planner import make_planner
-    return Nodes(planner=make_planner(llm), executor=make_executor(call_tool), composer=make_composer(llm),
-                 critic=make_critic())
+    """The real nodes (agent.nodes.real_nodes): planner, executor, composer and critic."""
+    from agent.nodes import real_nodes
+    return real_nodes(llm, call_tool)
 
 
 async def traced_run(question: str, info: Any, nodes: Any, tracer: Any = None, limits: Any = None) -> Any:
