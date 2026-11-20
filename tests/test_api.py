@@ -14,7 +14,7 @@ from agent.state import Plan, PlanStep, Verdict
 from agent.stubs import stub_nodes
 from api import main as api
 from api.cache import ReplyCache, cache_key, normalise
-from api.sessions import Sessions
+from api.sessions import SessionIds, Sessions
 
 LIMITS = g.Limits(max_steps=10, max_tokens=12_000, timeout_s=10)
 QUESTION = "What was Apple's total revenue in fiscal 2024?"
@@ -67,6 +67,11 @@ def client(agent: FakeAgent | None = None, **config) -> tuple[TestClient, FakeAg
     return TestClient(app), agent
 
 
+def issued(c: TestClient) -> str:
+    """A session id this app issued (as a first answer would hand it out)."""
+    return c.app.state.finsight.ids.issue()
+
+
 def ask(c: TestClient, question=QUESTION, session=None, **body):
     headers = {api.SESSION_HEADER: session} if session else {}
     return c.post("/ask", json={"question": question, **body}, headers=headers)
@@ -80,28 +85,29 @@ def test_health_reports_the_model_and_counts():
     assert body == {"status": "ok", "warm_up": "ok", "model": "fake-model", "cache_entries": 0, "sessions": 0}
 
 
-def test_ask_returns_the_answer_contract_and_a_session():
+def test_ask_returns_the_answer_contract_and_a_signed_session():
     c, agent = client()
     with c:
         r = ask(c)
+        valid = c.app.state.finsight.ids.valid(r.json()["session_id"])
     body = r.json()
-    assert r.status_code == 200 and r.headers[api.SESSION_HEADER] == body["session_id"]
+    assert r.status_code == 200 and r.headers[api.SESSION_HEADER] == body["session_id"] and valid
     assert body["answer"]["answer"] == f"Answer to: {QUESTION}" and body["answer"]["verified"] is True
-    assert body["cached"] is False and body["history"] == []
+    assert body["cached"] is False and body["history"] == [] and body["seconds"] >= 0
     assert body["run"]["verdict"] == "verified" and body["run"]["visits"]["planner"] == 1
-    assert agent.calls == [(QUESTION, [])]
+    assert agent.calls == [(QUESTION, [])] and "Retry-After" not in r.headers
 
 
 # ----------------------------------------------------------------------------------------------- cache
 def test_the_same_question_is_answered_from_the_cache():
     c, agent = client()
     with c:
-        first = ask(c, session="a")
-        again = ask(c, "  what was APPLE’S total revenue in fiscal 2024  ", session="b")   # normalised
+        first = ask(c)
+        again = ask(c, "  what was APPLE’S total revenue in fiscal 2024  ")          # normalised, a new session
         health = c.get("/health").json()
     assert first.json()["cached"] is False and again.json()["cached"] is True
     assert again.json()["answer"] == first.json()["answer"] and len(agent.calls) == 1
-    assert health["cache_entries"] == 1
+    assert again.json()["run"] == first.json()["run"] and health["cache_entries"] == 1
 
 
 def test_the_history_is_part_of_the_key():
@@ -136,15 +142,17 @@ def test_a_follow_up_gets_the_sessions_earlier_questions():
         sid = ask(c).json()["session_id"]
         r = ask(c, "And in fiscal 2023?", session=sid)
     assert r.json()["history"] == [QUESTION] and agent.calls[-1] == ("And in fiscal 2023?", [QUESTION])
+    assert r.json()["session_id"] == sid
 
 
 def test_a_cache_hit_still_counts_as_the_sessions_turn():
     """Why the API keeps the history (ADR-032): a checkpointer thread would miss a turn the cache answered."""
     c, agent = client()
     with c:
-        ask(c, session="first")                                  # the graph answers; the cache keeps it
-        assert ask(c, session="second").json()["cached"] is True
-        ask(c, "And in fiscal 2023?", session="second")
+        ask(c)                                                    # the graph answers; the cache keeps it
+        second = ask(c)
+        assert second.json()["cached"] is True
+        ask(c, "And in fiscal 2023?", session=second.json()["session_id"])
     assert agent.calls[-1] == ("And in fiscal 2023?", [QUESTION])
 
 
@@ -162,17 +170,28 @@ def test_the_last_question_sent_again_is_the_same_turn():
 def test_a_body_history_replaces_the_sessions():
     c, agent = client()
     with c:
-        ask(c, session="s")
-        r = ask(c, "And in fiscal 2023?", session="s", history=["What was Costco's revenue in fiscal 2024?"])
+        sid = ask(c).json()["session_id"]
+        r = ask(c, "And in fiscal 2023?", session=sid, history=["What was Costco's revenue in fiscal 2024?"])
     assert r.json()["history"] == ["What was Costco's revenue in fiscal 2024?"]
 
 
 def test_sessions_are_separate():
     c, agent = client()
     with c:
-        ask(c, session="alice")
-        r = ask(c, "And in fiscal 2023?", session="bob")
+        ask(c, session=issued(c))
+        r = ask(c, "And in fiscal 2023?", session=issued(c))
     assert r.json()["history"] == []
+
+
+def test_an_id_this_server_did_not_issue_starts_a_new_session():
+    """Review: a client minting ids would get a fresh rate-limit bucket per request and could flood the store."""
+    c, agent = client()
+    other_server = SessionIds(b"another secret").issue()
+    with c:
+        sid = ask(c).json()["session_id"]
+        for forged in (other_server, "made-up-id", sid[:-1] + ("0" if sid[-1] != "0" else "1")):
+            r = ask(c, "And in fiscal 2023?", session=forged)
+            assert r.json()["session_id"] not in (forged, sid) and r.json()["history"] == []
 
 
 def test_the_history_is_capped():
@@ -187,16 +206,33 @@ def test_the_history_is_capped():
 async def test_a_sessions_questions_run_one_at_a_time_and_others_alongside():
     agent = FakeAgent(delay=0.05)
     app = api.create_app(graph=g.build_graph(agent.nodes()), config=api.ApiConfig(limits=LIMITS, max_concurrent=2))
+    ids = app.state.finsight.ids
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
-        same = [c.post("/ask", json={"question": f"Q{i} about Apple?"}, headers={api.SESSION_HEADER: "s"})
+        one = ids.issue()
+        same = [c.post("/ask", json={"question": f"Q{i} about Apple?"}, headers={api.SESSION_HEADER: one})
                 for i in range(3)]
-        await asyncio.gather(*same)
+        assert all(r.status_code == 200 for r in await asyncio.gather(*same))
         assert agent.most_active == 1                               # one session: never two at once
         agent.most_active = 0
-        others = [c.post("/ask", json={"question": f"R{i} about Apple?"}, headers={api.SESSION_HEADER: f"s{i}"})
+        others = [c.post("/ask", json={"question": f"R{i} about Apple?"}, headers={api.SESSION_HEADER: ids.issue()})
                   for i in range(3)]
-        await asyncio.gather(*others)
+        assert all(r.status_code == 200 for r in await asyncio.gather(*others))
         assert agent.most_active == 2                               # other sessions: up to max_concurrent
+
+
+@pytest.mark.anyio
+async def test_a_question_waiting_too_long_for_a_slot_is_503():
+    agent = FakeAgent(delay=0.3)
+    app = api.create_app(graph=g.build_graph(agent.nodes()),
+                         config=api.ApiConfig(limits=LIMITS, max_concurrent=1, queue_timeout_s=0.05))
+    ids = app.state.finsight.ids
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        first, second = await asyncio.gather(*[
+            c.post("/ask", json={"question": f"Q{i} about Apple?"}, headers={api.SESSION_HEADER: ids.issue()})
+            for i in range(2)])
+    codes = sorted([first.status_code, second.status_code])
+    busy = first if first.status_code == 503 else second
+    assert codes == [200, 503] and busy.headers["Retry-After"] and "busy" in busy.json()["detail"]
 
 
 @pytest.fixture
@@ -204,28 +240,56 @@ def anyio_backend():
     return "asyncio"
 
 
-# ----------------------------------------------------------------------------------------------- rate limit
+# ----------------------------------------------------------------------------------------------- rate limits
 def test_the_rate_limit_is_per_session():
     c, _ = client(rate_limit="2/minute")
     with c:
-        codes = [ask(c, f"Q{i} about Apple?", session="s").status_code for i in range(3)]
-        limited = ask(c, "Q9 about Apple?", session="s")
-        other = ask(c, "Q1 about Apple?", session="other")
-    assert codes == [200, 200, 429] and other.status_code == 200
-    assert "Retry-After" in limited.headers
+        sid, other = issued(c), issued(c)
+        codes = [ask(c, f"Q{i} about Apple?", session=sid).status_code for i in range(3)]
+        limited = ask(c, "Q9 about Apple?", session=sid)
+        fine = ask(c, "Q1 about Apple?", session=other)
+    assert codes == [200, 200, 429] and fine.status_code == 200
+    assert limited.headers["Retry-After"] == "60" and limited.json()["detail"].startswith("rate limit exceeded")
 
 
-def test_without_a_session_the_limit_is_per_address():
+def test_without_an_issued_session_the_limit_is_per_address():
     c, _ = client(rate_limit="1/minute")
     with c:
         assert [ask(c, f"Q{i} about Apple?").status_code for i in range(2)] == [200, 429]
+        assert ask(c, "Q3 about Apple?", session="minted-by-the-client").status_code == 429
+
+
+def test_the_address_limit_holds_across_sessions():
+    """Review: new sessions per request would otherwise each get a fresh per-session bucket."""
+    c, _ = client(rate_limit="5/minute", address_rate_limit="3/minute")
+    with c:
+        codes = [ask(c, f"Q{i} about Apple?", session=issued(c)).status_code for i in range(4)]
+    assert codes == [200, 200, 200, 429]
 
 
 def test_a_cached_answer_still_counts_toward_the_limit():
     c, agent = client(rate_limit="2/minute")
     with c:
-        assert [ask(c, session="s").status_code for _ in range(3)] == [200, 200, 429]
+        sid = issued(c)
+        assert [ask(c, session=sid).status_code for _ in range(3)] == [200, 200, 429]
     assert len(agent.calls) == 1
+
+
+@pytest.mark.parametrize("field", ["rate_limit", "address_rate_limit"])
+def test_a_malformed_rate_limit_fails_at_once(field):
+    """Review: slowapi would log a bad limit on every request and apply none."""
+    with pytest.raises(ValueError):
+        api.ApiConfig(**{field: "ten per minute"})
+
+
+@pytest.mark.parametrize("name", ["API_RATE_LIMIT", "API_ADDRESS_RATE_LIMIT"])
+def test_the_settings_refuse_a_malformed_rate_limit(name):
+    from pydantic import ValidationError
+
+    from tests.test_llm import settings
+    with pytest.raises(ValidationError):
+        settings(**{name: "ten per minute"})
+    assert settings(**{name: "100/hour; 10/minute"})
 
 
 # ----------------------------------------------------------------------------------------------- errors
@@ -241,8 +305,8 @@ def test_an_invalid_request_is_422(body):
     assert agent.calls == []
 
 
-@pytest.mark.parametrize("session", ["has space", "x" * 65, "semi;colon"])
-def test_an_invalid_session_id_is_422(session):
+@pytest.mark.parametrize("session", ["has space", "x" * 129, "semi;colon"])
+def test_a_malformed_session_header_is_422(session):
     c, agent = client()
     with c:
         assert ask(c, session=session).status_code == 422
@@ -253,16 +317,18 @@ def test_an_error_inside_the_agent_is_a_generic_500():
     c, _ = client()
     with TestClient(c.app, raise_server_exceptions=False) as c2:
         r = ask(c2, "Boom, what was Apple's revenue?")
-        after = ask(c2, session="next")                           # the app keeps serving
+        after = ask(c2)                                           # the app keeps serving
     assert r.status_code == 500 and r.json() == {"detail": "internal error"} and "secret" not in r.text
     assert after.status_code == 200
 
 
-def test_the_session_lock_is_released_after_an_error():
+def test_the_session_is_released_after_an_error():
     c, agent = client()
     with TestClient(c.app, raise_server_exceptions=False) as c2:
-        assert ask(c2, "Boom, what was Apple's revenue?", session="s").status_code == 500
-        assert ask(c2, session="s").status_code == 200
+        sid = issued(c2)
+        assert ask(c2, "Boom, what was Apple's revenue?", session=sid).status_code == 500
+        assert ask(c2, session=sid).status_code == 200
+        assert c2.app.state.finsight.sessions._sessions[sid].users == 0
 
 
 # ----------------------------------------------------------------------------------------------- start-up
@@ -290,15 +356,16 @@ def test_health_shows_the_warm_up():
 
 
 def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
-    """create_app() with no graph: settings, one LLM client opened and closed with the app, the real nodes."""
+    """create_app() with no graph: settings (limits included), one LLM client opened and closed, the real nodes."""
     import agent.nodes
     import core.llm
     import core.settings
     import tools.registry
 
     class Settings:
-        API_RATE_LIMIT, API_CACHE_TTL_S, API_CACHE_MAX_ENTRIES, API_MAX_CONCURRENT = "5/minute", 60.0, 10, 1
-        API_SESSION_TTL_S, API_MAX_SESSIONS = 60.0, 10
+        API_RATE_LIMIT, API_ADDRESS_RATE_LIMIT, API_QUEUE_TIMEOUT_S = "2/minute", "60/minute", 5.0
+        API_CACHE_TTL_S, API_CACHE_MAX_ENTRIES, API_MAX_CONCURRENT = 60.0, 10, 1
+        API_SESSION_TTL_S, API_MAX_SESSIONS, API_SESSION_SECRET = 60.0, 10, None
         MAX_AGENT_STEPS, MAX_TOKENS_PER_QUERY, QUERY_TIMEOUT_S = 10, 12_000, 10.0
         LLM_MODEL, LANGFUSE_ENABLED = "Qwen/Qwen3-8B", False
 
@@ -320,34 +387,45 @@ def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
     monkeypatch.setattr(agent.nodes, "real_nodes", lambda llm: events.append("nodes") or fake.nodes())
     monkeypatch.setattr(tools.registry, "warm_up", lambda: {"ok": True})
     with TestClient(api.create_app()) as c:
-        assert ask(c).status_code == 200
+        sid = ask(c).json()["session_id"]
+        codes = [ask(c, f"Q{i} about Apple?", session=sid).status_code for i in range(3)]
         for _ in range(100):
             if c.get("/health").json()["status"] == "ok":
                 break
             threading.Event().wait(0.02)
         body = c.get("/health").json()
     assert body["model"] == "Qwen/Qwen3-8B" and body["status"] == "ok"
+    assert codes == [200, 200, 429]                                 # the settings' 2/minute is the one applied
     assert events == ["open", "nodes", "close"]
+
+
+def test_a_shared_secret_makes_ids_valid_across_apps():
+    one = api.create_app(graph=g.build_graph(FakeAgent().nodes()), config=api.ApiConfig(session_secret=b"s3cret"))
+    two = api.create_app(graph=g.build_graph(FakeAgent().nodes()), config=api.ApiConfig(session_secret=b"s3cret"))
+    assert two.state.finsight.ids.valid(one.state.finsight.ids.issue())
 
 
 def test_importing_the_module_needs_no_env():
     assert api.app.title == "FinSight"
 
 
-def test_a_traced_run_is_tagged_with_its_session(monkeypatch):
-    seen = {}
+def test_a_traced_run_is_grouped_by_its_session(monkeypatch):
+    seen = []
     real_run = api.run
 
     async def spy(*args, **kwargs):
-        seen["trace"] = kwargs.get("trace")
+        seen.append(kwargs.get("trace"))
         kwargs["trace"] = None
         return await real_run(*args, **kwargs)
 
     monkeypatch.setattr(api, "run", spy)
     c, _ = client(trace=True)
     with c:
-        ask(c, session="abc")
-    assert seen["trace"].run_id == "api-abc"
+        sid = issued(c)
+        ask(c, "Q1 about Apple?", session=sid)
+        ask(c, "Q2 about Apple?", session=sid)
+    assert [t.session_id for t in seen] == [sid, sid] and {t.run_id for t in seen} == {"api"}
+    assert seen[0].question_id != seen[1].question_id
 
 
 # ----------------------------------------------------------------------------------------------- cache, sessions
@@ -373,19 +451,56 @@ def test_the_cache_expires_and_drops_the_least_recently_used():
     assert len(no_lifetime) == 0                                    # a disabled cache holds nothing (health counts)
 
 
-def test_sessions_expire_and_a_running_one_is_kept():
+def test_session_ids_are_signed():
+    ids = SessionIds(b"k")
+    sid = ids.issue()
+    assert ids.valid(sid) and not SessionIds(b"other").valid(sid)
+    assert not ids.valid(None) and not ids.valid("") and not ids.valid("abc.def") and not ids.valid(sid + ".x")
+
+
+def test_sessions_expire_are_capped_and_remember_capped_history():
     now = [0.0]
     sessions = Sessions(max_sessions=2, ttl_s=10, clock=lambda: now[0])
-    first = sessions.get("a")
-    sessions.remember("a", ["q1"])
-    assert sessions.get("a") is first and first.history == ["q1"]
-    sessions.get("b")
-    asyncio.run(first.lock.acquire())                               # a's question is running
-    sessions.get("c")                                               # over the limit: b goes, a stays
-    assert sessions.get("a") is first and len(sessions) == 2
-    first.lock.release()
-    now[0] = 20.0
-    assert sessions.get("a") is not first and sessions.get("a").history == []        # expired: a fresh session
-    many = [f"And the margin, take {chr(97 + i)}?" for i in range(10)]
-    sessions.remember("a", many)
-    assert sessions.get("a").history == g.cap_history(many)
+
+    async def turns():
+        async with sessions.hold("a") as a:
+            sessions.remember("a", ["q1"])
+        async with sessions.hold("a") as again:
+            assert again is a and a.history == ["q1"]
+        async with sessions.hold("b"), sessions.hold("c"):
+            pass                                                    # over the limit: the oldest (a) goes
+        sessions.remember("b", ["old question"])
+        assert len(sessions) == 2 and "a" not in sessions._sessions
+        now[0] = 20.0
+        async with sessions.hold("b") as b:
+            assert b.history == []                                  # expired: a fresh session
+        many = [f"And the margin, take {chr(97 + i)}?" for i in range(10)]
+        sessions.remember("b", many)
+        assert sessions._sessions["b"].history == g.cap_history(many)
+
+    asyncio.run(turns())
+
+
+def test_a_session_waited_for_is_never_dropped():
+    """Review: between a holder's release and its waiter's resumption the lock reads as free; a session with a
+    waiter must still not be dropped, or the waiter's turn is lost and a third request runs alongside it."""
+    sessions = Sessions(max_sessions=1, ttl_s=10, clock=lambda: 0.0)
+
+    async def scenario():
+        async def second_turn():
+            async with sessions.hold("a") as s:
+                sessions.remember("a", [*s.history, "q2"])
+
+        first = sessions.hold("a")
+        held = await first.__aenter__()                              # q1 holds a's lock
+        waiter = asyncio.create_task(second_turn())
+        await asyncio.sleep(0)                                       # q2 now waits on the lock
+        sessions.remember("a", [*held.history, "q1"])
+        await first.__aexit__(None, None, None)                      # q1 releases; q2 has not resumed yet
+        assert not held.lock.locked() and held.users == 1            # the window: free lock, one waiter
+        async with sessions.hold("b"):                               # over the limit: a has a waiter, so it stays
+            assert "a" in sessions._sessions
+        await waiter
+        assert sessions._sessions["a"].history == ["q1", "q2"] and sessions._sessions["a"] is held
+
+    asyncio.run(scenario())

@@ -625,3 +625,25 @@ def test_the_default_caller_is_the_tool_registry(monkeypatch):
     monkeypatch.setattr(core.tokens, "count_tokens", words)
     out = asyncio.run(ex.make_executor()({"plan": plan(search()), "tool_results": [], "limits": {}}))
     assert seen == ["search_filings"] and out["tool_error"] is None
+
+
+def test_a_failed_tokenizer_load_is_not_retried_on_every_count(monkeypatch):
+    """W2-09 review: core.tokens retries a failed load on each call (a network attempt), which an executor round on
+    the API's event loop must not pay; the executor falls back to its estimate and retries after a while."""
+    import core.tokens
+    from core.exceptions import FinSightError
+    attempts = []
+
+    def offline(text):
+        attempts.append(text)
+        raise FinSightError("no tokenizer", error_type="TokenizerUnavailable")
+
+    monkeypatch.setattr(core.tokens, "count_tokens", offline)
+    monkeypatch.setattr(ex, "_tokenizer_failed_at", None)
+    now = [1000.0]
+    monkeypatch.setattr(ex.time, "monotonic", lambda: now[0])
+    assert ex._default_count_tokens("abcd") == 2 and ex._default_count_tokens("abcdef") == 3
+    assert len(attempts) == 1                                       # the second count did not try to load again
+    now[0] += ex.TOKENIZER_RETRY_S
+    ex._default_count_tokens("ab")
+    assert len(attempts) == 2                                       # retried after TOKENIZER_RETRY_S

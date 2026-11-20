@@ -1,24 +1,27 @@
-"""The FinSight API (W2-09, ADR-032): the agent behind HTTP, with a reply cache and a per-session rate limit.
+"""The FinSight API (W2-09, ADR-032): the agent behind HTTP, with a reply cache and rate limits.
 
     POST /ask      {"question": "...", "history": [...]?}, header X-Session-Id (optional)  -> AskResponse
     GET  /health   -> HealthResponse: ready or warming up, the model, the cache and session counts
 
-    uvicorn api.main:app --port 8000      (needs .env and data/, like scripts/ask.py)
+    uvicorn api.main:app --port 8000      (needs .env and data/, like scripts/ask.py; one worker: state is in memory)
 
 - One compiled graph on the real nodes (agent.nodes.real_nodes) serves every request, on one LLM client opened and
   closed with the app (core/llm.py). The graph is async; its blocking tool calls run on worker threads through
   tools.registry.call_tool_async, and the index warm-up (tools.registry.warm_up, tens of seconds) runs on a thread
   at start-up, so the event loop keeps serving /health meanwhile.
-- Sessions: a client keeps a conversation by sending the X-Session-Id it got back from its first question. The API
-  keeps the session's earlier questions and passes them to the agent (capped by agent.graph.cap_history); a body
-  "history" replaces them (the evaluation replays chains that way). A session's questions run one at a time.
+- Sessions: the server issues a signed X-Session-Id with a conversation's first answer; the client sends it with
+  the next questions. An id this server did not issue starts a new session (a client cannot mint ids). The API keeps
+  the session's earlier questions and passes them to the agent (capped by agent.graph.cap_history); a body "history"
+  replaces them (the evaluation replays chains that way). A session's questions run one at a time.
 - Reply cache: keyed on the normalised question and the earlier questions it was asked with; only a verified answer
   or a refusal is kept (an unverified one may be a time-out). A cache hit still counts as the session's turn; the
-  session's last question sent again (a client's retry) is the same turn, not a follow-up of itself.
-- Rate limit: slowapi, API_RATE_LIMIT per session (the X-Session-Id, else the client address); over it, 429 with
-  Retry-After. At most API_MAX_CONCURRENT questions run at once (the shared endpoint key).
-- Errors: an invalid request is 422; an error inside the agent is a 500 with a generic message (logged here, never
-  the internals in the response).
+  session's last question sent again (a client's retry) is the same turn, not a follow-up of itself. `run` describes
+  the run that produced the answer; `seconds` is this request's.
+- Rate limits (slowapi): API_RATE_LIMIT per session (an issued id, else the client address) and API_ADDRESS_RATE_LIMIT
+  per client address whatever the id; over one, 429 with Retry-After. At most API_MAX_CONCURRENT questions run at
+  once (the shared endpoint key); one that waits longer than API_QUEUE_TIMEOUT_S for its turn gets 503.
+- Errors: {"detail": ...} throughout. An invalid request is 422; an error inside the agent is a 500 with a generic
+  message (logged here, never the internals in the response). Nothing logs a question or a key.
 
 create_app(graph=..., config=...) serves a given graph (the tests' fake one: no endpoint, no .env); create_app()
 builds the real one when the app starts, so importing this module needs no .env.
@@ -28,16 +31,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from limits import parse_many
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
@@ -45,12 +50,12 @@ from agent.contract import AnswerContract
 from agent.graph import AgentRun, Limits, cap_history, run
 from agent.transcript import verdict
 from api.cache import ReplyCache, cache_key, normalise
-from api.sessions import Sessions, new_session_id
+from api.sessions import SessionIds, Sessions
 
 log = logging.getLogger(__name__)
 
 SESSION_HEADER = "X-Session-Id"
-SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+SESSION_HEADER_SHAPE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")      # anything else is a malformed header: 422
 MAX_QUESTION_CHARS = 1_000              # spec §2's questions are a sentence or two
 MAX_HISTORY = 20                        # earlier questions in a body; the agent sees at most cap_history of them
 Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_CHARS)]
@@ -72,7 +77,7 @@ class ToolCallSummary(BaseModel):
 
 
 class RunSummary(BaseModel):
-    """What the run cost and did (for the UI's trace expander), without the tool outputs."""
+    """What the run that produced the answer cost and did (the UI's trace expander), without the tool outputs."""
     verdict: str
     steps: int
     tokens: int
@@ -84,7 +89,8 @@ class RunSummary(BaseModel):
 
 class AskResponse(BaseModel):
     session_id: str
-    cached: bool
+    cached: bool = Field(description="answered from the reply cache: `run` is the run that produced it")
+    seconds: float = Field(description="this request's time")
     history: list[str] = Field(description="the earlier questions the answer was given with")
     answer: AnswerContract
     run: RunSummary
@@ -102,20 +108,31 @@ class HealthResponse(BaseModel):
 @dataclass(frozen=True)
 class ApiConfig:
     rate_limit: str = "10/minute"
+    address_rate_limit: str = "60/minute"
     cache_ttl_s: float = 3600.0
     cache_max_entries: int = 512
     max_concurrent: int = 2
+    queue_timeout_s: float = 30.0
     session_ttl_s: float = 3600.0
     max_sessions: int = 1000
+    session_secret: bytes | None = None             # None: a random one per process
     limits: Limits = field(default_factory=Limits)
     model: str | None = None
     trace: bool = False
 
+    def __post_init__(self) -> None:
+        for limit in (self.rate_limit, self.address_rate_limit):
+            parse_many(limit)                       # a malformed limit fails here, not silently per request
+
     @classmethod
     def from_settings(cls, settings: Any) -> ApiConfig:
-        return cls(settings.API_RATE_LIMIT, settings.API_CACHE_TTL_S, settings.API_CACHE_MAX_ENTRIES,
-                   settings.API_MAX_CONCURRENT, settings.API_SESSION_TTL_S, settings.API_MAX_SESSIONS,
-                   Limits.from_settings(settings), settings.LLM_MODEL, settings.LANGFUSE_ENABLED)
+        secret = settings.API_SESSION_SECRET
+        return cls(rate_limit=settings.API_RATE_LIMIT, address_rate_limit=settings.API_ADDRESS_RATE_LIMIT,
+                   cache_ttl_s=settings.API_CACHE_TTL_S, cache_max_entries=settings.API_CACHE_MAX_ENTRIES,
+                   max_concurrent=settings.API_MAX_CONCURRENT, queue_timeout_s=settings.API_QUEUE_TIMEOUT_S,
+                   session_ttl_s=settings.API_SESSION_TTL_S, max_sessions=settings.API_MAX_SESSIONS,
+                   session_secret=secret.get_secret_value().encode() if secret else None,
+                   limits=Limits.from_settings(settings), model=settings.LLM_MODEL, trace=settings.LANGFUSE_ENABLED)
 
 
 class _State:
@@ -130,13 +147,8 @@ class _State:
         self.config = config
         self.cache = ReplyCache(config.cache_max_entries, config.cache_ttl_s)
         self.sessions = Sessions(config.max_sessions, config.session_ttl_s)
+        self.ids = SessionIds(config.session_secret)
         self.slots = asyncio.Semaphore(config.max_concurrent)
-
-
-def session_key(request: Request) -> str:
-    """The rate limit's key: the session id sent, else the client address."""
-    sent = request.headers.get(SESSION_HEADER)
-    return f"session:{sent}" if sent and SESSION_ID.match(sent) else f"address:{get_remote_address(request)}"
 
 
 def run_summary(result: AgentRun) -> RunSummary:
@@ -151,6 +163,13 @@ def run_summary(result: AgentRun) -> RunSummary:
 def cacheable(answer: AnswerContract) -> bool:
     """A verified answer or a refusal: an unverified one may be a time-out or a passing failure worth retrying."""
     return answer.verified or answer.refused
+
+
+def rate_limited(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """429 in the API's error shape, with Retry-After: the limit's window."""
+    window = exc.limit.limit.get_expiry() if getattr(exc, "limit", None) is not None else 60
+    return JSONResponse(status_code=429, content={"detail": f"rate limit exceeded: {exc.detail}"},
+                        headers={"Retry-After": str(int(window))})
 
 
 # ----------------------------------------------------------------------------------------------- app
@@ -187,12 +206,17 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
             finally:
                 task.cancel()                       # a warm-up still running on its thread is left to finish
 
+    def session_key(request: Request) -> str:
+        """The per-session limit's key: an id this server issued, else the client address."""
+        sent = request.headers.get(SESSION_HEADER)
+        return f"session:{sent}" if state.ids.valid(sent) else f"address:{get_remote_address(request)}"
+
     app = FastAPI(title="FinSight", version="0.1.0", lifespan=lifespan,
                   description="Questions about US companies' SEC 10-K and 10-Q filings, answered with citations.")
-    limiter = Limiter(key_func=session_key, headers_enabled=True)
+    limiter = Limiter(key_func=session_key)
     app.state.limiter = limiter
     app.state.finsight = state
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_exception_handler(RateLimitExceeded, rate_limited)
 
     @app.exception_handler(Exception)
     async def internal_error(request: Request, exc: Exception) -> JSONResponse:
@@ -209,16 +233,18 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
 
     @app.post("/ask", response_model=AskResponse)
     @limiter.limit(lambda: state.config.rate_limit)
+    @limiter.limit(lambda: state.config.address_rate_limit, key_func=get_remote_address)
     async def ask(request: Request, response: Response, body: AskRequest,
                   session_id: Annotated[str | None, Header(alias=SESSION_HEADER)] = None) -> AskResponse:
-        if session_id is not None and not SESSION_ID.match(session_id):
-            raise HTTPException(status_code=422, detail=f"{SESSION_HEADER} must be 1-64 letters, digits, - or _")
-        if state.graph is None:
+        started = time.monotonic()
+        if session_id is not None and not SESSION_HEADER_SHAPE.match(session_id):
+            raise HTTPException(status_code=422, detail=f"{SESSION_HEADER} must be up to 128 letters, digits, ., - "
+                                                        "or _")
+        if state.graph is None:                     # only without the lifespan (an app driven without starting it)
             raise HTTPException(status_code=503, detail="starting up")
-        sid = session_id or new_session_id()
+        sid = session_id if state.ids.valid(session_id) else state.ids.issue()
         response.headers[SESSION_HEADER] = sid
-        session = state.sessions.get(sid)
-        async with session.lock:                    # a session's questions one at a time (W2-06)
+        async with state.sessions.hold(sid) as session:     # a session's questions one at a time (W2-06)
             history = cap_history(body.history if body.history is not None else session.history)
             if history and normalise(history[-1]) == normalise(body.question):
                 history = history[:-1]              # the last question again (a client's retry): the same turn
@@ -227,16 +253,29 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
             if hit is not None:
                 answer, summary = hit
             else:
-                async with state.slots:
-                    result = await run(body.question, history, graph=state.graph, limits=state.config.limits,
-                                       trace=_trace(state.config, sid))
+                result = await _answer(state, body.question, history, sid)
                 answer, summary = result.answer, run_summary(result)
                 if cacheable(answer):
                     state.cache.put(key, (answer, summary))
             state.sessions.remember(sid, [*history, body.question])
-        return AskResponse(session_id=sid, cached=hit is not None, history=history, answer=answer, run=summary)
+        return AskResponse(session_id=sid, cached=hit is not None, seconds=round(time.monotonic() - started, 2),
+                           history=history, answer=answer, run=summary)
 
     return app
+
+
+async def _answer(state: _State, question: str, history: list[str], session_id: str) -> AgentRun:
+    """The agent's run, in one of API_MAX_CONCURRENT slots; 503 when no slot frees within API_QUEUE_TIMEOUT_S."""
+    try:
+        await asyncio.wait_for(state.slots.acquire(), timeout=state.config.queue_timeout_s)
+    except TimeoutError:
+        raise HTTPException(status_code=503, detail="busy: too many questions at once, try again shortly",
+                            headers={"Retry-After": str(int(state.config.queue_timeout_s))}) from None
+    try:
+        return await run(question, history, graph=state.graph, limits=state.config.limits,
+                         trace=_trace(state.config, session_id))
+    finally:
+        state.slots.release()
 
 
 async def _warm(state: _State, warm_up: Callable[[], dict[str, Any]]) -> None:
@@ -252,11 +291,12 @@ async def _warm(state: _State, warm_up: Callable[[], dict[str, Any]]) -> None:
 
 
 def _trace(config: ApiConfig, session_id: str) -> Any:
-    """Langfuse tracing when .env turns it on (W2-08): a session's questions share the tag run:api-<session>."""
+    """Langfuse tracing when .env turns it on (W2-08): one trace per question (q:<request id>, run:api), a
+    conversation's turns grouped by its session."""
     if not config.trace:
         return None
     from core.tracing import TraceInfo
-    return TraceInfo(question_id="api-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S"), run_id=f"api-{session_id}")
+    return TraceInfo(question_id=uuid.uuid4().hex, run_id="api", session_id=session_id)
 
 
 app = create_app()

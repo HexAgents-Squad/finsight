@@ -105,6 +105,11 @@ class Settings(SecSettings):
     # API (W2-09, api/main.py, ADR-032). The rate limit is slowapi's syntax ("10/minute", "100/hour; 10/minute"),
     # per session (the X-Session-Id header, else the client address); the reply cache is in memory, per process.
     API_RATE_LIMIT: str = Field("10/minute", min_length=1, description="requests per session (slowapi syntax)")
+    API_ADDRESS_RATE_LIMIT: str = Field("60/minute", min_length=1,
+                                        description="requests per client address, whatever the session")
+    API_QUEUE_TIMEOUT_S: float = Field(30.0, gt=0, description="seconds a question waits for a free run slot (503)")
+    # Signs the session ids the API issues; empty = a random secret per process (ids then end with a restart)
+    API_SESSION_SECRET: SecretStr | None = Field(None, description="secret that signs the API's session ids")
     API_CACHE_TTL_S: float = Field(3600.0, ge=0, description="seconds a cached answer stays valid (0 = no cache)")
     API_CACHE_MAX_ENTRIES: int = Field(512, ge=0, description="answers kept in the reply cache (0 = no cache)")
     API_MAX_CONCURRENT: int = Field(2, gt=0, description="questions the agent answers at once (the shared key)")
@@ -121,11 +126,22 @@ class Settings(SecSettings):
 
     @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", "LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS",
                      "EMBED_CA_CERT", "EMBED_MAX_INPUT_TOKENS", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
-                     mode="before")
+                     "API_SESSION_SECRET", mode="before")
     @classmethod
     def _empty_is_unset(cls, value: object) -> object:
         """`LLM_CA_CERT=` in .env means "no certificate", not a path to the current folder."""
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("API_RATE_LIMIT", "API_ADDRESS_RATE_LIMIT")
+    @classmethod
+    def _rate_limit_syntax(cls, value: str) -> str:
+        """A malformed limit must fail at start-up: slowapi would log it per request and apply no limit (review)."""
+        from limits import parse_many  # slowapi's dependency
+        try:
+            parse_many(value)
+        except ValueError as err:
+            raise ValueError(f"not a rate limit (e.g. '10/minute'): {value!r}") from err
+        return value
 
     @field_validator("LLM_CA_CERT")
     @classmethod
