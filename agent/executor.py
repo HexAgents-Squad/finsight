@@ -93,21 +93,28 @@ CASH_FLOW_METRICS = frozenset({"capex", "operating_cash_flow"})
 BALANCE_SHEET_METRICS = frozenset({"total_assets", "total_liabilities", "stockholders_equity", "cash",
                                    "long_term_debt"})
 STATEMENTS_ITEM = {"10-K": "Item 8", "10-Q": "Part I Item 1"}
-# The search for each statement, and its title as filings print it (the composer cites the passage with the title:
-# the plain statement name finds the auditor's report or the index first, checked on WFC and AMZN 2023)
+# The search for each statement, worded like the statement's own page, and its title as filings print it (the
+# composer cites the statement's page, agent.composer.is_statement_page). Measured offline on every 10-K of the
+# corpus (20 companies x 3 years x 3 statements, Item 8, 5 hits): the page is among the hits for 162 of 180 with
+# these, 158 with "consolidated balance sheet: total assets, ..."-style ones, 113 with the bare statement names
+# (which find the auditor's report, the index or notes first)
 STATEMENT_QUERIES = {
-    "cash_flows": "consolidated statement of cash flows: cash flows from operating, investing and financing activities",
-    "balance_sheet": "consolidated balance sheet: total assets, total liabilities and equity",
-    "income": "consolidated statement of income: revenues, expenses and net income",
+    "cash_flows": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) operating activities net income adjustments "
+                  "investing activities financing activities",
+    "balance_sheet": "CONSOLIDATED BALANCE SHEETS (in millions) ASSETS current assets cash and cash equivalents total "
+                     "assets LIABILITIES AND STOCKHOLDERS' EQUITY total liabilities",
+    "income": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share data) revenues costs and expenses "
+              "income before income taxes net income earnings per share basic diluted",
 }
 STATEMENT_TITLES = {
-    STATEMENT_QUERIES["cash_flows"]: re.compile(r"statements?\s+of\s+cash\s+flows", re.IGNORECASE),
+    STATEMENT_QUERIES["cash_flows"]: re.compile(r"statements?\s+of\s+cash\s+flows|cash\s+flows?\s+statements?",
+                                                re.IGNORECASE),           # MSFT: "CASH FLOWS STATEMENTS"
     STATEMENT_QUERIES["balance_sheet"]: re.compile(r"balance\s+sheets?|statements?\s+of\s+(?:financial\s+)?condition",
                                                    re.IGNORECASE),
     STATEMENT_QUERIES["income"]: re.compile(r"statements?\s+of\s+(?:income|operations|earnings)|income\s+statements?",
                                             re.IGNORECASE),
 }
-CHECKED_PASSAGES = 5
+CHECKED_PASSAGES = 5                 # 162 of 180 pages among the top 5 (top 3: fewer); the search runs last
 
 
 def call_key(call: ToolCall) -> str:
@@ -354,13 +361,6 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         used.append(result)
         if is_error(result):                           # a new error: the graph replans once, then "not found"
             return _update(state, new, result.error_type, notes, None)
-    checks = {call_key(c): c for r in used if (c := checked_section_call(r)) is not None}
-    for call in checks.values():
-        _, stop = await attempt(call)                  # its own failure is no tool error: the fact's answer stands
-        if stop:
-            notes.append("executor: the checked statement was not fetched: "
-                         + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
-            break
     if plan.calculation:
         call, why = calculation_call(plan.calculation, used)
         lost = [c for c in failed_before if c.name in FACT_TOOLS]
@@ -374,6 +374,14 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
                 why = TOKEN_LIMIT                      # a stable note: the counts change between rounds
         if why:
             notes.append(f"executor: {plan.calculation} not calculated: {why}")
+    # Last, so it never takes the calculation's step or tokens (review): the citation for a "not reported" fact
+    checks = {call_key(c): c for r in used if (c := checked_section_call(r)) is not None}
+    for call in checks.values():
+        _, stop = await attempt(call)                  # its own failure is no tool error: the fact's answer stands
+        if stop:
+            notes.append("executor: the checked statement was not fetched: "
+                         + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
+            break
     return _update(state, new, None, notes, None)
 
 

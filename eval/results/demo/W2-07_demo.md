@@ -2,18 +2,18 @@
 
 Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache hits 0.
 
-| id | category | source | verdict | met | seconds | tokens | tool calls |
-|---|---|---|---|---|---|---|---|
-| demo-01 | fact | new | verified | yes | 4.47 | 2659 | 1 |
-| demo-02 | ratio | dev-B02 | verified | yes | 4.75 | 2799 | 3 |
-| demo-03 | period_comparison | new | verified | yes | 7.32 | 2956 | 3 |
-| demo-04 | multi_company | dev-D01 | verified | yes | 5.3 | 2826 | 3 |
-| demo-05 | qualitative | dev-E01 | verified | yes | 13.9 | 5994 | 1 |
-| demo-06 | fact | new | verified | yes | 3.59 | 2663 | 1 |
-| demo-07 | multi_turn | new | verified | yes | 3.8 | 2694 | 1 |
-| demo-08 | refuse | dev-G01 | refused | yes | 1.2 | 1791 | 0 |
-| demo-09 | refuse | new | partial refusal, verified | yes | 4.08 | 2715 | 1 |
-| demo-10 | refuse | dev-G02 | verified | yes | 3.89 | 2660 | 2 |
+| id | category | source | verdict | met | dev value | seconds | tokens | tool calls |
+|---|---|---|---|---|---|---|---|---|
+| demo-01 | fact | new | verified | yes | - | 5.16 | 2659 | 1 |
+| demo-02 | ratio | dev-B02 | verified | yes | yes | 4.82 | 2799 | 3 |
+| demo-03 | period_comparison | new | verified | yes | - | 7.56 | 2956 | 3 |
+| demo-04 | multi_company | dev-D01 | verified | yes | - | 5.65 | 2826 | 3 |
+| demo-05 | qualitative | dev-E01 | verified | yes | - | 20.28 | 5994 | 1 |
+| demo-06 | fact | new | verified | yes | - | 3.91 | 2663 | 1 |
+| demo-07 | multi_turn | new | verified | yes | - | 3.97 | 2694 | 1 |
+| demo-08 | refuse | dev-G01 | refused | yes | - | 1.25 | 1791 | 0 |
+| demo-09 | refuse | new | partial refusal, verified | yes | - | 4.6 | 2715 | 1 |
+| demo-10 | refuse | dev-G02 | verified | yes | - | 4.89 | 2660 | 2 |
 
 ### demo-01 (fact, new): verified answer
 
@@ -25,7 +25,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 **Citations:**
 - [META 10-K FY2025 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/
 **Tool calls:** get_financial_fact
-**Run:** 1 tool calls, 2659 tokens, 4.47 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 1 tool calls, 2659 tokens, 5.16 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
 ### demo-02 (ratio, dev-B02): verified answer
 
@@ -39,7 +39,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 - [PG 10-K FY2023 FY · us-gaap:OperatingIncomeLoss] https://www.sec.gov/Archives/edgar/data/80424/000008042423000073/
 - [PG 10-K FY2023 FY · us-gaap:Revenues] https://www.sec.gov/Archives/edgar/data/80424/000008042423000073/
 **Tool calls:** get_financial_fact, get_financial_fact, calculate
-**Run:** 3 tool calls, 2799 tokens, 4.75 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 3 tool calls, 2799 tokens, 4.82 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
 ### demo-03 (period_comparison, new): verified answer
 
@@ -53,7 +53,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 - [BAC 10-K FY2023 FY · us-gaap:Revenues] https://www.sec.gov/Archives/edgar/data/70858/000007085826000157/
 - [BAC 10-K FY2024 FY · us-gaap:Revenues] https://www.sec.gov/Archives/edgar/data/70858/000007085826000157/
 **Tool calls:** get_financial_fact, get_financial_fact, calculate
-**Run:** 3 tool calls, 2956 tokens, 7.32 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 3 tool calls, 2956 tokens, 7.56 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
 ### demo-04 (multi_company, dev-D01): verified answer
 
@@ -61,13 +61,13 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (verified):** Johnson & Johnson had a higher net income of $35,153 million in fiscal 2023 compared to Pfizer's $2,119 million.
 
-**Values:** net_income = 2119 USD millions (PFE FY 2023); net_income = 35153 USD millions (JNJ FY 2023); difference (PFE vs JNJ) = 33034 USD millions (PFE FY 2023)
+**Values:** net_income = 2119 USD millions (PFE FY 2023); net_income = 35153 USD millions (JNJ FY 2023); difference (JNJ minus PFE) = 33034 USD millions (PFE FY 2023)
 **Calculation:** difference of [2119.0, 35153.0] = 33034
 **Citations:**
 - [PFE 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/78003/000007800324000039/
 - [JNJ 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/200406/000020040624000013/
 **Tool calls:** get_financial_fact, get_financial_fact, calculate
-**Run:** 3 tool calls, 2826 tokens, 5.3 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 3 tool calls, 2826 tokens, 5.65 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
 ### demo-05 (qualitative, dev-E01): verified answer
 
@@ -80,7 +80,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 - [MSFT 10-K FY2023 FY · Item 7] https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm
 - [MSFT 10-K FY2023 FY · Item 7] https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm
 **Tool calls:** search_filings
-**Run:** 1 tool calls, 5994 tokens, 13.9 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 1 tool calls, 5994 tokens, 20.28 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 - note: composer: asked again for 1 problem(s): invariant 1: the answer states '365' but no value in values matches it
 - note: composer: dropped 1 sentence(s) whose figures no evidence backs
 
@@ -94,7 +94,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 **Citations:**
 - [AMZN 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/1018724/000101872424000008/
 **Tool calls:** get_financial_fact
-**Run:** 1 tool calls, 2663 tokens, 3.59 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 1 tool calls, 2663 tokens, 3.91 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
 ### demo-07 (multi_turn, new): verified answer
 
@@ -108,7 +108,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 **Citations:**
 - [MSFT 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/
 **Tool calls:** get_financial_fact
-**Run:** 1 tool calls, 2694 tokens, 3.8 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 1 tool calls, 2694 tokens, 3.97 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
 ### demo-08 (refuse, dev-G01): refused under R2
 
@@ -116,7 +116,7 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 
 **Answer (refused):** I can't help with that because it is a forecast that the filings do not state. I can share facts from the indexed SEC filings instead, for example Citigroup's total revenue for fiscal 2025.
 
-**Run:** 0 tool calls, 1791 tokens, 1.2 s, visits {'planner': 1, 'composer': 1, 'critic': 1}
+**Run:** 0 tool calls, 1791 tokens, 1.25 s, visits {'planner': 1, 'composer': 1, 'critic': 1}
 
 ### demo-09 (refuse, new): partial refusal under R1
 
@@ -128,9 +128,9 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 **Citations:**
 - [WFC 10-K FY2023 FY · us-gaap:NetIncomeLoss] https://www.sec.gov/Archives/edgar/data/72971/000007297124000064/
 **Tool calls:** get_financial_fact
-**Run:** 1 tool calls, 2715 tokens, 4.08 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 1 tool calls, 2715 tokens, 4.6 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
 
-### demo-10 (refuse, dev-G02): says it is not reported
+### demo-10 (refuse, dev-G02): verified: says it is not reported
 
 **Question:** How much did Wells Fargo spend on capital expenditures in fiscal 2023?
 
@@ -139,4 +139,4 @@ Model Qwen/Qwen3-8B; 10 queries; reply cache off; live chat requests 20, cache h
 **Citations:**
 - [WFC 10-K FY2023 FY · Item 8] https://www.sec.gov/Archives/edgar/data/72971/000007297124000064/wfc-20231231_d2.htm
 **Tool calls:** get_financial_fact (not_reported), search_filings
-**Run:** 2 tool calls, 2660 tokens, 3.89 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}
+**Run:** 2 tool calls, 2660 tokens, 4.89 s, visits {'planner': 1, 'executor': 1, 'composer': 1, 'critic': 1}

@@ -160,7 +160,7 @@ def test_a_difference_between_companies_cites_both():
     d = run(st, FakeLLM(reply("Johnson & Johnson's net income of $35,153 million was $33,034 million higher than "
                               "Pfizer's $2,119 million in fiscal 2023."))).draft
     assert {c.ticker for c in d.citations} == {"PFE", "JNJ"} and critic_problems(d, st) == []
-    assert d.values[2].name == "difference (PFE vs JNJ)"                        # both companies named
+    assert d.values[2].name == "difference (JNJ minus PFE)"         # the calculator's new minus old, both named
 
 
 def test_a_partial_refusal_answers_the_fact_and_adds_one_declining_sentence():
@@ -225,17 +225,41 @@ def test_a_not_reported_answer_cites_the_statement_that_was_checked():
 
 
 def test_the_checked_statement_cited_is_the_statements_own_page():
-    """Seen on real filings: the auditor's report and the statements' index rank above the statement itself."""
+    """Seen on real filings: the auditor's report, the statements' index and notes that mention a statement rank
+    above the statement itself (shapes from data/chunks: WFC, AMZN, ABBV 2023-2024)."""
     step, results, _ = checked_capex()
-    auditor = hit("WFC", 2023, "Item 8", 7, "Report of Independent Registered Public Accounting Firm")
-    index = hit("WFC", 2023, "Item 8", 8, "Index | Page\nNotes | 120")
+    auditor = hit("WFC", 2023, "Item 8", 7, "Report of Independent Registered Public Accounting Firm\nWe have audited "
+                  "the consolidated balance sheet and the consolidated statements of income and cash flows.")
+    index = hit("WFC", 2023, "Item 8", 8, "INDEX TO CONSOLIDATED FINANCIAL STATEMENTS | Page\nConsolidated "
+                "Statements of Cash Flows | 38")
+    note = hit("WFC", 2023, "Item 8", 10, "The table below shows amounts in the consolidated statement of cash flows:\n"
+               "Proceeds | 120 | 90")
     own = hit("WFC", 2023, "Item 8", 9, "Consolidated Statement of Cash Flows\n(in millions) | 2023 | 2022")
-    results[1] = results[1].model_copy(update={"output": [auditor, index, own]})
-    assert [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked] == [own["chunk_id"]]
-    results[1] = results[1].model_copy(update={"output": [auditor, index]})
-    assert [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked] == [index["chunk_id"]]
-    results[1] = results[1].model_copy(update={"output": [auditor]})
-    assert [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked] == [auditor["chunk_id"]]
+
+    def picked(hits):
+        results[1] = results[1].model_copy(update={"output": hits})
+        return [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked]
+
+    assert picked([auditor, index, note, own]) == [own["chunk_id"]]
+    assert picked([auditor, index, note]) == [auditor["chunk_id"]]          # no statement page: the search's best
+    assert picked([]) == []
+
+
+@pytest.mark.parametrize(("text", "page"), [
+    ("Consolidated Statement of Cash Flows\n(in millions) | 2023 | 2022", True),
+    ("AMAZON.COM, INC.\nCONSOLIDATED STATEMENTS OF CASH FLOWS\n(in millions) | 2023", True),
+    ("CASH FLOWS STATEMENTS\n(In millions)\nYear Ended June 30, | 2023 | 2022", True),                 # MSFT
+    ("CONSOLIDATED STATEMENT OF CASH FLOWS | Citigroup Inc. and Subsidiaries\nIn millions | 2024", True),
+    ("CONSOLIDATED STATEMENT OF CASH FLOWS (Continued) | Citigroup Inc. and Subsidiaries\nx | 1", True),
+    ("Johnson & Johnson and subsidiaries consolidated statements of cash flows\n(Dollars in Millions) | 2023", True),
+    ("Consolidated Statement of Cash Flows\nNo table here.", False),                                  # no table
+    ("The table below shows amounts in the consolidated statement of cash flows:\nProceeds | 120", False),
+    ("Note 3\nOther\nMore\nConsolidated Statement of Cash Flows\nx | 1", False),                     # not a heading
+    ("Condensed Statement of Cash Flows Parent Company Only\nIn millions | 2024", False),
+])
+def test_a_statement_page_has_its_title_as_a_heading_and_a_table(text, page):
+    from agent.executor import STATEMENT_QUERIES, STATEMENT_TITLES
+    assert cm.is_statement_page(text, STATEMENT_TITLES[STATEMENT_QUERIES["cash_flows"]]) is page
 
 
 def test_a_not_reported_fact_without_a_checked_statement_has_no_citation_to_add():

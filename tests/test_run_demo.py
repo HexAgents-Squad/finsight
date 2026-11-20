@@ -8,7 +8,7 @@ import json
 import pytest
 
 from agent import graph as g
-from agent.contract import AnswerContract
+from agent.contract import AnswerContract, Value
 from agent.state import Plan
 from agent.stubs import stub_nodes
 from agent.transcript import markdown, run_record, verdict
@@ -161,11 +161,25 @@ def record(**kw):
     ("partial", "R1", record(refusal_rule="R1"), True),
     ("partial", "R1", record(refusal_rule="R1", verified=False), False),
     ("partial", "R1", record(refused=True, refusal_rule="R1"), False),
-    ("not_reported", None, record(answer="Wells Fargo does not report capital expenditures.", verified=False), True),
+    ("not_reported", None, record(answer="Wells Fargo does not report capital expenditures."), True),
+    # review: the failure W2-07 fixed must not count as met again
+    ("not_reported", None, record(answer="Wells Fargo does not report capital expenditures.", verified=False), False),
     ("not_reported", None, record(answer="It spent $1 million."), False),
 ])
 def test_expectation_met(expect, rule, rec, met):
     assert rd.expectation_met({"expect": expect, "refusal_rule": rule}, rec)[0] is met
+
+
+def test_a_wrong_development_value_is_not_met():
+    item = {"expect": "answer", "refusal_rule": None}
+    assert rd.expectation_met(item, record(), dev_value_ok=False)[0] is False
+    assert rd.expectation_met(item, record(), dev_value_ok=True)[0] is True
+    assert rd.expectation_met(item, record(), dev_value_ok=None)[0] is True
+
+
+def test_a_zero_tolerance_stays_zero():
+    dev = {"dev-X": {"gold_value": 100.0, "tolerance_pct": 0.0}}
+    assert rd.dev_value_check({"source": "dev-X"}, record(values=[{"value": 100.5}]), dev) is False
 
 
 def test_a_development_value_is_checked_within_its_tolerance():
@@ -186,7 +200,12 @@ def test_the_runner_writes_transcripts_and_fails_on_unmet_expectations(tmp_path)
     refusal = next(r for r in records if r["id"] == "demo-08")
     assert refusal["met"] is False and refusal["under_time_limit"] is True
     md = (tmp_path / "t.md").read_text(encoding="utf-8")
-    assert md.startswith("# W2-07 demo: ") and "### demo-10" in md
+    assert md.startswith("# W2-07 demo: ") and "### demo-10" in md and "| dev value |" in md
+    assert b"\r\n" not in (tmp_path / "t.md").read_bytes() + (tmp_path / "t.jsonl").read_bytes()
+
+
+def test_the_runner_takes_default_limits_with_given_nodes(tmp_path):
+    assert rd.main(["--out-dir", str(tmp_path), "--stem", "t"], nodes=stub_nodes()) == 1
 
 
 def test_the_runner_meets_expectations_when_the_nodes_answer(tmp_path):
@@ -211,7 +230,12 @@ def test_the_runner_meets_expectations_when_the_nodes_answer(tmp_path):
                                                                   "fiscal 2024"), verified=False, refused=True,
                                             refusal_rule=d["refusal_rule"])}
         text = "It does not report that figure." if d["expect"] == "not_reported" else "An answer."
-        return {"draft": AnswerContract(answer=text, verified=False, refused=False, refusal_rule=d["refusal_rule"])}
+        dev = rd.dev_values().get(d["source"], {})
+        values = [] if dev.get("gold_value") is None else [Value(
+            name="x", value=dev["gold_value"], unit="%", ticker=d["companies"][0], fiscal_year=d["fiscal_years"][0],
+            fiscal_period="FY", duration=None, period_end="2023-06-30")]
+        return {"draft": AnswerContract(answer=text, values=values, verified=False, refused=False,
+                                        refusal_rule=d["refusal_rule"])}
 
     async def critic(state):
         from agent.state import Verdict

@@ -78,6 +78,7 @@ PROMPT_SHA256 = "cb0c35b7bcf25ad54bf0d9947f370e3a723fbf375e691a2bd997cc5ea38a257
 MAX_PASSAGES = 8                    # numbered passages shown to the model
 MAX_PASSAGE_CHARS = 1500            # of one passage's text (a statement table is longer; its head has the rows)
 MAX_PASSAGE_FIGURES = 6
+STATEMENT_HEADING_LINES = 3          # a statement page names itself in its first lines (company name, title, dates)
 MAX_ANSWER_CHARS = 900              # ~120 words (spec §8) with room; the prompt asks for 120 words
 TABLE_SCALES = {"thousands": 1e3, "millions": 1e6}     # what a statement table declares ("in millions")
 SCALE_DECLARATION = re.compile(r"\bin\s+(thousands|millions)\b", re.IGNORECASE)
@@ -227,8 +228,9 @@ def _not_reported(result: ToolResult) -> str:
 
 def _checked_statement(result: ToolResult, results: list[ToolResult]) -> list[dict[str, Any]]:
     """The statement passage the executor fetched for a not_reported fact (agent.executor.checked_section_call),
-    if it found one: what a "not reported" answer cites (spec §5, category G). The passage carrying the statement's
-    title, else one with a table, else the first."""
+    if it found one: what a "not reported" answer cites (spec §5, category G). The statement's own page (its title
+    in the passage's first lines, and a table), else the search's best hit: in review, a title anywhere in the text
+    also matched the index, the auditor's report and notes that mention the statement."""
     call = checked_section_call(result)
     if call is None:
         return []
@@ -236,9 +238,21 @@ def _checked_statement(result: ToolResult, results: list[ToolResult]) -> list[di
     hits = [h for h in (found[-1].output if found and isinstance(found[-1].output, list) else [])
             if isinstance(h, dict) and h.get("chunk_id")]
     title = STATEMENT_TITLES.get(call.arguments["query"])
-    ranked = ([h for h in hits if title is not None and title.search(str(h.get("text", "")))]
-              + [h for h in hits if " | " in str(h.get("text", ""))] + hits)       # the statement's own page first
-    return ranked[:1]
+    pages = [h for h in hits if title is not None and is_statement_page(str(h.get("text", "")), title)]
+    return (pages + hits)[:1]
+
+
+def is_statement_page(text: str, title: re.Pattern[str]) -> bool:
+    """A passage that is a financial statement itself: one of its first lines is the title on its own ("CONSOLIDATED
+    BALANCE SHEETS", "Consolidated Statements of Cash Flows", MSFT's "INCOME STATEMENTS"; the group may stand before
+    or after it: "Johnson & Johnson and subsidiaries consolidated ...", "... Citigroup Inc. and Subsidiaries"), and it
+    has a table. A note that mentions "the consolidated statements of earnings" in a sentence is not one (checked on
+    data/chunks)."""
+    group = r"[\w.,&'’ ]{2,60}?\s+and\s+subsidiaries"
+    heading = re.compile(rf"(?:{group}\s+)?(?:consolidated\s+)?(?:{title.pattern})\s*(?:\(continued\))?"
+                         rf"(?:\s*\|?\s*{group})?\s*[:.]?", re.IGNORECASE)
+    return " | " in text and any(heading.fullmatch(line.strip())
+                                 for line in text.splitlines()[:STATEMENT_HEADING_LINES])
 
 
 def gather(state: AgentState) -> Evidence:
@@ -308,7 +322,10 @@ def structured_parts(evidence: Evidence) -> tuple[list[Value], list[Citation], l
             calculation = Calculation.from_tool(calc)
             base = _newest(evidence.facts)
             tickers = list(dict.fromkeys(str(f.get("ticker")) for f in evidence.facts))
-            name = calc["operation"] + (f" ({' vs '.join(tickers)})" if len(tickers) > 1 else "")
+            if len(tickers) == 2 and calc["operation"] == "difference":     # the calculator: second minus first
+                name = f"difference ({tickers[1]} minus {tickers[0]})"
+            else:
+                name = calc["operation"] + (f" ({' vs '.join(tickers)})" if len(tickers) > 1 else "")
             values.append(Value(name=name, value=calc["result"], unit=calc["unit"] or base["unit"],
                                 ticker=base["ticker"], fiscal_year=base["fiscal_year"],
                                 fiscal_period=base["fiscal_period"], duration=None, period_end=base["period_end"]))

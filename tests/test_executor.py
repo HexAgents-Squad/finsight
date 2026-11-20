@@ -247,6 +247,15 @@ def test_the_checked_statement_failing_is_no_tool_error_and_is_not_sent_twice():
     assert out["tool_error"] is None and [n for n, _ in tools.calls].count("search_filings") == 1
 
 
+def test_the_checked_statement_never_takes_the_calculations_step():
+    """Review: a gap inside a trend still gets its growth; the check runs after the calculation, so at the step cap
+    it is the check that is skipped, not the calculation."""
+    steps = [fact("AAPL", "revenue", 2023), fact("AAPL", "revenue", 2024, "Q4"), fact("AAPL", "revenue", 2024)]
+    out, tools = run(plan(*steps, calculation="growth"), max_steps=4)
+    assert [n for n, _ in tools.calls] == ["get_financial_fact"] * 3 + ["calculate"]
+    assert any("checked statement was not fetched: step limit" in n for n in out["errors"])
+
+
 def test_the_checked_statement_respects_the_step_cap():
     out, tools = run(plan(fact("PG", "revenue", 2024, "Q4")), max_steps=1)
     assert [n for n, _ in tools.calls] == ["get_financial_fact"]

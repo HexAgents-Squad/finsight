@@ -38,8 +38,9 @@ class BudgetExceeded(RuntimeError):
 
 
 class BudgetedLLM:
-    """An LLM client that refuses to send more than `max_requests` live chat requests (cache hits are free):
-    the shared key's budget for one demo run."""
+    """An LLM client that refuses to start a chat request once `max_requests` live ones were sent (cache hits are
+    free): the shared key's budget for one demo run. A request already started may still pass it by its own HTTP
+    retries (core/llm.py counts them)."""
 
     def __init__(self, inner: Any, max_requests: int):
         self.inner, self.max_requests = inner, max_requests
@@ -78,11 +79,14 @@ def dev_values() -> dict[str, dict[str, Any]]:
     return {d["id"]: d for d in map(json.loads, DEV_FILE.read_text(encoding="utf-8").splitlines()) if d}
 
 
-def expectation_met(item: dict[str, Any], record: dict[str, Any]) -> tuple[bool, str]:
-    """Whether the answer is what the demo item expects (answered and verified, refused under its rule, a partial
-    refusal with the rule and a verified factual part, or "not reported" said)."""
+def expectation_met(item: dict[str, Any], record: dict[str, Any], dev_value_ok: bool | None = None) -> tuple[bool, str]:
+    """Whether the answer is what the demo item expects: a verified answer (with the development value, where the
+    item has one), a refusal under its rule, a verified partial refusal with the rule, or a verified answer that
+    says the figure is not reported (spec §5, category G)."""
     expect, rule = item["expect"], item.get("refusal_rule")
     if expect == "answer":
+        if dev_value_ok is False:
+            return False, "verified, but no value equals the development value"
         ok = record["verified"] and not record["refused"] and not record["refusal_rule"]
         return ok, "verified answer" if ok else f"expected a verified answer, got: {record['verdict']}"
     if expect == "refuse":
@@ -94,8 +98,9 @@ def expectation_met(item: dict[str, Any], record: dict[str, Any]) -> tuple[bool,
         return ok, f"partial refusal under {rule}" if ok else f"expected a verified partial refusal under {rule}, " \
                                                               f"got: {record['verdict']} ({record['refusal_rule']})"
     said = any(w in record["answer"].lower() for w in NOT_REPORTED_WORDS)
-    ok = said and not record["refused"]
-    return ok, "says it is not reported" if ok else "expected the answer to say the figure is not reported"
+    ok = said and not record["refused"] and record["verified"]
+    return ok, "verified: says it is not reported" if ok else ("expected a verified answer saying the figure is not "
+                                                               f"reported, got: {record['verdict']}")
 
 
 def dev_value_check(item: dict[str, Any], record: dict[str, Any], dev: dict[str, dict[str, Any]]) -> bool | None:
@@ -104,7 +109,8 @@ def dev_value_check(item: dict[str, Any], record: dict[str, Any], dev: dict[str,
     if source is None or source.get("gold_value") is None:
         return None
     target = abs(source["gold_value"])
-    tol = max(target * (source.get("tolerance_pct") or 1.0) / 100, 0.05)
+    pct = source.get("tolerance_pct")
+    tol = max(target * (1.0 if pct is None else pct) / 100, 0.05)
     return any(abs(abs(v["value"]) - target) <= tol for v in record["values"])
 
 
@@ -118,10 +124,11 @@ async def run_items(items: list[dict[str, Any]], nodes: Any, limits: Any) -> lis
         for item in chain:
             result = await run(item["question"], graph=graph, limits=limits, config=thread(chain[0]["id"]))
             record = run_record(result, item["question"])
-            met, why = expectation_met(item, record)
+            value_ok = dev_value_check(item, record, dev)
+            met, why = expectation_met(item, record, value_ok)
             records.append({"id": item["id"], "category": item["category"], "source": item["source"],
                             "expect": item["expect"], "expected_rule": item.get("refusal_rule"), "met": met,
-                            "why": why, "dev_value_ok": dev_value_check(item, record, dev),
+                            "why": why, "dev_value_ok": value_ok,
                             "under_time_limit": result.seconds < limits.timeout_s, **record})
             print(f"{item['id']}: {record['verdict']:30} met={met!s:5} {record['seconds']:5.1f}s "
                   f"{record['tokens']:6} tokens {record['steps']:2} tool calls", flush=True)
@@ -133,17 +140,19 @@ def write_outputs(records: list[dict[str, Any]], out_dir: Path, stem: str, heade
     from agent.transcript import markdown
     out_dir.mkdir(parents=True, exist_ok=True)
     jsonl, md = out_dir / f"{stem}.jsonl", out_dir / f"{stem}.md"
-    jsonl.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
+    jsonl.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8",
+                     newline="\n")
     met = sum(r["met"] for r in records)
+    dev_cell = {True: "yes", False: "NO", None: "-"}
     lines = [f"# W2-07 demo: {met}/{len(records)} met their expectation", "", header, "",
-             "| id | category | source | verdict | met | seconds | tokens | tool calls |",
-             "|---|---|---|---|---|---|---|---|"]
+             "| id | category | source | verdict | met | dev value | seconds | tokens | tool calls |",
+             "|---|---|---|---|---|---|---|---|---|"]
     lines += [f"| {r['id']} | {r['category']} | {r['source']} | {r['verdict']} | {'yes' if r['met'] else 'NO'} | "
-              f"{r['seconds']} | {r['tokens']} | {r['steps']} |" for r in records]
+              f"{dev_cell[r['dev_value_ok']]} | {r['seconds']} | {r['tokens']} | {r['steps']} |" for r in records]
     lines.append("")
     for r in records:
         lines.append(markdown(r, title=f"{r['id']} ({r['category']}, {r['source']}): {r['why']}"))
-    md.write_text("\n".join(lines), encoding="utf-8")
+    md.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     return jsonl, md
 
 
@@ -173,6 +182,9 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, limits: Any = None
         from agent.nodes import real_nodes
         budgeted = BudgetedLLM(llm or LLMClient(settings), args.max_requests)
         nodes, limits = real_nodes(budgeted), limits or Limits.from_settings(settings)
+    if limits is None:                              # nodes given without limits (a test or a script): the defaults
+        from agent.graph import Limits
+        limits = Limits()
     try:
         records = asyncio.run(run_items(items, nodes, limits))
     except BudgetExceeded as err:
