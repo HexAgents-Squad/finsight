@@ -104,14 +104,14 @@ def expectation_met(item: dict[str, Any], record: dict[str, Any], dev_value_ok: 
 
 
 def dev_value_check(item: dict[str, Any], record: dict[str, Any], dev: dict[str, dict[str, Any]]) -> bool | None:
-    """For a development item with a numeric value: whether a value in the answer equals it (within tolerance)."""
+    """For a development item with a numeric value: whether a value in the answer equals it, sign included, within
+    its tolerance_pct (1% and at least 0.05 when the item gives none)."""
     source = dev.get(item["source"])
     if source is None or source.get("gold_value") is None:
         return None
-    target = abs(source["gold_value"])
-    pct = source.get("tolerance_pct")
-    tol = max(target * (1.0 if pct is None else pct) / 100, 0.05)
-    return any(abs(abs(v["value"]) - target) <= tol for v in record["values"])
+    target, pct = source["gold_value"], source.get("tolerance_pct")
+    tol = max(abs(target) / 100, 0.05) if pct is None else abs(target) * pct / 100
+    return any(abs(v["value"] - target) <= tol for v in record["values"])
 
 
 async def run_items(items: list[dict[str, Any]], nodes: Any, limits: Any) -> list[dict[str, Any]]:

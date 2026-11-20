@@ -178,8 +178,14 @@ def test_a_wrong_development_value_is_not_met():
 
 
 def test_a_zero_tolerance_stays_zero():
-    dev = {"dev-X": {"gold_value": 100.0, "tolerance_pct": 0.0}}
-    assert rd.dev_value_check({"source": "dev-X"}, record(values=[{"value": 100.5}]), dev) is False
+    dev = {"dev-X": {"gold_value": 1.0, "tolerance_pct": 0.0}}
+    assert rd.dev_value_check({"source": "dev-X"}, record(values=[{"value": 1.04}]), dev) is False
+    assert rd.dev_value_check({"source": "dev-X"}, record(values=[{"value": 1.0}]), dev) is True
+
+
+def test_the_development_value_keeps_its_sign():
+    dev = {"dev-X": {"gold_value": 33034.0, "tolerance_pct": 1.0}}
+    assert rd.dev_value_check({"source": "dev-X"}, record(values=[{"value": -33034.0}]), dev) is False
 
 
 def test_a_development_value_is_checked_within_its_tolerance():

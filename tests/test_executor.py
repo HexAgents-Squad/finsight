@@ -256,6 +256,16 @@ def test_the_checked_statement_never_takes_the_calculations_step():
     assert any("checked statement was not fetched: step limit" in n for n in out["errors"])
 
 
+def test_a_calculation_error_still_gets_the_checked_statement():
+    """Verification review: the replan after a calculation error must not lose the "not reported" citation."""
+    steps = [fact("AAPL", "revenue", 2023), fact("AAPL", "revenue", 2024, "Q4"), fact("AAPL", "revenue", 2024)]
+    calc_key = json.dumps(["calculate", {"operation": "growth", "inputs": [383285.0, 391035.0]}], sort_keys=True)
+    tools = FakeTools({calc_key: {"error": {"type": "invalid_input", "message": "x"}}})
+    out, _ = run(plan(*steps, calculation="growth"), tools)
+    assert out["tool_error"] == "invalid_input"
+    assert [n for n, _ in tools.calls] == ["get_financial_fact"] * 3 + ["calculate", "search_filings"]
+
+
 def test_the_checked_statement_respects_the_step_cap():
     out, tools = run(plan(fact("PG", "revenue", 2024, "Q4")), max_steps=1)
     assert [n for n, _ in tools.calls] == ["get_financial_fact"]

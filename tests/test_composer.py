@@ -161,6 +161,11 @@ def test_a_difference_between_companies_cites_both():
                               "Pfizer's $2,119 million in fiscal 2023."))).draft
     assert {c.ticker for c in d.citations} == {"PFE", "JNJ"} and critic_problems(d, st) == []
     assert d.values[2].name == "difference (JNJ minus PFE)"         # the calculator's new minus old, both named
+    # a calculation whose inputs are in the other order (a reused earlier one) is named by its own inputs
+    reused = calc("difference", [35153, 2119], -33034.0, "USD millions")
+    st2 = state(st["question"], plan(s1, s2, calculation="difference"), [*results[:2], reused], st["entities"])
+    names = [v.name for v in cm.structured_parts(cm.gather(st2))[0]]
+    assert names[2] == "difference (PFE minus JNJ)"
 
 
 def test_a_partial_refusal_answers_the_fact_and_adds_one_declining_sentence():
@@ -254,8 +259,18 @@ def test_the_checked_statement_cited_is_the_statements_own_page():
     ("Johnson & Johnson and subsidiaries consolidated statements of cash flows\n(Dollars in Millions) | 2023", True),
     ("Consolidated Statement of Cash Flows\nNo table here.", False),                                  # no table
     ("The table below shows amounts in the consolidated statement of cash flows:\nProceeds | 120", False),
-    ("Note 3\nOther\nMore\nConsolidated Statement of Cash Flows\nx | 1", False),                     # not a heading
+    ("Note 3\nOther\nMore\nLines\nHere\nConsolidated Statement of Cash Flows\nx | 1", False),        # past the head
     ("Condensed Statement of Cash Flows Parent Company Only\nIn millions | 2024", False),
+    # 10-Q pages (verification review: they almost never matched)
+    ("CONDENSED CONSOLIDATED STATEMENTS OF CASH FLOWS\n(UNAUDITED)\n(MILLIONS) | 2025", True),
+    ("Condensed Consolidated Statements of Cash Flows (unaudited)\nSix months ended June 30, | 2025", True),
+    ("JPMorgan Chase & Co.\nConsolidated statements of cash flows (unaudited)\nx | 1", True),
+    # the title after the tail of the auditor's report (GOOGL, PG)
+    ("/s/ Ernst & Young LLP\nSan Jose, California\nFebruary 4, 2025\nAlphabet Inc.\nCONSOLIDATED STATEMENTS OF CASH "
+     "FLOWS\n(In millions) | 2024", True),
+    # JPM's parent-company-only statements in its notes: no "consolidated", not in capitals
+    ("Statements of cash flows\nYear ended December 31, (in millions) | 2024", False),
+    ("Notes to consolidated financial statements\nStatements of cash flows\nx | 1", False),
 ])
 def test_a_statement_page_has_its_title_as_a_heading_and_a_table(text, page):
     from agent.executor import STATEMENT_QUERIES, STATEMENT_TITLES

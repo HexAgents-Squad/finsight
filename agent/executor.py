@@ -361,6 +361,7 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         used.append(result)
         if is_error(result):                           # a new error: the graph replans once, then "not found"
             return _update(state, new, result.error_type, notes, None)
+    calc_error: str | None = None
     if plan.calculation:
         call, why = calculation_call(plan.calculation, used)
         lost = [c for c in failed_before if c.name in FACT_TOOLS]
@@ -369,7 +370,7 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         if call is not None:
             result, why = await attempt(call)         # a guard skips only the calculation: the figures stand
             if result is not None and is_error(result):
-                return _update(state, new, result.error_type, notes, None)
+                calc_error, why = result.error_type, None    # a new error: the graph replans, after the check below
             if why and why.startswith(TOKEN_LIMIT):
                 why = TOKEN_LIMIT                      # a stable note: the counts change between rounds
         if why:
@@ -382,7 +383,7 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
             notes.append("executor: the checked statement was not fetched: "
                          + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
             break
-    return _update(state, new, None, notes, None)
+    return _update(state, new, calc_error, notes, None)
 
 
 def _update(state: AgentState, new: list[ToolResult], tool_error: str | None, notes: list[str],

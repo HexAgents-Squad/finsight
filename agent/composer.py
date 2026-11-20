@@ -78,7 +78,7 @@ PROMPT_SHA256 = "cb0c35b7bcf25ad54bf0d9947f370e3a723fbf375e691a2bd997cc5ea38a257
 MAX_PASSAGES = 8                    # numbered passages shown to the model
 MAX_PASSAGE_CHARS = 1500            # of one passage's text (a statement table is longer; its head has the rows)
 MAX_PASSAGE_FIGURES = 6
-STATEMENT_HEADING_LINES = 3          # a statement page names itself in its first lines (company name, title, dates)
+STATEMENT_HEADING_LINES = 5          # a statement page names itself in its first lines (after an auditor-report tail)
 MAX_ANSWER_CHARS = 900              # ~120 words (spec §8) with room; the prompt asks for 120 words
 TABLE_SCALES = {"thousands": 1e3, "millions": 1e6}     # what a statement table declares ("in millions")
 SCALE_DECLARATION = re.compile(r"\bin\s+(thousands|millions)\b", re.IGNORECASE)
@@ -246,13 +246,22 @@ def is_statement_page(text: str, title: re.Pattern[str]) -> bool:
     """A passage that is a financial statement itself: one of its first lines is the title on its own ("CONSOLIDATED
     BALANCE SHEETS", "Consolidated Statements of Cash Flows", MSFT's "INCOME STATEMENTS"; the group may stand before
     or after it: "Johnson & Johnson and subsidiaries consolidated ...", "... Citigroup Inc. and Subsidiaries"), and it
-    has a table. A note that mentions "the consolidated statements of earnings" in a sentence is not one (checked on
-    data/chunks)."""
-    group = r"[\w.,&'’ ]{2,60}?\s+and\s+subsidiaries"
-    heading = re.compile(rf"(?:{group}\s+)?(?:consolidated\s+)?(?:{title.pattern})\s*(?:\(continued\))?"
-                         rf"(?:\s*\|?\s*{group})?\s*[:.]?", re.IGNORECASE)
-    return " | " in text and any(heading.fullmatch(line.strip())
+    has a table. A 10-Q's are "CONDENSED CONSOLIDATED ... (Unaudited)". A title without "consolidated" counts only in
+    capitals (MSFT); JPM's parent-company-only "Balance sheets" in its notes does not. A note that mentions "the
+    consolidated statements of earnings" in a sentence is not one (all checked on data/chunks, 10-K and 10-Q)."""
+    return " | " in text and any(_is_statement_heading(line.strip(), title)
                                  for line in text.splitlines()[:STATEMENT_HEADING_LINES])
+
+
+def _is_statement_heading(line: str, title: re.Pattern[str]) -> bool:
+    group = r"[\w.,&'’ ]{2,60}?\s+and\s+subsidiaries"
+    lead = r"(?:condensed\s+)?(?:consolidated\s+)?(?:condensed\s+)?"
+    tail = r"(?:\s*\((?:continued|unaudited)\))*"
+    heading = re.compile(rf"(?:{group}\s+)?{lead}(?:{title.pattern}){tail}(?:\s*\|?\s*{group})?{tail}\s*[:.]?",
+                         re.IGNORECASE)
+    if not heading.fullmatch(line):
+        return False
+    return "consolidated" in line.lower() or re.sub(r"\([^)]*\)", "", line).isupper()
 
 
 def gather(state: AgentState) -> Evidence:
@@ -322,8 +331,12 @@ def structured_parts(evidence: Evidence) -> tuple[list[Value], list[Citation], l
             calculation = Calculation.from_tool(calc)
             base = _newest(evidence.facts)
             tickers = list(dict.fromkeys(str(f.get("ticker")) for f in evidence.facts))
-            if len(tickers) == 2 and calc["operation"] == "difference":     # the calculator: second minus first
-                name = f"difference ({tickers[1]} minus {tickers[0]})"
+            # the calculator's difference is its second input minus its first: name them in that order, read from
+            # the calculation's own inputs (a reused earlier calculation may list them in another order than the plan)
+            order = [next((str(f.get("ticker")) for f in evidence.facts if same_number(f["value"], x)), None)
+                     for x in calc.get("inputs") or []]
+            if calc["operation"] == "difference" and len(order) == 2 and None not in order and order[0] != order[1]:
+                name = f"difference ({order[1]} minus {order[0]})"
             else:
                 name = calc["operation"] + (f" ({' vs '.join(tickers)})" if len(tickers) > 1 else "")
             values.append(Value(name=name, value=calc["result"], unit=calc["unit"] or base["unit"],
