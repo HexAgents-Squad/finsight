@@ -212,8 +212,84 @@ def test_a_typed_tool_error_stops_the_round_for_a_replan(kind):
 
 def test_not_reported_is_an_answer_not_a_replan():
     out, tools = run(plan(fact("PG", "revenue", 2024, "Q4"), search()))      # a Q4 question asked as Q4
-    assert out["tool_error"] is None and len(tools.calls) == 2
+    assert out["tool_error"] is None and len(tools.calls) == 3
     assert out["tool_results"][0].error_type == "not_reported"
+    # W2-07: the statement it was checked on, in the 10-K (Q4 is never filed on its own)
+    assert tools.calls[2] == ("search_filings", CHECKED_PG)
+
+
+CHECKED_PG = {"query": ex.STATEMENT_QUERIES["income"], "ticker": "PG", "fiscal_year": 2024, "fiscal_period": "FY",
+              "form": "10-K", "item": "Item 8", "k": ex.CHECKED_PASSAGES}
+
+
+@pytest.mark.parametrize(("metric", "period", "statement", "form", "item"), [
+    ("capex", "FY", "cash_flows", "10-K", "Item 8"),
+    ("total_liabilities", "FY", "balance_sheet", "10-K", "Item 8"),
+    ("gross_profit", "Q2", "income", "10-Q", "Part I Item 1"),
+])
+def test_a_not_reported_fact_is_checked_on_its_statement(metric, period, statement, form, item):
+    call = ToolCall(name="get_financial_fact", arguments={"ticker": "WFC", "metric": metric, "fiscal_year": 2025,
+                                                         "fiscal_period": period, "duration": None})
+    checked = ex.checked_section_call(ToolResult(call=call, output={"error": {"type": "not_reported", "message": "x"}}))
+    assert checked.name == "search_filings" and checked.arguments["query"] == ex.STATEMENT_QUERIES[statement]
+    assert (checked.arguments["form"], checked.arguments["item"], checked.arguments["fiscal_period"]) == (
+        form, item, period)
+    missing = ToolResult(call=call, output={"error": {"type": "data_missing", "message": "x"}})
+    assert ex.checked_section_call(missing) is None
+    assert ex.checked_section_call(ToolResult(call=call, output={"value": 1.0})) is None
+
+
+def test_every_metric_has_its_statement_from_the_concept_map():
+    from ingest.xbrl import load_concept_map
+    metrics = load_concept_map()
+    assert {ex.statement_of(m) for m in metrics} == {"income", "balance_sheet", "cash_flows"}
+    assert (ex.statement_of("capex"), ex.statement_of("total_assets"), ex.statement_of("revenue")) == (
+        "cash_flows", "balance_sheet", "income")
+    assert all(ex.statement_of(m) == "balance_sheet" for m, d in metrics.items() if d.period == "instant")
+
+
+def test_a_trend_over_unreported_years_is_checked_on_the_newest_statement():
+    """Review: compare_periods reports a declared gap as rows with missing = not_reported, not as an error."""
+    call = ToolCall(name="compare_periods", arguments={"ticker": "WFC", "metric": "capex", "years": [2023, 2024]})
+    rows = [{"ticker": "WFC", "metric": "capex", "fiscal_year": y, "fiscal_period": "FY", "value": None,
+             "missing": "not_reported", "notes": ["no capital-expenditure line"]} for y in (2023, 2024)]
+    checked = ex.checked_section_call(ToolResult(call=call, output=rows))
+    assert checked.arguments["fiscal_year"] == 2024 and checked.arguments["query"] == ex.STATEMENT_QUERIES["cash_flows"]
+    reported = [{**rows[0], "missing": None, "value": 1.0}]
+    assert ex.checked_section_call(ToolResult(call=call, output=reported)) is None
+
+
+def test_the_checked_statement_failing_is_no_tool_error_and_is_not_sent_twice():
+    tools = FakeTools({json.dumps(["search_filings", CHECKED_PG], sort_keys=True):
+                       {"error": {"type": "no_results", "message": "nothing"}}})
+    q4 = fact("PG", "revenue", 2024, "Q4")
+    out, _ = run(plan(q4, fact("PG", "revenue", 2024, "Q4")), tools)       # the same fact twice: one check
+    assert out["tool_error"] is None and [n for n, _ in tools.calls].count("search_filings") == 1
+
+
+def test_the_checked_statement_never_takes_the_calculations_step():
+    """Review: a gap inside a trend still gets its growth; the check runs after the calculation, so at the step cap
+    it is the check that is skipped, not the calculation."""
+    steps = [fact("AAPL", "revenue", 2023), fact("AAPL", "revenue", 2024, "Q4"), fact("AAPL", "revenue", 2024)]
+    out, tools = run(plan(*steps, calculation="growth"), max_steps=4)
+    assert [n for n, _ in tools.calls] == ["get_financial_fact"] * 3 + ["calculate"]
+    assert any("checked statement was not fetched: step limit" in n for n in out["errors"])
+
+
+def test_a_calculation_error_still_gets_the_checked_statement():
+    """Verification review: the replan after a calculation error must not lose the "not reported" citation."""
+    steps = [fact("AAPL", "revenue", 2023), fact("AAPL", "revenue", 2024, "Q4"), fact("AAPL", "revenue", 2024)]
+    calc_key = json.dumps(["calculate", {"operation": "growth", "inputs": [383285.0, 391035.0]}], sort_keys=True)
+    tools = FakeTools({calc_key: {"error": {"type": "invalid_input", "message": "x"}}})
+    out, _ = run(plan(*steps, calculation="growth"), tools)
+    assert out["tool_error"] == "invalid_input"
+    assert [n for n, _ in tools.calls] == ["get_financial_fact"] * 3 + ["calculate", "search_filings"]
+
+
+def test_the_checked_statement_respects_the_step_cap():
+    out, tools = run(plan(fact("PG", "revenue", 2024, "Q4")), max_steps=1)
+    assert [n for n, _ in tools.calls] == ["get_financial_fact"]
+    assert any("checked statement was not fetched: step limit" in n for n in out["errors"])
 
 
 def test_an_exception_from_the_tool_caller_becomes_an_internal_error_result():

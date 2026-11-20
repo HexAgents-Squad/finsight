@@ -160,7 +160,12 @@ def test_a_difference_between_companies_cites_both():
     d = run(st, FakeLLM(reply("Johnson & Johnson's net income of $35,153 million was $33,034 million higher than "
                               "Pfizer's $2,119 million in fiscal 2023."))).draft
     assert {c.ticker for c in d.citations} == {"PFE", "JNJ"} and critic_problems(d, st) == []
-    assert d.values[2].name == "difference (PFE vs JNJ)"                        # both companies named
+    assert d.values[2].name == "difference (JNJ minus PFE)"         # the calculator's new minus old, both named
+    # a calculation whose inputs are in the other order (a reused earlier one) is named by its own inputs
+    reused = calc("difference", [35153, 2119], -33034.0, "USD millions")
+    st2 = state(st["question"], plan(s1, s2, calculation="difference"), [*results[:2], reused], st["entities"])
+    names = [v.name for v in cm.structured_parts(cm.gather(st2))[0]]
+    assert names[2] == "difference (PFE minus JNJ)"
 
 
 def test_a_partial_refusal_answers_the_fact_and_adds_one_declining_sentence():
@@ -199,6 +204,126 @@ def test_not_reported_is_said_and_no_citation_is_demanded_of_the_model():
     result = run(st, llm)
     assert "not reported" in llm.calls[0]["messages"][1]["content"] and len(llm.calls) == 1
     assert cm.FALLBACK_NOTE not in result.notes and result.draft.values == []
+
+
+def checked_capex(ticker="WFC", year=2023):
+    """A capex fact the company does not report and the statement the executor checked it on (W2-07)."""
+    step = fact_step(ticker, "capex", year)
+    gap = done(step, {"error": {"type": "not_reported", "message": "no capital-expenditure line"}})
+    from agent.executor import checked_section_call
+    statement = hit(ticker, year, "Item 8", 40, "Consolidated Statement of Cash Flows | 2023 | 2022")
+    return step, [gap, ToolResult(call=checked_section_call(gap), output=[statement])], statement
+
+
+def test_a_not_reported_answer_cites_the_statement_that_was_checked():
+    """Spec §5 (G): "not reported" cites the section checked. Seen in the W2-07 demo (dev-G02): without it the
+    critic could never verify the answer, and a send-back round was spent for nothing."""
+    step, results, statement = checked_capex()
+    st = state("How much did Wells Fargo spend on capital expenditures in fiscal 2023?", plan(step), results,
+               Entities(("WFC",), (2023,), ("FY",)))
+    llm = FakeLLM(reply("Wells Fargo does not report capital expenditures for fiscal 2023."))
+    d = run(st, llm).draft
+    assert [c.chunk_id for c in d.citations] == [statement["chunk_id"]] and d.values == []
+    assert critic_problems(d, st) == [] and len(llm.calls) == 1
+    template = cm.fallback_draft(st, cm.gather(st))[0]                      # the template cites it too
+    assert template.citations == d.citations and critic_problems(template, st) == []
+
+
+def test_the_checked_statement_cited_is_the_statements_own_page():
+    """Seen on real filings: the auditor's report, the statements' index and notes that mention a statement rank
+    above the statement itself (shapes from data/chunks: WFC, AMZN, ABBV 2023-2024)."""
+    step, results, _ = checked_capex()
+    auditor = hit("WFC", 2023, "Item 8", 7, "Report of Independent Registered Public Accounting Firm\nWe have audited "
+                  "the consolidated balance sheet and the consolidated statements of income and cash flows.")
+    index = hit("WFC", 2023, "Item 8", 8, "INDEX TO CONSOLIDATED FINANCIAL STATEMENTS | Page\nConsolidated "
+                "Statements of Cash Flows | 38")
+    note = hit("WFC", 2023, "Item 8", 10, "The table below shows amounts in the consolidated statement of cash flows:\n"
+               "Proceeds | 120 | 90")
+    own = hit("WFC", 2023, "Item 8", 9, "Consolidated Statement of Cash Flows\n(in millions) | 2023 | 2022")
+
+    def picked(hits):
+        results[1] = results[1].model_copy(update={"output": hits})
+        return [h["chunk_id"] for h in cm.gather(state("q", plan(step), results)).checked]
+
+    assert picked([auditor, index, note, own]) == [own["chunk_id"]]
+    assert picked([auditor, index, note]) == [auditor["chunk_id"]]          # no statement page: the search's best
+    assert picked([]) == []
+
+
+@pytest.mark.parametrize(("text", "page"), [
+    ("Consolidated Statement of Cash Flows\n(in millions) | 2023 | 2022", True),
+    ("AMAZON.COM, INC.\nCONSOLIDATED STATEMENTS OF CASH FLOWS\n(in millions) | 2023", True),
+    ("CASH FLOWS STATEMENTS\n(In millions)\nYear Ended June 30, | 2023 | 2022", True),                 # MSFT
+    ("CONSOLIDATED STATEMENT OF CASH FLOWS | Citigroup Inc. and Subsidiaries\nIn millions | 2024", True),
+    ("CONSOLIDATED STATEMENT OF CASH FLOWS (Continued) | Citigroup Inc. and Subsidiaries\nx | 1", True),
+    ("Johnson & Johnson and subsidiaries consolidated statements of cash flows\n(Dollars in Millions) | 2023", True),
+    ("Consolidated Statement of Cash Flows\nNo table here.", False),                                  # no table
+    ("The table below shows amounts in the consolidated statement of cash flows:\nProceeds | 120", False),
+    ("Note 3\nOther\nMore\nLines\nHere\nConsolidated Statement of Cash Flows\nx | 1", False),        # past the head
+    ("Condensed Statement of Cash Flows Parent Company Only\nIn millions | 2024", False),
+    # 10-Q pages (verification review: they almost never matched)
+    ("CONDENSED CONSOLIDATED STATEMENTS OF CASH FLOWS\n(UNAUDITED)\n(MILLIONS) | 2025", True),
+    ("Condensed Consolidated Statements of Cash Flows (unaudited)\nSix months ended June 30, | 2025", True),
+    ("JPMorgan Chase & Co.\nConsolidated statements of cash flows (unaudited)\nx | 1", True),
+    # the title after the tail of the auditor's report (GOOGL, PG)
+    ("/s/ Ernst & Young LLP\nSan Jose, California\nFebruary 4, 2025\nAlphabet Inc.\nCONSOLIDATED STATEMENTS OF CASH "
+     "FLOWS\n(In millions) | 2024", True),
+    # JPM's parent-company-only statements in its notes: no "consolidated", not in capitals
+    ("Statements of cash flows\nYear ended December 31, (in millions) | 2024", False),
+    ("Notes to consolidated financial statements\nStatements of cash flows\nx | 1", False),
+])
+def test_a_statement_page_has_its_title_as_a_heading_and_a_table(text, page):
+    from agent.executor import STATEMENT_TITLES
+    assert cm.is_statement_page(text, STATEMENT_TITLES["cash_flows"]) is page
+
+
+def test_a_trend_over_unreported_years_is_said_and_cited():
+    """Review: a trend question on a declared gap (compare_periods rows missing as not_reported) answered "fetched
+    nothing" with no citation; now it is a not-reported answer citing the newest statement checked."""
+    from agent.executor import checked_section_call
+    step = PlanStep(tool="compare_periods", purpose="x", arguments={"ticker": "WFC", "metric": "capex",
+                                                                   "years": [2023, 2024]})
+    rows = [{"ticker": "WFC", "metric": "capex", "fiscal_year": y, "fiscal_period": "FY", "value": None,
+             "missing": "not_reported", "notes": ["no capital-expenditure line"]} for y in (2023, 2024)]
+    trend = done(step, rows)
+    statement = hit("WFC", 2024, "Item 8", 41, "Consolidated Statement of Cash Flows\n(in millions) | 2024 | 2023")
+    st = state("How did Wells Fargo's capital expenditures change from fiscal 2023 to fiscal 2024?", plan(step),
+               [trend, ToolResult(call=checked_section_call(trend), output=[statement])],
+               Entities(("WFC",), (2023, 2024), ("FY",)))
+    ev = cm.gather(st)
+    assert not ev.empty and len(ev.not_reported) == 2 and "fiscal 2024: not reported" in ev.not_reported[1]
+    d = run(st, FakeLLM(reply("Wells Fargo does not report capital expenditures for fiscal 2023 or fiscal 2024."))).draft
+    assert [c.chunk_id for c in d.citations] == [statement["chunk_id"]] and critic_problems(d, st) == []
+
+
+def test_a_not_reported_fact_without_a_checked_statement_has_no_citation_to_add():
+    step = fact_step("WFC", "capex", 2023)
+    gap = done(step, {"error": {"type": "not_reported", "message": "no capital-expenditure line"}})
+    assert cm.gather(state("q", plan(step), [gap])).checked == []
+
+
+def test_through_the_graph_a_not_reported_answer_ends_verified():
+    """The real executor (fake tools), composer (fake LLM) and critic: dev-G02's shape is verified in one round."""
+    from agent import executor as ex
+    from agent import graph as g
+    from agent.critic import make_critic
+    step, _, statement = checked_capex()
+
+    async def tools(name, arguments):
+        if name == "get_financial_fact":
+            return {"error": {"type": "not_reported", "message": "no capital-expenditure line"}}
+        return [statement]
+
+    async def planner(state):
+        return {"plan": plan(step), "entities": Entities(("WFC",), (2023,), ("FY",))}
+
+    llm = FakeLLM(reply("Wells Fargo does not report capital expenditures for fiscal 2023."))
+    graph = g.build_graph(g.Nodes(planner, ex.make_executor(tools, lambda t: len(t.split())), cm.make_composer(llm),
+                                  make_critic()))
+    result = asyncio.run(g.run("How much did Wells Fargo spend on capital expenditures in fiscal 2023?", graph=graph,
+                               limits=g.Limits()))
+    assert result.answer.verified, result.answer.notes
+    assert result.state["visits"] == {"planner": 1, "executor": 1, "composer": 1, "critic": 1}
 
 
 def test_passages_become_filing_citations_and_a_printed_passage_figure_a_value():

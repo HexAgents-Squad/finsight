@@ -3,6 +3,7 @@
     make_executor(call_tool=None, count_tokens=None)   -> the node for agent.graph.Nodes(executor=...)
     execute(state, call_tool, count_tokens=None)       the work (tests pass a fake call_tool and counter)
     calculation_call(op, results)                      the calculate call ADR-025 asks for (fetched figures)
+    checked_section_call(result)                       the statement a "not reported" fact was checked on (W2-07)
 
 Each step of the plan (search_filings, get_financial_fact, compare_periods; ADR-025) runs in order through
 tools.registry.call_tool_async, the agent's single entry point, which returns a typed error instead of raising
@@ -34,6 +35,14 @@ the calculator's `undefined` are answers, not errors (spec §4.2, §7.2, §7.5: 
 the measure is undefined), so they do not trigger a replan; a fourth-quarter question asked as Q4 is answered this
 way. An exception from the tool caller (a bug: call_tool_async does not raise) becomes an internal_error result.
 
+The checked statement (W2-07): a "not reported" answer cites the section that was checked (spec §5, category G),
+so for each not_reported fact (a get_financial_fact error, or a compare_periods year missing as not_reported) the
+executor also searches that filing's financial statements for the statement the metric would be on
+(checked_section_call: the statement from config/concept_map.yaml, five passages, of which the composer cites the
+statement's own page; the 10-K for a fourth quarter). It runs after the calculation, so it never takes the
+calculation's step or tokens, and is otherwise a step like any other (counted, guarded, never sent twice); its
+failure is not a tool error, since the fact's answer stands.
+
 The calculation (ADR-025): a plan has no numbers, so when `plan.calculation` is set the executor builds the
 calculate call from the figures the plan's fact steps fetched (each figure keeps its company, metric, period and
 duration; the same figure fetched twice counts once; a not_reported fact is a planned figure with no value):
@@ -54,8 +63,10 @@ calculation and a note in `errors`, never a guessed pair: the composer then answ
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -63,6 +74,8 @@ from typing import Any
 
 from agent.state import AgentState, Plan, ToolCall, ToolResult
 from core import tracing
+from ingest.xbrl import load_concept_map
+from retrieval.statement import statement_item
 from tools.base import INTERNAL_ERROR, NOT_REPORTED, SERVICE_UNAVAILABLE, UNDEFINED, error_result
 
 log = logging.getLogger(__name__)
@@ -79,6 +92,27 @@ PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}   # within a fiscal
 WHOLE_METRIC = "revenue"                             # the whole of a percent (a margin, a share of revenue)
 DEFAULT_MAX_STEPS, DEFAULT_MAX_TOKENS = 10, 12_000   # agent.graph.Limits() defaults, for a state without limits
 STEP_LIMIT, TOKEN_LIMIT = "step limit reached", "token budget exceeded"
+# The search for each statement, worded like the statement's own page, and its title as filings print it (the
+# composer cites the statement's page, agent.composer.is_statement_page). Measured offline on every 10-K of the
+# corpus (20 companies x 3 years x 3 statements, Item 8, 5 hits): the page is among the hits for 162 of 180 with
+# these, 158 with "consolidated balance sheet: total assets, ..."-style ones, 113 with the bare statement names
+# (which find the auditor's report, the index or notes first)
+STATEMENT_QUERIES = {
+    "cash_flows": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) operating activities net income adjustments "
+                  "investing activities financing activities",
+    "balance_sheet": "CONSOLIDATED BALANCE SHEETS (in millions) ASSETS current assets cash and cash equivalents total "
+                     "assets LIABILITIES AND STOCKHOLDERS' EQUITY total liabilities",
+    "income": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share data) revenues costs and expenses "
+              "income before income taxes net income earnings per share basic diluted",
+}
+STATEMENT_TITLES = {
+    "cash_flows": re.compile(r"statements?\s+of\s+cash\s+flows|cash\s+flows?\s+statements?",
+                             re.IGNORECASE),                              # MSFT: "CASH FLOWS STATEMENTS"
+    "balance_sheet": re.compile(r"balance\s+sheets?|statements?\s+of\s+(?:financial\s+)?condition", re.IGNORECASE),
+    "income": re.compile(r"statements?\s+of\s+(?:income|operations|earnings)|income\s+statements?", re.IGNORECASE),
+}
+STATEMENT_OF_QUERY = {query: name for name, query in STATEMENT_QUERIES.items()}
+CHECKED_PASSAGES = 5                 # 162 of 180 pages among the top 5 (top 3: fewer); the search runs last
 
 
 def call_key(call: ToolCall) -> str:
@@ -239,6 +273,48 @@ def calculation_call(operation: str, results: list[ToolResult]) -> tuple[ToolCal
     return ToolCall(name="calculate", arguments=arguments), None
 
 
+@functools.cache
+def _metrics() -> dict[str, Any]:
+    return load_concept_map()
+
+
+def statement_of(metric: str) -> str:
+    """The statement a metric is on, from config/concept_map.yaml: an instant is on the balance sheet, a flow that
+    10-Qs report only year to date on the cash-flow statement, any other flow on the income statement."""
+    m = _metrics().get(metric)
+    if m is not None and m.period == "instant":
+        return "balance_sheet"
+    return "cash_flows" if m is not None and m.quarterly_ytd_only else "income"
+
+
+def _statement_search(ticker: Any, metric: Any, year: Any, period: Any) -> ToolCall | None:
+    if not (isinstance(ticker, str) and isinstance(metric, str) and isinstance(year, int)):
+        return None
+    period = "FY" if period in (None, "Q4") else period          # Q4 is in the 10-K (never filed alone, spec §4.2)
+    return ToolCall(name="search_filings", arguments={
+        "query": STATEMENT_QUERIES[statement_of(metric)], "ticker": ticker, "fiscal_year": year,
+        "fiscal_period": period, "form": "10-K" if period == "FY" else "10-Q", "item": statement_item(period),
+        "k": CHECKED_PASSAGES})
+
+
+def checked_section_call(result: ToolResult) -> ToolCall | None:
+    """For a fact that came back not reported: the search of that filing's financial statements for the statement
+    the metric would be on (spec §5: a "not reported" answer cites the section checked). A get_financial_fact with
+    a not_reported error, or a compare_periods trend whose years are missing as not_reported (the newest such year:
+    its statement prints the earlier years too). None for anything else."""
+    args = result.call.arguments
+    if result.call.name == "get_financial_fact" and result.error_type == NOT_REPORTED:
+        return _statement_search(args.get("ticker"), args.get("metric"), args.get("fiscal_year"),
+                                 args.get("fiscal_period"))
+    if result.call.name == "compare_periods" and isinstance(result.output, list):
+        gaps = [r for r in result.output if isinstance(r, dict) and r.get("missing") == NOT_REPORTED]
+        if gaps:
+            newest = max(gaps, key=lambda r: r.get("fiscal_year") or 0)
+            return _statement_search(newest.get("ticker"), newest.get("metric"), newest.get("fiscal_year"),
+                                     newest.get("fiscal_period"))
+    return None
+
+
 # ----------------------------------------------------------------------------------------------- node
 async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None) -> dict[str, Any]:
     """One executor round (see the module docstring). Returns the new results, the round's tool error (None when
@@ -305,6 +381,7 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         used.append(result)
         if is_error(result):                           # a new error: the graph replans once, then "not found"
             return _update(state, new, result.error_type, notes, None)
+    calc_error: str | None = None
     if plan.calculation:
         call, why = calculation_call(plan.calculation, used)
         lost = [c for c in failed_before if c.name in FACT_TOOLS]
@@ -313,12 +390,20 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         if call is not None:
             result, why = await attempt(call)         # a guard skips only the calculation: the figures stand
             if result is not None and is_error(result):
-                return _update(state, new, result.error_type, notes, None)
+                calc_error, why = result.error_type, None    # a new error: the graph replans, after the check below
             if why and why.startswith(TOKEN_LIMIT):
                 why = TOKEN_LIMIT                      # a stable note: the counts change between rounds
         if why:
             notes.append(f"executor: {plan.calculation} not calculated: {why}")
-    return _update(state, new, None, notes, None)
+    # Last, so it never takes the calculation's step or tokens (review): the citation for a "not reported" fact
+    checks = {call_key(c): c for r in used if (c := checked_section_call(r)) is not None}
+    for call in checks.values():
+        _, stop = await attempt(call)                  # its own failure is no tool error: the fact's answer stands
+        if stop:
+            notes.append("executor: the checked statement was not fetched: "
+                         + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
+            break
+    return _update(state, new, calc_error, notes, None)
 
 
 def _update(state: AgentState, new: list[ToolResult], tool_error: str | None, notes: list[str],

@@ -62,7 +62,7 @@ from agent.critic_checks import (
     sentences,
     unbacked_figures,
 )
-from agent.executor import call_key
+from agent.executor import STATEMENT_OF_QUERY, STATEMENT_TITLES, call_key, checked_section_call
 from agent.guided import CompletionClient, GuidedReply, ask_guided
 from agent.state import AgentState, Plan, ToolCall, ToolResult
 from core.figures import Figure, figures, located_figures
@@ -78,6 +78,7 @@ PROMPT_SHA256 = "cb0c35b7bcf25ad54bf0d9947f370e3a723fbf375e691a2bd997cc5ea38a257
 MAX_PASSAGES = 8                    # numbered passages shown to the model
 MAX_PASSAGE_CHARS = 1500            # of one passage's text (a statement table is longer; its head has the rows)
 MAX_PASSAGE_FIGURES = 6
+STATEMENT_HEADING_LINES = 5          # a statement page names itself in its first lines (after an auditor-report tail)
 MAX_ANSWER_CHARS = 900              # ~120 words (spec §8) with room; the prompt asks for 120 words
 TABLE_SCALES = {"thousands": 1e3, "millions": 1e6}     # what a statement table declares ("in millions")
 SCALE_DECLARATION = re.compile(r"\bin\s+(thousands|millions)\b", re.IGNORECASE)
@@ -189,6 +190,8 @@ class Evidence:
     undefined: str | None = None                                         # why the calculation is not meaningful
     not_reported: list[str] = field(default_factory=list)                # "Apple revenue, the fourth quarter ..."
     passages: list[dict[str, Any]] = field(default_factory=list)         # search hits, numbered P1, P2 ...
+    checked: list[dict[str, Any]] = field(default_factory=list)          # the statement a not-reported fact was
+                                                                         # checked on (one hit each, W2-07)
 
     @property
     def empty(self) -> bool:
@@ -223,6 +226,63 @@ def _not_reported(result: ToolResult) -> str:
     return f"{what}{f', {when}' if when else ''}: not reported" + (f" ({message})" if message else "")
 
 
+def _checked_statement(result: ToolResult, results: list[ToolResult]) -> list[dict[str, Any]]:
+    """The statement passage the executor fetched for a not_reported fact (agent.executor.checked_section_call),
+    if it found one: what a "not reported" answer cites (spec §5, category G). The statement's own page (its title
+    in the passage's first lines, and a table), else the search's best hit: in review, a title anywhere in the text
+    also matched the index, the auditor's report and notes that mention the statement."""
+    call = checked_section_call(result)
+    if call is None:
+        return []
+    found = [r for r in results if call_key(r.call) == call_key(call)]
+    hits = [h for h in (found[-1].output if found and isinstance(found[-1].output, list) else [])
+            if isinstance(h, dict) and h.get("chunk_id")]
+    title = STATEMENT_TITLES.get(STATEMENT_OF_QUERY.get(call.arguments["query"], ""))
+    pages = [h for h in hits if title is not None and is_statement_page(str(h.get("text", "")), title)]
+    return (pages + hits)[:1]
+
+
+def _trend_not_reported(result: ToolResult) -> list[str]:
+    """The years a compare_periods trend returned as not reported (rows with missing = not_reported), as lines for
+    the prompt's NOT REPORTED list."""
+    if result.call.name != "compare_periods" or not isinstance(result.output, list):
+        return []
+    lines = []
+    for row in result.output:
+        if isinstance(row, dict) and row.get("missing") == "not_reported" and isinstance(row.get("fiscal_year"), int):
+            note = next(iter(row.get("notes") or []), "")
+            lines.append(f"{company(str(row.get('ticker', '')))} {metric_text(row)}, "
+                         f"{period_text(row['fiscal_year'], row.get('fiscal_period') or 'FY')}: not reported"
+                         + (f" ({note})" if note else ""))
+    return lines
+
+
+def is_statement_page(text: str, title: re.Pattern[str]) -> bool:
+    """A passage that is a financial statement itself: one of its first lines is the title on its own ("CONSOLIDATED
+    BALANCE SHEETS", "Consolidated Statements of Cash Flows", MSFT's "INCOME STATEMENTS"; the group may stand before
+    or after it: "Johnson & Johnson and subsidiaries consolidated ...", "... Citigroup Inc. and Subsidiaries"), and it
+    has a table. A 10-Q's are "CONDENSED CONSOLIDATED ... (Unaudited)". A title without "consolidated" counts only in
+    capitals (MSFT); JPM's parent-company-only "Balance sheets" in its notes does not. A note that mentions "the
+    consolidated statements of earnings" in a sentence is not one (all checked on data/chunks, 10-K and 10-Q)."""
+    return " | " in text and any(_is_statement_heading(line.strip(), title)
+                                 for line in text.splitlines()[:STATEMENT_HEADING_LINES])
+
+
+@functools.cache
+def _heading(title: str) -> re.Pattern[str]:
+    """A statement title as a whole heading line (compiled once per title)."""
+    group = r"[\w.,&'’ ]{2,60}?\s+and\s+subsidiaries"
+    lead = r"(?:condensed\s+)?(?:consolidated\s+)?(?:condensed\s+)?"
+    tail = r"(?:\s*\((?:continued|unaudited)\))*"
+    return re.compile(rf"(?:{group}\s+)?{lead}(?:{title}){tail}(?:\s*\|?\s*{group})?{tail}\s*[:.]?", re.IGNORECASE)
+
+
+def _is_statement_heading(line: str, title: re.Pattern[str]) -> bool:
+    if not _heading(title.pattern).fullmatch(line):
+        return False
+    return "consolidated" in line.lower() or re.sub(r"\([^)]*\)", "", line).isupper()
+
+
 def gather(state: AgentState) -> Evidence:
     """The current plan's evidence. Facts are kept once per (company, metric, year, period, duration)."""
     plan = state.get("plan")
@@ -241,6 +301,11 @@ def gather(state: AgentState) -> Evidence:
                 evidence.facts.append(row)
         if result.error_type == "not_reported":
             evidence.not_reported.append(_not_reported(result))
+            evidence.checked += _checked_statement(result, results)
+        trend_gaps = _trend_not_reported(result)
+        if trend_gaps:                                   # a trend over years the company does not report
+            evidence.not_reported += trend_gaps
+            evidence.checked += _checked_statement(result, results)
         if result.call.name == "search_filings" and isinstance(result.output, list):
             for hit in result.output:
                 chunk = hit.get("chunk_id") if isinstance(hit, dict) else None
@@ -289,13 +354,28 @@ def structured_parts(evidence: Evidence) -> tuple[list[Value], list[Citation], l
             calculation = Calculation.from_tool(calc)
             base = _newest(evidence.facts)
             tickers = list(dict.fromkeys(str(f.get("ticker")) for f in evidence.facts))
-            name = calc["operation"] + (f" ({' vs '.join(tickers)})" if len(tickers) > 1 else "")
+            # the calculator's difference is its second input minus its first: name them in that order, read from
+            # the calculation's own inputs (a reused earlier calculation may list them in another order than the plan)
+            order = [next((str(f.get("ticker")) for f in evidence.facts if same_number(f["value"], x)), None)
+                     for x in calc.get("inputs") or []]
+            if calc["operation"] == "difference" and len(order) == 2 and None not in order and order[0] != order[1]:
+                name = f"difference ({order[1]} minus {order[0]})"
+            else:
+                name = calc["operation"] + (f" ({' vs '.join(tickers)})" if len(tickers) > 1 else "")
             values.append(Value(name=name, value=calc["result"], unit=calc["unit"] or base["unit"],
                                 ticker=base["ticker"], fiscal_year=base["fiscal_year"],
                                 fiscal_period=base["fiscal_period"], duration=None, period_end=base["period_end"]))
             calculations.append(calculation)
         except (ValidationError, ValueError, KeyError) as err:
             notes.append(f"composer: the calculation did not fit the contract and was left out ({err!s:.120})")
+    for hit in evidence.checked:                # a "not reported" answer cites the section checked (spec §5, G)
+        try:
+            citation = Citation.from_search(hit)
+        except (ValidationError, KeyError) as err:
+            notes.append(f"composer: the checked statement could not be cited ({err!s:.120})")
+            continue
+        if citation not in citations:
+            citations.append(citation)
     return values, citations, calculations, notes
 
 
@@ -612,8 +692,9 @@ def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tup
 
 
 def own_problems(draft: AnswerContract, question: str, evidence: Evidence) -> list[Violation]:
-    """The draft's violations of the rules the composer controls (OWN_RULES). With nothing citable (only "not
-    reported" facts or a measure that is not meaningful), a missing citation is not something a retry can fix."""
+    """The draft's violations of the rules the composer controls (OWN_RULES). With no fact or passage, a missing
+    citation is not something a retry can fix: a measure that is not meaningful, or a "not reported" fact (whose
+    checked statement, when found, structured_parts already cites)."""
     rules = OWN_RULES if (evidence.facts or evidence.passages) else OWN_RULES - {"citations"}
     return [v for v in check_contract(draft, question=question) if v.rule in rules]
 

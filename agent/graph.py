@@ -13,8 +13,8 @@ goes straight to finish, which gives up with a "could not verify: ..." note (doc
 The whole run is wrapped in QUERY_TIMEOUT_S. The limits travel in the state (state["limits"]), so routing and the
 nodes (the executor stops itself at the step cap, W2-04) read the same numbers.
 
-The four nodes are injected (Nodes), so each Week 2 ticket replaces one stub (agent/stubs.py) and tests drive every
-edge with scripted nodes. The graph owns the bounds and the verdict: it counts each node's runs (state.visits),
+The four nodes are injected (Nodes): the real ones by default (agent/nodes.py, W2-07), the stubs (agent/stubs.py)
+or scripted nodes in tests, which drive every edge. The graph owns the bounds and the verdict: it counts each node's runs (state.visits),
 rejects a node that writes `answer`, `visits`, `limits`, `question` or `history`, lets only the critic write
 `verdict`, and treats a critic run without a verdict as a failed check, so no draft leaves verified without the
 critic's judgement (ADR-022). A draft the critic passed stays verified when a limit is broken afterwards (by the
@@ -306,10 +306,12 @@ def cap_history(questions: Sequence[str]) -> list[str]:
 
 
 def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
-    """The compiled graph (nodes default to the stubs). The limits come with each run's state (run())."""
+    """The compiled graph. Nodes default to the real ones (agent.nodes.real_nodes, W2-07: the shared endpoint from
+    .env and the tools on data/); tests pass agent.stubs.stub_nodes() or fakes. The limits come with each run's
+    state (run())."""
     if nodes is None:
-        from agent.stubs import stub_nodes
-        nodes = stub_nodes()
+        from agent.nodes import real_nodes
+        nodes = real_nodes()
     graph = StateGraph(AgentState)
     for name in (PLANNER, EXECUTOR, COMPOSER, CRITIC):
         graph.add_node(name, _counted(name, getattr(nodes, name)))
