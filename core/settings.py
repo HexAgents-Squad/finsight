@@ -24,11 +24,16 @@ class SecSettings(BaseSettings):
     """SEC access only: the download steps (ingest/01, ingest/05) need nothing else, so an incomplete LLM
     section in .env does not stop them."""
 
+    # hide_input_in_errors: a validation error names the setting and the rule, never its value (a key or a secret
+    # that fails a check must not land in a log or a console; W2-09 review)
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore", frozen=True,
-                                      str_strip_whitespace=True)
+                                      str_strip_whitespace=True, hide_input_in_errors=True)
 
     # SEC EDGAR fair-access policy: automated clients must identify themselves
     SEC_USER_AGENT: str = Field(..., min_length=1, description="User-Agent header required by SEC EDGAR")
+
+
+MIN_SESSION_SECRET_CHARS = 16       # API_SESSION_SECRET (W2-09): signs the API's session ids
 
 
 class Settings(SecSettings):
@@ -102,6 +107,20 @@ class Settings(SecSettings):
     # spec §9: the agent wraps a whole query in this limit (one LLM call alone can take LLM_TIMEOUT x retries)
     QUERY_TIMEOUT_S: float = Field(60.0, gt=0, description="seconds allowed for one question, end to end")
 
+    # API (W2-09, api/main.py, ADR-032). The rate limit is slowapi's syntax ("10/minute", "100/hour; 10/minute"),
+    # per session (the X-Session-Id header, else the client address); the reply cache is in memory, per process.
+    API_RATE_LIMIT: str = Field("10/minute", min_length=1, description="requests per session (slowapi syntax)")
+    API_ADDRESS_RATE_LIMIT: str = Field("60/minute", min_length=1,
+                                        description="requests per client address, whatever the session")
+    API_QUEUE_TIMEOUT_S: float = Field(30.0, gt=0, description="seconds a question waits for a free run slot (503)")
+    # Signs the session ids the API issues; empty = a random secret per process (ids then end with a restart)
+    API_SESSION_SECRET: SecretStr | None = Field(None, description="secret that signs the API's session ids")
+    API_CACHE_TTL_S: float = Field(3600.0, ge=0, description="seconds a cached answer stays valid (0 = no cache)")
+    API_CACHE_MAX_ENTRIES: int = Field(512, ge=0, description="answers kept in the reply cache (0 = no cache)")
+    API_MAX_CONCURRENT: int = Field(2, gt=0, description="questions the agent answers at once (the shared key)")
+    API_SESSION_TTL_S: float = Field(3600.0, gt=0, description="seconds a session's earlier questions are kept")
+    API_MAX_SESSIONS: int = Field(1000, gt=0, description="sessions kept in memory (least recently used dropped)")
+
     # Tracing (W2-08, ADR-029): off unless LANGFUSE_ENABLED=true, so tests and a fresh clone never reach the network.
     # The keys are SecretStr (never in a repr or an error message); the host is Langfuse Cloud or a self-hosted URL.
     LANGFUSE_ENABLED: bool = Field(False, description="send traces to Langfuse")
@@ -112,11 +131,31 @@ class Settings(SecSettings):
 
     @field_validator("LLM_CA_CERT", "LLM_ENABLE_THINKING", "EMBED_API_KEY", "LLM_CACHE_DIR", "LLM_CONTEXT_TOKENS",
                      "EMBED_CA_CERT", "EMBED_MAX_INPUT_TOKENS", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
-                     mode="before")
+                     "API_SESSION_SECRET", mode="before")
     @classmethod
     def _empty_is_unset(cls, value: object) -> object:
         """`LLM_CA_CERT=` in .env means "no certificate", not a path to the current folder."""
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("API_RATE_LIMIT", "API_ADDRESS_RATE_LIMIT")
+    @classmethod
+    def _rate_limit_syntax(cls, value: str) -> str:
+        """A malformed limit must fail at start-up: slowapi would log it per request and apply no limit (review)."""
+        from limits import parse_many  # slowapi's dependency
+        try:
+            parse_many(value)
+        except ValueError as err:
+            raise ValueError(f"not a rate limit (e.g. '10/minute'): {value!r}") from err
+        return value
+
+    @field_validator("API_SESSION_SECRET")
+    @classmethod
+    def _secret_long_enough(cls, value: SecretStr | None) -> SecretStr | None:
+        """A short secret makes the session ids' signatures guessable (the value is never in the message)."""
+        if value is not None and len(value.get_secret_value()) < MIN_SESSION_SECRET_CHARS:
+            raise ValueError(f"API_SESSION_SECRET needs at least {MIN_SESSION_SECRET_CHARS} characters (or leave it "
+                             "empty for a random one)")
+        return value
 
     @field_validator("LLM_CA_CERT")
     @classmethod

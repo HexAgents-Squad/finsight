@@ -16,3 +16,4 @@ chromadb>=1.0,<2
 sentence-transformers>=2.5.1,<7  # also installs torch (~200 MB on CPU)
 tokenizers>=0.19,<1             # core/tokens.py: exact Qwen3 token counts (also a sentence-transformers dependency)
 langfuse>=3,<4                 # core/tracing.py: only imported when LANGFUSE_ENABLED=true (CI does not install it)
+uvicorn>=0.30,<1               # serves api/main.py (W2-09): uvicorn api.main:app

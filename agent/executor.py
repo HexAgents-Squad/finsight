@@ -67,6 +67,7 @@ import functools
 import json
 import logging
 import re
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -82,6 +83,7 @@ log = logging.getLogger(__name__)
 
 ToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 TokenCounter = Callable[[str], int]
+TOKENIZER_RETRY_S = 300.0       # a failed tokenizer load is tried again after this
 CHARS_PER_TOKEN_FLOOR = 2       # core/tokens.py: filing tables run at 2.2 characters per token, prose at 4.6
 ANSWERS = frozenset({NOT_REPORTED, UNDEFINED})       # typed results that answer the question: no replan
 TRANSIENT = frozenset({SERVICE_UNAVAILABLE})         # tools/base.py: "retry later": a repeat is sent once more
@@ -130,14 +132,25 @@ async def _default_call_tool(name: str, arguments: dict[str, Any]) -> Any:
     return await call_tool_async(name, arguments)
 
 
+_tokenizer_failed_at: float | None = None             # when loading the tokenizer last failed (monotonic seconds)
+
+
 def _default_count_tokens(text: str) -> int:
+    """Qwen3 tokens, or a conservative CHARS_PER_TOKEN_FLOOR estimate without the tokenizer. A failed load is
+    retried only after TOKENIZER_RETRY_S (core.tokens retries on every call, a network attempt each time, which an
+    executor round on the API's event loop must not pay)."""
+    global _tokenizer_failed_at
     from core.exceptions import FinSightError
     from core.tokens import count_tokens
-    try:
-        return count_tokens(text)
-    except FinSightError as err:                       # no tokenizer (offline, first run): over- not under-count
-        log.warning("executor: %s; counting %d characters per token", err, CHARS_PER_TOKEN_FLOOR)
-        return -(-len(text) // CHARS_PER_TOKEN_FLOOR)
+    if _tokenizer_failed_at is None or time.monotonic() - _tokenizer_failed_at >= TOKENIZER_RETRY_S:
+        try:
+            count = count_tokens(text)
+            _tokenizer_failed_at = None
+            return count
+        except FinSightError as err:                   # no tokenizer (offline, first run): over- not under-count
+            _tokenizer_failed_at = time.monotonic()
+            log.warning("executor: %s; counting %d characters per token", err, CHARS_PER_TOKEN_FLOOR)
+    return -(-len(text) // CHARS_PER_TOKEN_FLOOR)
 
 
 def output_tokens(results: list[ToolResult], count: TokenCounter) -> int:
