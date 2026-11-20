@@ -38,7 +38,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from limits import parse_many
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -50,7 +50,7 @@ from agent.contract import AnswerContract
 from agent.graph import AgentRun, Limits, cap_history, run
 from agent.transcript import verdict
 from api.cache import ReplyCache, cache_key, normalise
-from api.sessions import SessionIds, Sessions
+from api.sessions import SessionIds, Sessions, session_digest
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ SESSION_HEADER = "X-Session-Id"
 SESSION_HEADER_SHAPE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")      # anything else is a malformed header: 422
 MAX_QUESTION_CHARS = 1_000              # spec §2's questions are a sentence or two
 MAX_HISTORY = 20                        # earlier questions in a body; the agent sees at most cap_history of them
+MAX_BODY_BYTES = 64_000                 # 21 questions of 1,000 characters are ~22 kB of JSON
 Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_CHARS)]
 
 
@@ -123,6 +124,8 @@ class ApiConfig:
     def __post_init__(self) -> None:
         for limit in (self.rate_limit, self.address_rate_limit):
             parse_many(limit)                       # a malformed limit fails here, not silently per request
+        if self.max_concurrent < 1 or self.queue_timeout_s <= 0:
+            raise ValueError("max_concurrent must be at least 1 and queue_timeout_s positive")
 
     @classmethod
     def from_settings(cls, settings: Any) -> ApiConfig:
@@ -149,6 +152,14 @@ class _State:
         self.sessions = Sessions(config.max_sessions, config.session_ttl_s)
         self.ids = SessionIds(config.session_secret)
         self.slots = asyncio.Semaphore(config.max_concurrent)
+
+
+def session_header(session_id: Annotated[str | None, Header(alias=SESSION_HEADER)] = None) -> str | None:
+    """The X-Session-Id sent, if well formed (ASCII letters, digits, ".", "-", "_"); 422 otherwise, before any rate
+    limit is counted."""
+    if session_id is not None and not (session_id.isascii() and SESSION_HEADER_SHAPE.match(session_id)):
+        raise HTTPException(status_code=422, detail=f"{SESSION_HEADER} must be up to 128 letters, digits, ., - or _")
+    return session_id
 
 
 def run_summary(result: AgentRun) -> RunSummary:
@@ -196,20 +207,18 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
         state.configure(ApiConfig.from_settings(settings))
         async with LLMClient(settings) as llm:
             state.graph = build_graph(real_nodes(llm))
-            if warm_up is None:
-                from tools.registry import warm_up as default_warm_up
-                task = asyncio.create_task(_warm(state, default_warm_up))
-            else:
-                task = asyncio.create_task(_warm(state, warm_up))
+            task = asyncio.create_task(_warm(state, warm_up or real_warm_up))
             try:
                 yield
             finally:
                 task.cancel()                       # a warm-up still running on its thread is left to finish
 
     def session_key(request: Request) -> str:
-        """The per-session limit's key: an id this server issued, else the client address."""
+        """The per-session limit's key: the hash of an id this server issued (slowapi logs keys); a request with no
+        issued id starts a conversation and gets a bucket of its own, the per-address limit being its ceiling
+        (review: behind the UI's server, every new conversation would otherwise share one address bucket)."""
         sent = request.headers.get(SESSION_HEADER)
-        return f"session:{sent}" if state.ids.valid(sent) else f"address:{get_remote_address(request)}"
+        return f"session:{session_digest(sent)}" if sent and state.ids.valid(sent) else f"new:{uuid.uuid4().hex}"
 
     app = FastAPI(title="FinSight", version="0.1.0", lifespan=lifespan,
                   description="Questions about US companies' SEC 10-K and 10-Q filings, answered with citations.")
@@ -220,26 +229,38 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
 
     @app.exception_handler(Exception)
     async def internal_error(request: Request, exc: Exception) -> JSONResponse:
-        log.exception("unhandled error on %s", request.url.path)
+        # one line here: Starlette re-raises after this handler, so the server logs the traceback itself
+        log.error("unhandled %s on %s", type(exc).__name__, request.url.path)
         return JSONResponse(status_code=500, content={"detail": "internal error"})
 
+    @app.middleware("http")
+    async def limit_body(request: Request, call_next: Callable[[Request], Any]) -> Any:
+        """A body larger than MAX_BODY_BYTES is refused before it is read (a valid one is a few kilobytes)."""
+        length = request.headers.get("content-length")
+        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            return JSONResponse(status_code=413, content={"detail": "request body too large"})
+        return await call_next(request)
+
     @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
+    async def health(response: Response) -> HealthResponse:
+        """200 when ready, 503 while starting or degraded (for a container healthcheck), the body either way."""
         status = "ok" if state.warm_up == "ok" else "starting" if state.warm_up == "pending" else "degraded"
         if state.graph is None:
             status = "starting"
+        if status != "ok":
+            response.status_code = 503
         return HealthResponse(status=status, warm_up=state.warm_up, model=state.config.model,
                               cache_entries=len(state.cache), sessions=len(state.sessions))
 
+    # The session limit is checked first (slowapi checks the decorator nearest the function first), so a request it
+    # refuses costs no hit of the per-address limit, which all of a proxy's users share; the header is validated in a
+    # dependency, before either limit is counted.
     @app.post("/ask", response_model=AskResponse)
-    @limiter.limit(lambda: state.config.rate_limit)
     @limiter.limit(lambda: state.config.address_rate_limit, key_func=get_remote_address)
+    @limiter.limit(lambda: state.config.rate_limit)
     async def ask(request: Request, response: Response, body: AskRequest,
-                  session_id: Annotated[str | None, Header(alias=SESSION_HEADER)] = None) -> AskResponse:
+                  session_id: Annotated[str | None, Depends(session_header)] = None) -> AskResponse:
         started = time.monotonic()
-        if session_id is not None and not SESSION_HEADER_SHAPE.match(session_id):
-            raise HTTPException(status_code=422, detail=f"{SESSION_HEADER} must be up to 128 letters, digits, ., - "
-                                                        "or _")
         if state.graph is None:                     # only without the lifespan (an app driven without starting it)
             raise HTTPException(status_code=503, detail="starting up")
         sid = session_id if state.ids.valid(session_id) else state.ids.issue()
@@ -270,7 +291,8 @@ async def _answer(state: _State, question: str, history: list[str], session_id: 
         await asyncio.wait_for(state.slots.acquire(), timeout=state.config.queue_timeout_s)
     except TimeoutError:
         raise HTTPException(status_code=503, detail="busy: too many questions at once, try again shortly",
-                            headers={"Retry-After": str(int(state.config.queue_timeout_s))}) from None
+                            headers={"Retry-After": str(int(state.config.queue_timeout_s)),
+                                     SESSION_HEADER: session_id}) from None
     try:
         return await run(question, history, graph=state.graph, limits=state.config.limits,
                          trace=_trace(state.config, session_id))
@@ -287,7 +309,21 @@ async def _warm(state: _State, warm_up: Callable[[], dict[str, Any]]) -> None:
         state.warm_up = "internal_error"
         return
     error = result.get("error") if isinstance(result, dict) else None
-    state.warm_up = "ok" if error is None else str(error.get("type", "error"))
+    state.warm_up = "ok" if error is None else str(error.get("type", "error")) if isinstance(error, dict) else "error"
+
+
+def real_warm_up() -> dict[str, Any]:
+    """The real app's warm-up: the fact store, the index and one search (tools.registry.warm_up), then the Qwen
+    tokenizer the executor counts with, so its first load does not block the event loop during a question."""
+    from core.exceptions import FinSightError
+    from core.tokens import count_tokens
+    from tools.registry import warm_up
+    result = warm_up()
+    try:
+        count_tokens("warm up")
+    except FinSightError as err:                    # the executor then estimates (agent/executor.py)
+        log.warning("tokenizer not loaded: %s", err)
+    return result
 
 
 def _trace(config: ApiConfig, session_id: str) -> Any:
@@ -296,7 +332,7 @@ def _trace(config: ApiConfig, session_id: str) -> Any:
     if not config.trace:
         return None
     from core.tracing import TraceInfo
-    return TraceInfo(question_id=uuid.uuid4().hex, run_id="api", session_id=session_id)
+    return TraceInfo(question_id=uuid.uuid4().hex, run_id="api", session_id=session_digest(session_id))
 
 
 app = create_app()

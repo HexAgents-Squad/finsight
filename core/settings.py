@@ -24,11 +24,16 @@ class SecSettings(BaseSettings):
     """SEC access only: the download steps (ingest/01, ingest/05) need nothing else, so an incomplete LLM
     section in .env does not stop them."""
 
+    # hide_input_in_errors: a validation error names the setting and the rule, never its value (a key or a secret
+    # that fails a check must not land in a log or a console; W2-09 review)
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore", frozen=True,
-                                      str_strip_whitespace=True)
+                                      str_strip_whitespace=True, hide_input_in_errors=True)
 
     # SEC EDGAR fair-access policy: automated clients must identify themselves
     SEC_USER_AGENT: str = Field(..., min_length=1, description="User-Agent header required by SEC EDGAR")
+
+
+MIN_SESSION_SECRET_CHARS = 16       # API_SESSION_SECRET (W2-09): signs the API's session ids
 
 
 class Settings(SecSettings):
@@ -141,6 +146,15 @@ class Settings(SecSettings):
             parse_many(value)
         except ValueError as err:
             raise ValueError(f"not a rate limit (e.g. '10/minute'): {value!r}") from err
+        return value
+
+    @field_validator("API_SESSION_SECRET")
+    @classmethod
+    def _secret_long_enough(cls, value: SecretStr | None) -> SecretStr | None:
+        """A short secret makes the session ids' signatures guessable (the value is never in the message)."""
+        if value is not None and len(value.get_secret_value()) < MIN_SESSION_SECRET_CHARS:
+            raise ValueError(f"API_SESSION_SECRET needs at least {MIN_SESSION_SECRET_CHARS} characters (or leave it "
+                             "empty for a random one)")
         return value
 
     @field_validator("LLM_CA_CERT")

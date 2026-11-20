@@ -32,6 +32,12 @@ TOKEN_BYTES = 16
 SIGNATURE_HEX = 16
 
 
+def session_digest(session_id: str) -> str:
+    """A short hash of a session id, for rate-limit keys (which slowapi logs) and traces: the id itself works as a
+    bearer token for its conversation's earlier questions, so it is never written anywhere."""
+    return hashlib.sha256(session_id.encode()).hexdigest()[:16]
+
+
 class SessionIds:
     """Signed session ids: "<32 hex>.<16 hex>", the random part and its truncated HMAC."""
 
@@ -46,7 +52,8 @@ class SessionIds:
         return f"{token}.{self._sign(token)}"
 
     def valid(self, session_id: str | None) -> bool:
-        if not session_id or session_id.count(".") != 1:
+        # ASCII first: hmac.compare_digest raises TypeError on non-ASCII str (review: a 500 per request)
+        if not session_id or not session_id.isascii() or session_id.count(".") != 1:
             return False
         token, signature = session_id.split(".")
         return len(token) == 2 * TOKEN_BYTES and hmac.compare_digest(signature, self._sign(token))

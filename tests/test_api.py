@@ -233,6 +233,7 @@ async def test_a_question_waiting_too_long_for_a_slot_is_503():
     codes = sorted([first.status_code, second.status_code])
     busy = first if first.status_code == 503 else second
     assert codes == [200, 503] and busy.headers["Retry-After"] and "busy" in busy.json()["detail"]
+    assert ids.valid(busy.headers[api.SESSION_HEADER])              # the issued id is not lost with the 503
 
 
 @pytest.fixture
@@ -252,11 +253,32 @@ def test_the_rate_limit_is_per_session():
     assert limited.headers["Retry-After"] == "60" and limited.json()["detail"].startswith("rate limit exceeded")
 
 
-def test_without_an_issued_session_the_limit_is_per_address():
-    c, _ = client(rate_limit="1/minute")
+def test_new_conversations_behind_one_address_are_limited_by_the_address_only():
+    """PR review: behind the UI's server every user shares one address; each new conversation gets its own session
+    bucket, and the per-address limit is the ceiling."""
+    c, _ = client(rate_limit="1/minute", address_rate_limit="12/minute")
     with c:
-        assert [ask(c, f"Q{i} about Apple?").status_code for i in range(2)] == [200, 429]
-        assert ask(c, "Q3 about Apple?", session="minted-by-the-client").status_code == 429
+        codes = [ask(c, f"Q{i} about Apple?").status_code for i in range(12)]
+        over = ask(c, "Q12 about Apple?", session="minted-by-the-client")
+    assert codes == [200] * 12 and over.status_code == 429
+
+
+def test_a_forged_id_is_not_a_rate_limit_key():
+    """An id this server did not issue is a new conversation each time (its own bucket), never a key a client
+    chooses; the per-address limit stays the ceiling."""
+    c, _ = client(rate_limit="1/minute", address_rate_limit="10/minute")
+    with c:
+        codes = [ask(c, f"Q{i} about Apple?", session="minted-by-the-client").status_code for i in range(3)]
+    assert codes == [200, 200, 200]
+
+
+def test_a_session_refusal_costs_no_address_hit_and_a_bad_header_costs_none():
+    c, _ = client(rate_limit="1/minute", address_rate_limit="3/minute")
+    with c:
+        sid = issued(c)
+        assert [ask(c, f"Q{i} about Apple?", session=sid).status_code for i in range(2)] == [200, 429]
+        assert [ask(c, "Q about Apple?", session="bad id!").status_code for _ in range(3)] == [422, 422, 422]
+        assert [ask(c, f"R{i} about Apple?").status_code for i in range(3)] == [200, 200, 429]
 
 
 def test_the_address_limit_holds_across_sessions():
@@ -313,6 +335,37 @@ def test_a_malformed_session_header_is_422(session):
     assert agent.calls == []
 
 
+def test_a_non_ascii_session_header_is_422_not_500():
+    """PR review: hmac.compare_digest raised TypeError on a non-ASCII header: a 500 and a traceback per request."""
+    c, agent = client()
+    with TestClient(c.app, raise_server_exceptions=False) as c2:
+        r = c2.post("/ask", json={"question": QUESTION},
+                    headers=[(api.SESSION_HEADER.encode(), ("a" * 32 + ".").encode() + "éé".encode("latin-1"))])
+    assert r.status_code == 422 and agent.calls == []
+    assert not SessionIds().valid("a" * 32 + ".éé")
+
+
+def test_a_body_too_large_is_413():
+    c, agent = client()
+    with c:
+        r = c.post("/ask", content=b'{"question": "' + b"x" * api.MAX_BODY_BYTES + b'"}',
+                   headers={"content-type": "application/json"})
+    assert r.status_code == 413 and r.json() == {"detail": "request body too large"} and agent.calls == []
+
+
+def test_a_body_history_ending_with_the_question_is_the_same_turn():
+    c, agent = client()
+    with c:
+        r = ask(c, "And in fiscal 2023?", history=[QUESTION, "And in fiscal 2023?"])
+    assert r.json()["history"] == [QUESTION] and agent.calls == [("And in fiscal 2023?", [QUESTION])]
+
+
+@pytest.mark.parametrize("config", [{"max_concurrent": 0}, {"queue_timeout_s": 0}])
+def test_a_config_without_room_to_run_fails_at_once(config):
+    with pytest.raises(ValueError):
+        api.ApiConfig(**config)
+
+
 def test_an_error_inside_the_agent_is_a_generic_500():
     c, _ = client()
     with TestClient(c.app, raise_server_exceptions=False) as c2:
@@ -344,15 +397,17 @@ def test_health_shows_the_warm_up():
     app = api.create_app(graph=g.build_graph(agent.nodes()), config=api.ApiConfig(limits=LIMITS), warm_up=slow_warm_up)
     with TestClient(app) as c:
         started.wait(5)
-        assert c.get("/health").json()["status"] == "starting"
+        starting = c.get("/health")
+        assert starting.status_code == 503 and starting.json()["status"] == "starting"     # a healthcheck waits
         assert ask(c).status_code == 200                           # questions are served while it warms up
         release.set()
         for _ in range(100):
             if c.get("/health").json()["status"] != "starting":
                 break
             threading.Event().wait(0.02)
-        body = c.get("/health").json()
-    assert body["status"] == "degraded" and body["warm_up"] == "data_missing"
+        degraded = c.get("/health")
+    body = degraded.json()
+    assert degraded.status_code == 503 and body["status"] == "degraded" and body["warm_up"] == "data_missing"
 
 
 def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
@@ -385,7 +440,9 @@ def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
     monkeypatch.setattr(core.settings, "get_settings", lambda: Settings())
     monkeypatch.setattr(core.llm, "LLMClient", Client)
     monkeypatch.setattr(agent.nodes, "real_nodes", lambda llm: events.append("nodes") or fake.nodes())
-    monkeypatch.setattr(tools.registry, "warm_up", lambda: {"ok": True})
+    monkeypatch.setattr(tools.registry, "warm_up", lambda: events.append("index") or {"ok": True})
+    import core.tokens
+    monkeypatch.setattr(core.tokens, "count_tokens", lambda text: events.append("tokenizer") or 1)
     with TestClient(api.create_app()) as c:
         sid = ask(c).json()["session_id"]
         codes = [ask(c, f"Q{i} about Apple?", session=sid).status_code for i in range(3)]
@@ -396,7 +453,9 @@ def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
         body = c.get("/health").json()
     assert body["model"] == "Qwen/Qwen3-8B" and body["status"] == "ok"
     assert codes == [200, 200, 429]                                 # the settings' 2/minute is the one applied
-    assert events == ["open", "nodes", "close"]
+    # the warm-up loads the index, then the executor's tokenizer (off the event loop); the client closes last
+    assert events[:2] == ["open", "nodes"] and events[-1] == "close"
+    assert [e for e in events if e in ("index", "tokenizer")] == ["index", "tokenizer"]
 
 
 def test_a_shared_secret_makes_ids_valid_across_apps():
@@ -424,8 +483,18 @@ def test_a_traced_run_is_grouped_by_its_session(monkeypatch):
         sid = issued(c)
         ask(c, "Q1 about Apple?", session=sid)
         ask(c, "Q2 about Apple?", session=sid)
-    assert [t.session_id for t in seen] == [sid, sid] and {t.run_id for t in seen} == {"api"}
+    from api.sessions import session_digest
+    assert [t.session_id for t in seen] == [session_digest(sid)] * 2 and {t.run_id for t in seen} == {"api"}
+    assert sid not in {t.session_id for t in seen}                  # the id itself is a bearer token: never traced
     assert seen[0].question_id != seen[1].question_id
+
+
+def test_the_session_id_never_reaches_the_logs(caplog):
+    c, _ = client(rate_limit="1/minute")
+    with c, caplog.at_level("DEBUG"):
+        sid = issued(c)
+        assert [ask(c, f"Q{i} about Apple?", session=sid).status_code for i in range(2)] == [200, 429]
+    assert sid not in caplog.text and sid.split(".")[0] not in caplog.text
 
 
 # ----------------------------------------------------------------------------------------------- cache, sessions
@@ -504,3 +573,14 @@ def test_a_session_waited_for_is_never_dropped():
         assert sessions._sessions["a"].history == ["q1", "q2"] and sessions._sessions["a"] is held
 
     asyncio.run(scenario())
+
+
+def test_the_settings_refuse_a_short_session_secret():
+    from pydantic import ValidationError
+
+    from tests.test_llm import settings
+    with pytest.raises(ValidationError) as err:
+        settings(API_SESSION_SECRET="short-secret")
+    assert "short-secret" not in str(err.value)                     # the value never appears in the message
+    assert settings(API_SESSION_SECRET="").API_SESSION_SECRET is None
+    assert settings(API_SESSION_SECRET="x" * 16).API_SESSION_SECRET.get_secret_value() == "x" * 16

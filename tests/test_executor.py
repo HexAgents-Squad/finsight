@@ -13,7 +13,15 @@ from agent import graph as g
 from agent.contract import AnswerContract
 from agent.state import Plan, PlanStep, ToolCall, ToolResult, Verdict
 
-P8 = Path(__file__).resolve().parents[1] / "eval" / "results" / "planner_runs" / "P8.jsonl"
+
+@pytest.fixture(autouse=True)
+def fresh_tokenizer_backoff(monkeypatch):
+    """The executor remembers a failed tokenizer load (module state): each test starts without that memory, so no
+    test leaks a back-off into the next (W2-09 PR review)."""
+    monkeypatch.setattr(ex, "_tokenizer_failed_at", None)
+
+
+P8 =Path(__file__).resolve().parents[1] / "eval" / "results" / "planner_runs" / "P8.jsonl"
 NULLS = {"ticker": None, "fiscal_year": None, "fiscal_period": None, "form": None, "item": None, "k": 5}
 VALUES = {("PG", "operating_income", 2023): 18134.0, ("PG", "revenue", 2023): 82006.0,
           ("GS", "net_income", 2023): 8516.0, ("GS", "net_income", 2024): 14276.0,
