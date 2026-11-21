@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 MAX_TEXT_CHARS = 4000          # per string sent to Langfuse; the full text stays in the run's own records
 MAX_ITEMS = 50                 # per list
 MAX_DEPTH = 6
+MAX_STATUS_CHARS = 500         # a failed span's status: the error's type and its masked text
 
 
 # ----------------------------------------------------------------------------------------------- scrubbing
@@ -185,8 +186,10 @@ class LangfuseTracer:
 
     @contextlib.contextmanager
     def _open(self, factory: Any, after_enter: Any = None, info: TraceInfo | None = None) -> Iterator[Span]:
-        """Enter a Langfuse context manager without letting its failures reach the caller's code, and close it
-        with the caller's exception (so an error inside the block marks the span as failed)."""
+        """Enter a Langfuse context manager without letting its failures reach the caller's code. An error inside
+        the block marks the span failed with the error's masked text (W2-13); the SDK's context is then closed
+        without the exception, since it would record the raw message and traceback (an e-mail in a question can
+        reach an error's text)."""
         cm = raw = None
         try:
             cm = factory()
@@ -198,12 +201,13 @@ class LangfuseTracer:
         handle: Span = _LangfuseSpan(raw, self.client, info) if raw is not None else _NoopSpan()
         try:
             yield handle
-        except asyncio.CancelledError as err:              # the run's time limit, or the caller going away
+        except asyncio.CancelledError:                     # the run's time limit, or the caller going away
             handle.update(level="ERROR", status_message="cancelled")
-            self._close(cm, type(err), err, err.__traceback__)
+            self._close(cm, None, None, None)
             raise
-        except BaseException as err:                       # the span still closes, marked failed by the SDK
-            self._close(cm, type(err), err, err.__traceback__)
+        except BaseException as err:                       # the span still closes, marked failed, text masked
+            handle.update(level="ERROR", status_message=f"{type(err).__name__}: {err}"[:MAX_STATUS_CHARS])
+            self._close(cm, None, None, None)
             raise
         else:
             self._close(cm, None, None, None)

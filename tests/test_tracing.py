@@ -169,7 +169,10 @@ def test_scrub_masks_emails_and_phones_but_not_financial_figures():
 
 @pytest.mark.parametrize("phone", ["415-555-2671", "415.555.2671", "(415) 555-2671", "(415)555-2671", "1-800-555-1234",
                                    "1 800 555 1234", "1 (800) 555-1234", "+1 415 555 2671", "+1-415-555-2671",
-                                   "+91 98765 43210", "+44 20 7946 0958"])
+                                   "+91 98765 43210", "+44 20 7946 0958", "+33 1 23 45 67 89", "+1 (415) 555-2671",
+                                   # compact E.164 (W2-13); a signed figure of 11+ digits without separators reads
+                                   # the same and is masked too: filings and the tools write figures with commas
+                                   "+14155552671", "+383285000000", "+93736000000"])
 def test_scrub_masks_phone_shapes(phone):
     assert scrub(f"call {phone} today") == "call [phone] today"
 
@@ -178,7 +181,7 @@ def test_scrub_masks_phone_shapes(phone):
     "4155552671", "(123) 456 789", "(35) 133 148", "change +12 345 678", "+5 2023 2024", "growth +1.25 34.6",
     "| 164,501 | 134,902 |", "2023-2025", "FY 2023 2024 2025", "0000320193-24-000123", "2024-09-28", "EIN 94-2404110",
     "File No. 001-36743", "CUSIP 037833100", "revenue 1,234.5 567.8 9,012.3", "123 456 7890.5",
-    "net income +383285000000", "+93736000000", "+3.5 12.25 2024 2023", "shares 391 035 2024",
+    "net income 383285000000", "+9373600000", "+3.5 12.25 2024 2023", "shares 391 035 2024",
     "Net sales 245 122 2023 2022", "segments 100 200 3000 4000", "123\n456\n7890", "ratio 123-456-7890.12",
     "415 555 2671",                     # bare spaces: indistinguishable from a row of figures, so left alone
 ])
@@ -222,8 +225,10 @@ def test_adapter_marks_a_failed_block_and_still_closes_the_span():
     with pytest.raises(ValueError):
         with trace_run(INFO, "q", tracer=LangfuseTracer(client)):
             with span("executor"):
-                raise ValueError("boom")
-    assert client.exits == [ValueError, ValueError]                            # the exception reached both __exit__s
+                raise ValueError("no filing for jane@corp.example, call 415-555-2671")
+    failed = {"level": "ERROR", "status_message": "ValueError: no filing for [email], call [phone]"}
+    assert all(failed in raw.updates for raw in client.raws)                   # both spans failed, the text masked
+    assert client.exits == [None, None]       # closed without the exception: the SDK would record its raw text
 
 
 @pytest.mark.parametrize("fail_on", [{"span"}, {"generation"}, {"trace"}])
@@ -255,7 +260,7 @@ def test_a_block_cancelled_by_the_time_limit_is_marked_as_an_error():
         asyncio.run(main())
     executor = client.raws[1]                                                 # the root is raws[0]
     assert {"level": "ERROR", "status_message": "cancelled"} in executor.updates
-    assert client.exits[0] is asyncio.CancelledError
+    assert client.exits[0] is None
 
 
 def test_a_generation_uses_the_current_sdk_call_when_the_client_has_it():

@@ -80,9 +80,45 @@ def test_installing_twice_changes_nothing(masking):
     assert logging.getLogRecordFactory() is factory
 
 
-def test_a_bad_format_string_is_left_to_logging(masking):
-    record = logging.getLogRecordFactory()("x", logging.INFO, __file__, 1, "%d", ("not a number",), None)
-    assert record.msg == "%d" and record.args == ("not a number",)          # unchanged: logging reports it
+def make_record(msg, args, exc_info=None):
+    return logging.getLogRecordFactory()("x", logging.INFO, __file__, 1, msg, args, exc_info)
+
+
+def test_a_bad_format_string_is_left_to_logging_with_its_text_masked(masking):
+    record = make_record("%d for jane@corp.example", ("call 415-555-2671",))
+    assert record.msg == "%d for [email]" and record.args == ("call [phone]",)     # logging reports the bad format
+
+
+def test_arguments_keep_their_shape_and_types(masking):
+    """Handlers may unpack the arguments (uvicorn's access formatter does), so a tuple stays a tuple of the same
+    length, a mapping stays a mapping, numbers stay numbers and only text with personal data changes."""
+    record = make_record("%s %d %.1f %r", ("jane@corp.example", 7, 2.5, ["clean"]))
+    assert record.args == ("[email]", 7, 2.5, ["clean"]) and record.getMessage() == "[email] 7 2.5 ['clean']"
+    mapping = make_record("%(who)s asked %(n)d", {"who": "jane@corp.example", "n": 3})
+    assert mapping.args == {"who": "[email]", "n": 3} and mapping.getMessage() == "[email] asked 3"
+
+    class Person:
+        def __str__(self):
+            return "Person(jane@corp.example)"
+    assert make_record("%s", (Person(),)).args == ("Person([email])",)
+
+
+def test_personal_data_in_the_format_string_itself_is_masked(masking):
+    record = make_record("user jane@corp.example asked %s", ("about revenue",))
+    assert record.getMessage() == "user [email] asked about revenue"
+
+
+def test_uvicorns_formatters_still_work_and_print_masked_lines(masking):
+    """The access log unpacks five arguments (client, method, path, version, status); with args=None it raised and
+    the line was lost (the first W2-13 version)."""
+    from uvicorn.logging import AccessFormatter, DefaultFormatter
+    access = make_record('%s - "%s %s HTTP/%s" %d',
+                         ("127.0.0.1:5000", "GET", "/ask?email=jane@corp.example", "1.1", 200))
+    line = AccessFormatter(fmt="%(client_addr)s %(request_line)s %(status_code)s", use_colors=False).format(access)
+    assert line == "127.0.0.1:5000 GET /ask?email=[email] HTTP/1.1 200 OK"
+    default = make_record("question from %s", ("+1 415-555-2671",))
+    assert DefaultFormatter(fmt="%(levelprefix)s %(message)s", use_colors=False).format(default).endswith(
+        "question from [phone]")
 
 
 def test_the_api_and_the_clis_install_it():

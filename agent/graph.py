@@ -5,7 +5,7 @@
         -> executor    tool error, first time -> planner (replan once); a second error -> composer
         -> composer    draft AnswerContract
         -> critic      fails, first time -> executor (send back once; a refusal goes back to the composer);
-                       fails again -> finish (verified false)
+                       fails again -> finish (verified false; the give-up answer if the injection check failed)
         -> finish      the final AnswerContract (with_verification), the only thing that leaves the graph
 
 Any step that finds a limit broken (more tool calls than MAX_AGENT_STEPS, more tokens than MAX_TOKENS_PER_QUERY)
@@ -38,6 +38,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.contract import COULD_NOT_VERIFY, AnswerContract
 from agent.critic_checks import Violation, with_verification
+from agent.injection import IGNORED_NOTE
 from agent.state import AgentState, Verdict
 from core import tracing
 from core.tracing import TraceInfo, Tracer, trace_run
@@ -166,7 +167,8 @@ def finish(state: AgentState) -> dict[str, Any]:
     """The final answer: the draft as the critic judged it (with_verification), or a give-up answer. A draft the
     critic did not see, a failed verdict, a node's stop_reason or a limit broken before the critic passed the draft
     is never verified. A draft the critic passed keeps `verified` when a limit is broken afterwards (only the
-    critic's own tokens can do that), with a note saying so (spec §9: the best verified partial answer)."""
+    critic's own tokens can do that), with a note saying so (spec §9: the best verified partial answer). A draft
+    still failing the critic's injection check gives the give-up answer with the spec's note instead (W2-13)."""
     stopped, limit = state.get("stop_reason"), limit_reason(state)
     draft, verdict = state.get("draft"), state.get("verdict")
     if draft is None:
@@ -185,6 +187,11 @@ def finish(state: AgentState) -> dict[str, Any]:
         violations.append(Violation("limit", limit))
     elif verdict is None:
         violations.append(Violation("critic", "the answer was not checked"))
+    injected = [v for v in violations if v.rule == "injection"]
+    if injected:                # W2-13: a draft showing an injection's payload never reaches the user, even unverified
+        answer = give_up_answer(str(injected[0]))
+        return {"answer": answer.model_copy(update={"notes": [IGNORED_NOTE, *answer.notes]}),
+                "stop_reason": stopped or limit}
     return {"answer": with_verification(draft, violations), "stop_reason": stopped or limit}
 
 

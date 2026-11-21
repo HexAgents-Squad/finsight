@@ -12,13 +12,21 @@ cache, eval runs files) keep the text: they are local, git-ignored or evaluation
 The patterns are chosen so financial text is never masked (tests/test_tracing.py and tests/test_pii.py): a run of
 years ("2023 2024 2025"), a bare figure (383285000000 or 4155552671), a date (2024-09-28), a range (2023-2025), an
 accession number (0000320193-24-000123), a negative column "(123) 456 789" or a signed change "+1.25 34.6" all stay.
-  North American: 415-555-2671, 415.555.2671, (415) 555-2671, an optional leading 1; plain spaces only with a
-    leading 1 ("1 800 555 1234"), since "391 035 2024" in a table is figures, not a phone number.
-  International: +country code, then 2 to 4 groups of at least 2 digits joined by a space or a hyphen, at least
-    10 digits in all (checked in _mask_phone); "+383285000000" or "+3.5 12.25" is a signed figure.
+  North American: 415-555-2671, 415.555.2671, (415) 555-2671, an optional leading 1 or +1; plain spaces only with
+    a leading 1 ("1 800 555 1234"), since "391 035 2024" in a table is figures, not a phone number.
+  International: +country code, then 2 to 5 groups of digits joined by a space or a hyphen ("+33 1 23 45 67 89"),
+    at least 10 digits in all (checked in _mask_phone), or the compact E.164 form, "+" and 11 to 15 digits
+    ("+14155552671"). The compact form also covers a signed figure of 11 or more digits without separators
+    ("+93736000000"): filings and FinSight's tools write figures with commas or without a sign, and a typed
+    phone number is the likelier reading, so it is masked. "+3.5 12.25" or "+12 345 678" stays a figure.
 Not recognised, on purpose: "415 555 2671" (bare spaces), local numbers without a country code outside North
-America ("020 7946 0958"), and anything without separators: all too close to columns of figures. Separators are
-never line breaks. This module imports nothing from FinSight, so any module can use it.
+America ("020 7946 0958"), and anything without separators or a "+": all too close to columns of figures.
+Separators are never line breaks. This module imports nothing from FinSight, so any module can use it.
+
+Log records: the message and string arguments are masked in place, keeping the arguments' shape (a handler may
+unpack them, as uvicorn's access log does), and so are the exception text and stack. Not masked: `exc_info`
+itself (a handler that re-formats the live exception sees its raw text) and attributes passed with `extra=`.
+FinSight's own handlers use the default formatter, which reads the masked exc_text.
 """
 from __future__ import annotations
 
@@ -29,8 +37,8 @@ from typing import Any
 MASK_EMAIL = "[email]"
 MASK_PHONE = "[phone]"
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}(?:[ -]\d{2,5}){2,4}"
-                   r"|(?:1[ .-]?)?(?:\(\d{3}\) ?\d{3}[ .-]\d{4}|\d{3}-\d{3}-\d{4}|\d{3}\.\d{3}\.\d{4})"
+PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}(?:[ -]\d{1,6}){2,5}|\+[1-9]\d{10,14}"
+                   r"|(?:\+?1[ .-]?)?(?:\(\d{3}\) ?\d{3}[ .-]\d{4}|\d{3}-\d{3}-\d{4}|\d{3}\.\d{3}\.\d{4})"
                    r"|1 \d{3} \d{3} \d{4})(?![\w-]|[.,]\d)")
 MIN_INTERNATIONAL_DIGITS = 10
 
@@ -51,14 +59,42 @@ def mask_pii(text: str) -> str:
 _FACTORY_MARK = "_finsight_masks_pii"
 
 
+def _mask_arg(value: Any) -> Any:
+    """A log argument with personal data masked: a string masked, another object replaced by its masked text only if
+    that text holds personal data (numbers and clean objects stay as they are, so "%d" and "%r" still work)."""
+    if isinstance(value, str):
+        return mask_pii(value)
+    if isinstance(value, (int, float)) or value is None:
+        return value
+    text = str(value)
+    masked = mask_pii(text)
+    return value if masked == text else masked
+
+
+def _mask_args(args: Any) -> Any:
+    """The record's arguments masked in the shape they came in (a tuple, or one mapping for "%(name)s"): handlers
+    such as uvicorn's access formatter unpack them."""
+    if isinstance(args, dict):
+        return {key: _mask_arg(value) for key, value in args.items()}
+    if isinstance(args, tuple):
+        return tuple(_mask_arg(value) for value in args)
+    return args
+
+
 def _masked_record_factory(previous: Any) -> Any:
     def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = previous(*args, **kwargs)
+        if record.args:
+            record.args = _mask_args(record.args)
         try:
-            message = record.getMessage()                # the message with its arguments filled in
+            message = record.getMessage()                # the message with its (masked) arguments filled in
         except Exception:                                # noqa: BLE001 - a bad format string is logging's to report
-            return record
-        record.msg, record.args = mask_pii(message), None
+            message = None
+        if isinstance(record.msg, str) and (message is None or mask_pii(message) != message):
+            if message is None:                          # logging reports the bad format; its text is masked
+                record.msg = mask_pii(record.msg)
+            else:                                        # personal data in the format string itself: send it filled in
+                record.msg, record.args = mask_pii(message), None
         if record.exc_info and not record.exc_text:      # the traceback's text, formatted once and masked
             record.exc_text = mask_pii(logging.Formatter().formatException(record.exc_info))
         if record.stack_info:
