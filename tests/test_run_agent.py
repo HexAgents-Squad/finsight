@@ -246,6 +246,8 @@ def test_the_cli_writes_a_runs_file_the_scorer_reads(tmp_path):
     assert (meta.planner_prompt_sha256, meta.composer_prompt_sha256) == (planner.PROMPT_SHA256, composer.PROMPT_SHA256)
     assert meta.prompt_version.startswith(planner.PROMPT_VERSION)
     assert meta.limits == {"max_steps": 10, "max_tokens": 12_000, "timeout_s": 10}
+    assert meta.retrieval == {"embed_model": "bge-small-en-v1.5", "rerank": False, "chunks": "C3",
+                              "fusion": "hybrid RRF", "statements_first": True}        # what the A4 ablation switches
     rec = RunRecord.model_validate_json(lines[0])
     assert rec.tool_calls == [] and rec.agent is not None
     assert not {"steps", "agreement"} & set(json.loads(lines[0]))                           # no S-only fields
