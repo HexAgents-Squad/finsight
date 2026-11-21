@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--question-id", default="DEMO-1", help="becomes the tag q:<id>")
     parser.add_argument("--run-id", default=None, help="becomes the tag run:<id> (default: demo-<UTC time>)")
     args = parser.parse_args(argv)
+    from core.pii import install_log_masking
+    install_log_masking()                           # W2-13: a question's e-mail or phone number never reaches a log
     from core import tracing
     from core.llm import LLMClient
     from core.settings import get_settings
