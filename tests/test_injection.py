@@ -306,13 +306,12 @@ def test_the_graph_passes_its_guard_to_finish(monkeypatch, guard):
     import dataclasses
 
     from agent import graph as g
-    from agent.nodes import real_nodes
     from agent.stubs import stub_nodes
-    assert real_nodes(llm=object(), call_tool=object(), injection_guard=guard).injection_guard is guard
     seen, real_finish = [], g.finish
     monkeypatch.setattr(g, "finish", lambda state, **kw: seen.append(kw) or real_finish(state, **kw))
     nodes = dataclasses.replace(stub_nodes(), injection_guard=guard)
-    asyncio.run(g.run("What were Apple's net sales in fiscal 2024?", [], graph=g.build_graph(nodes)))
+    asyncio.run(g.run("What were Apple's net sales in fiscal 2024?", [], graph=g.build_graph(nodes),
+                      limits=g.Limits()))                       # explicit: the default reads them from .env
     assert seen == [{"injection_guard": guard}]
 
 
@@ -430,5 +429,6 @@ def test_real_nodes_pass_the_guard_to_the_composer_and_the_critic(monkeypatch):
     seen = {}
     monkeypatch.setattr(agent.composer, "make_composer", lambda llm, **kw: seen.setdefault("composer", kw))
     monkeypatch.setattr(agent.critic, "make_critic", lambda **kw: seen.setdefault("critic", kw))
-    real_nodes(llm=object(), call_tool=object(), injection_guard=False)
+    nodes = real_nodes(llm=object(), call_tool=object(), injection_guard=False)
     assert seen == {"composer": {"injection_guard": False}, "critic": {"injection_guard": False}}
+    assert nodes.injection_guard is False                                       # and to finish (Nodes)
