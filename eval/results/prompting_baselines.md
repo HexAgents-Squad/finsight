@@ -176,7 +176,7 @@ hit the 1,024-token reply cap: one S2 sample, D07, decided on the other 4, and t
 and G02, whose answer steps were told the research step had failed); the failure labels
 are the scorer's suggestions until W1-14 confirms them (an honest "not reported" for a question whose figure was
 not retrieved is suggested as malformed_output or wrong_line_item); the summary row and every "pending" cell
-fill in when the graders' grades are entered and the scorer is re-run (`eval/GRADING.md`, "A later round");
+fill in when the graders' grades are entered and the scorer is re-run (`eval/GRADING.md`, "The second round (W2-12)");
 a call that fails (the three capped calls) adds no tokens or seconds, so S2's and S3's cost rows are slightly
 low; after the PR review the S2 file was re-written from the reply cache with the vote no longer splitting
 refusals over the company they mention (0 requests; no answer changed, 4 refusals became unanimous).
