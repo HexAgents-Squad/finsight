@@ -363,7 +363,10 @@ def test_a_pending_merge_fills_those_rows_and_leaves_the_graded_ones(graded_shee
         gr.merge(graded_sheet, g1, g2)                                       # without --pending: refused
 
 
-def test_the_committed_sheet_has_a_pending_round_for_the_strategy_runs():
+def test_the_committed_sheet_has_a_pending_round_for_the_strategy_and_agent_runs():
+    """The W1-09 strategy runs' rows and the W2-11 agent run's (A1) wait for one --pending round; every M row is
+    graded."""
     todo = gr.pending_rows(gr.load(gr.SHEET))
     key = {r["key"]: r["run_id"] for r in csv.DictReader((sa.GRADING_DIR / sa.KEY_NAME).open(encoding="utf-8"))}
-    assert todo and all(key[r["key"]].startswith("S") for r in todo)
+    runs = {key[r["key"]][0] for r in todo}
+    assert todo and runs == {"S", "A"}

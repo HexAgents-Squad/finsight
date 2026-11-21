@@ -256,9 +256,8 @@ def write_run(records: list[RunRecord], meta: RunMeta, out_dir: Path) -> Path:
     with the old records (the scorer then refuses a mismatch), never half a file."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{meta.run_id}.jsonl"
-    # a B0 record leaves out the strategy fields it never has, so B0 runs files keep their exact bytes
-    lines = "".join(r.model_dump_json(exclude={k for k in ("steps", "agreement") if getattr(r, k) is None}) + "\n"
-                    for r in records)
+    # a record leaves out the fields of other run types (RunRecord.to_line), so B0 runs files keep their exact bytes
+    lines = "".join(r.to_line() for r in records)
     for target, text in ((out_dir / f"{meta.run_id}.meta.json", meta.model_dump_json(indent=2) + "\n"),
                          (path, lines)):
         tmp = target.with_name(target.name + ".part")

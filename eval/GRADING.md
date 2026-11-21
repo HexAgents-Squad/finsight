@@ -132,3 +132,6 @@ python eval/grading.py check --pending --grader 1 ../W1-09_grading/grading_sheet
 python eval/grading.py merge --pending --g1 ../W1-09_grading/grading_sheet_Chandra.csv --g2 ../W1-09_grading/grading_sheet_Amresh.csv --write
 python eval/score_answers.py                             # fills the summary row of eval/results/prompting_baselines.md
 ```
+
+## A later round: the agent run A1 (W2-11)
+The agent's gold run (A1, `eval/results/agent_baselines.md`) added 31 rows: 22 to grade (its 12 summaries and 10 company answers that name both companies) and 9 wrong answers to label. They join the round above with no extra step: `--pending` copies hold every row nobody graded yet, S1-S3's and A1's alike. The agent searched for itself, so the handout also lists, under "What a system that searched for itself retrieved", the passages and figures one of the answers rests on; check that answer against those, not only against the pack's passages above them. The handout names no system, but that section, and the agent's way of writing (XBRL-style figures, its refusal sentence), let a grader guess which rows are the agent's: grade each answer on its own merits against the gold answer and the rubric, not on who wrote it.

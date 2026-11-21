@@ -15,6 +15,10 @@ Outputs:
                                            (the model runs M1, M2, ... only)
     eval/results/prompting_baselines.md    the same tables for B0 (the M1 run) next to the W1-09 strategy runs
                                            S1-S3, plus their calls per question and S2's agreement (W1-09)
+    eval/results/agent_baselines.md        the agent runs (A1, ...) next to B0 and S1-S3, paired with B0, plus the
+                                           agent's own checks (W2-11). An agent run's evidence is what its tools
+                                           returned (runs file `tool_calls`), and a citation must name one of
+                                           those sources; it never saw the packs' passages or earlier answers
 With --questions dev the development questions are scored instead (no refusal tests; the development pack) and
 everything goes to eval/results/dev/, report dev_baselines.md: tuning the W1-09 prompts never reads gold scores.
 Optional input: eval/results/grading/judge_<run_id>.jsonl ({"id", "score": 0|1|2, "reason"}), LLM-as-judge scores
@@ -87,10 +91,12 @@ RUNS_DIR = RESULTS_DIR / "model_runs"
 SCORES_DIR, GRADING_DIR = RESULTS_DIR / "scores", RESULTS_DIR / "grading"
 REPORT_NAME = "model_comparison.md"
 BASELINE_REPORT, DEV_REPORT = "prompting_baselines.md", "dev_baselines.md"
+AGENT_REPORT = "agent_baselines.md"                  # W2-11: the agent runs (A1, ...) next to B0 and S1-S3
 DEV_DIR = RESULTS_DIR / "dev"
 B0_REFERENCE = "M1_qwen3-8b_rag_think-off_b0-v1"     # the zero-shot run the W1-09 strategies are compared with
 REPORT_TITLES = {REPORT_NAME: "Model comparison (W1-08 scorer)",
                  BASELINE_REPORT: "Prompting baselines B0 / S1 / S2 / S3 on Qwen3-8B (W1-09)",
+                 AGENT_REPORT: "The agent (A1) next to B0 and S1 / S2 / S3 on Qwen3-8B (W2-11)",
                  DEV_REPORT: "Prompting baselines on the development set (W1-09 tuning; not a result)"}
 SHEET_NAME, KEY_NAME = "grading_sheet.csv", "grading_key.csv"
 START, END = "<!-- GENERATED:START (eval/score_answers.py) -->", "<!-- GENERATED:END -->"
@@ -288,24 +294,65 @@ def display_answer(rec: RunRecord) -> str:
     return CITATION_MARK.sub("", text).strip()
 
 
-def evidence(q: Question, pack: dict, rag: bool) -> list[Figure]:
+def input_supported(x: object, refs: list[Figure]) -> bool:
+    """Whether a calculator input is a figure the run fetched, at the fetched figure's own precision (an input has
+    no tolerance of its own, so an invented round 14000 is not "supported" by a fetched 14276), as a plain figure
+    or as a percentage."""
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    return any(supported(Figure(abs(float(x)), 0.0, percent, str(x)), refs) for percent in (False, True))
+
+
+def agent_texts(rec: RunRecord, calculations: bool = True) -> list[str]:
+    """What an agent run's tools returned (W2-11), in call order: its passages and fetched figures, and a
+    calculation's result only when every input of that calculation is among them (or is an earlier such result).
+    The planner chooses a calculation's inputs, so counting every result would make any derived number "supported",
+    an invented input included. `calculations=False` counts no calculation result at all: B0's rule, under which a
+    derived number is supported only by the gold answer, kept as a second count so the two runs compare fairly."""
+    fetched = [e.text for call in rec.tool_calls or [] if call.tool != "calculate" for e in call.evidence]
+    if not calculations:
+        return fetched
+    refs = [f for t in fetched for f in figures(t)]
+    for call in rec.tool_calls or []:
+        if call.tool == "calculate" and call.evidence and \
+                all(input_supported(x, refs) for x in call.arguments.get("inputs") or [None]):
+            for e in call.evidence:
+                fetched.append(e.text)
+                refs += figures(e.text)
+    return fetched
+
+
+def agent_sources(rec: RunRecord) -> set[str]:
+    """The sources an agent run's tools returned, as citations name them (eval/run_agent.citation_id), upper-cased
+    like the scorer reads a citation."""
+    return {e.source.upper() for call in rec.tool_calls or [] for e in call.evidence}
+
+
+def evidence(q: Question, pack: dict, rag: bool, agent: list[str] | None = None) -> list[Figure]:
     """Figures the model was given or the grader accepts: the gold answer, the conversation history the prompt
-    showed (every run) and, for a RAG run, the passages."""
+    showed (every run) and, for a RAG run, the passages. An agent run (`agent`: what its tools returned) saw only
+    its earlier questions, never the history's answers, so its evidence is the gold answer and its tool results."""
     texts = [q.gold_answer if q.category != "refusal_test" else ""]
-    texts += [h["answer"] for h in pack.get("history", [])]
-    texts += [p["text"] for p in pack.get("passages", [])] if rag else []
+    if agent is not None:
+        texts += agent
+    else:
+        texts += [h["answer"] for h in pack.get("history", [])]
+        texts += [p["text"] for p in pack.get("passages", [])] if rag else []
     return [f for t in texts for f in figures(t)]
 
 
-def gold_figures_in_pack(q: Question, pack: dict) -> bool | None:
+def gold_figures_in_pack(q: Question, pack: dict, agent: list[str] | None = None) -> bool | None:
     """Whether every dollar figure of a short numeric gold answer appears, digit for digit, in the passages or the
-    conversation history (None: the gold answer has no such figure). Stricter than the hallucination check's
-    rounding match on purpose: "$12.5 billion" in a passage is not the 12,455 a Q3 question needs (A12), and the
-    context pack's evidence_in_pack only says a passage came from the right section, not that it holds the line."""
+    conversation history (None: the gold answer has no such figure); for an agent run, in what its tools returned
+    (`agent`): its own retrieval. Stricter than the hallucination check's rounding match on purpose: "$12.5
+    billion" in a passage is not the 12,455 a Q3 question needs (A12), and the context pack's evidence_in_pack only
+    says a passage came from the right section, not that it holds the line. An XBRL fact is in the gold answers'
+    scale (USD millions: 391035 for $391,035 million), so the same digit-for-digit match applies."""
     wanted = GROUPED_FIGURE.findall(q.gold_answer)
     if q.answer_type != "short_numeric" or not wanted:
         return None
-    text = " ".join([p["text"] for p in pack.get("passages", [])] + [h["answer"] for h in pack.get("history", [])])
+    text = " ".join(agent) if agent is not None else \
+        " ".join([p["text"] for p in pack.get("passages", [])] + [h["answer"] for h in pack.get("history", [])])
     return all(re.search(rf"(?<![\d,.])(?:{re.escape(f)}|{f.replace(',', '')})(?!\d|[,.]\d)", text) for f in wanted)
 
 
@@ -320,13 +367,18 @@ def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str
         out["checks"]["error"] = rec.error is not None
         return out
     out["value"] = a.value
-    refs = evidence(q, pack, rag)
-    pids = {p["pid"] for p in pack.get("passages", [])} if rag else set()
+    agent = rec.tool_calls is not None                 # an agent run: its own tool results are its evidence
+    refs = evidence(q, pack, rag, agent_texts(rec) if agent else None)
+    pids = agent_sources(rec) if agent else {p["pid"] for p in pack.get("passages", [])} if rag else set()
     shown = figures(a.answer) + ([value_figure(a)] if a.value is not None else [])
     named_field = companies_named(a.company, matchers) if a.company else set()
     named = named_field or companies_named(a.answer, matchers)
     checks = out["checks"]
     checks["unsupported_numbers"] = sorted({f.text for f in shown if not a.refused and not supported(f, refs)})
+    if agent:                                          # the same check under B0's rule: no calculation result counts
+        b0_refs = evidence(q, pack, rag, agent_texts(rec, calculations=False))
+        checks["unsupported_numbers_b0_rule"] = sorted({f.text for f in shown
+                                                        if not a.refused and not supported(f, b0_refs)})
     checks["bad_citations"] = sorted({c.strip().strip("[]").strip().upper() for c in a.citations} - pids)
     checks["wrong_year"] = bool(q.fiscal_years and a.fiscal_year is not None and a.fiscal_year not in q.fiscal_years)
     checks["wrong_company"] = bool(q.companies and named and not named & set(q.companies))
@@ -342,7 +394,8 @@ def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str
         return out
     if q.answer_type == "short_entity":
         return entity_outcome(q, a, named_field, companies_named(a.answer, matchers), out)
-    return numeric_outcome(q, a, refs, out)
+    exact = agent and rec.agent is not None and bool(rec.agent.calculations)    # its value is the calculator's
+    return numeric_outcome(q, a, refs, out, exact_arithmetic=exact)
 
 
 def refusal_outcome(q: Question, a: B0Answer, out: dict) -> dict:
@@ -397,7 +450,11 @@ def entity_outcome(q: Question, a: B0Answer, in_field: set[str], in_answer: set[
     return out
 
 
-def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> dict:
+def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict, exact_arithmetic: bool = False) -> dict:
+    """`exact_arithmetic`: the value is an agent calculator's result (W2-11), whose arithmetic is exact, so a wrong
+    derived value came from its inputs: a wrong line item when they were fetched figures, an invented number when
+    they were not. A sign flip keeps its own label and reason (an arithmetic slip, "sign flipped": for the
+    calculator, inputs in the wrong order), as do unit confusion, the wrong year and the wrong company."""
     if a.value is None:
         label = "wrong_line_item" if NOT_REPORTED_RE.search(a.answer) else "malformed_output"
         out.update(reason="no value", suggested_label=label)
@@ -440,6 +497,8 @@ def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict) -> 
         out["suggested_label"] = "wrong_fiscal_year"
     elif checks["wrong_company"]:
         out["suggested_label"] = "wrong_company"
+    elif exact_arithmetic:
+        out["suggested_label"] = "invented_number" if checks["unsupported_numbers"] else "wrong_line_item"
     elif q.category in ("ratio", "period_comparison") or q.unit == "%":
         derived_close = abs(value - gold) <= ARITHMETIC_SLIP_PCT / 100 * abs(gold)
         out["suggested_label"] = "arithmetic_slip" if derived_close or not checks["unsupported_numbers"] \
@@ -469,8 +528,10 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
     for rec in sorted(records, key=lambda r: order[r.id]):
         s = check(questions[rec.id], rec, packs.get(rec.id, {}), meta.context == "rag", matchers)
         answer = display_answer(rec)
-        s["gold_figures_in_pack"] = gold_figures_in_pack(questions[rec.id], packs.get(rec.id, {})) \
-            if meta.context == "rag" else None
+        s["gold_figures_in_pack"] = (
+            gold_figures_in_pack(questions[rec.id], packs.get(rec.id, {})) if meta.context == "rag"
+            else gold_figures_in_pack(questions[rec.id], {}, agent_texts(rec))
+            if meta.context == "agent" and rec.tool_calls is not None else None)     # an errored record: excluded
         s.update(run_id=meta.run_id, refused=bool(rec.parsed and rec.parsed.refused), json_valid=rec.json_valid,
                  retries=rec.retries, prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
                  latency_s=rec.latency_s, cached=rec.cached, error=rec.error is not None,
@@ -478,6 +539,12 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
         if rec.steps is not None or rec.agreement is not None:      # W1-09 strategies only: B0 scores unchanged
             s.update(calls=sum(1 + st.retries for st in rec.steps) if rec.steps else 1 + rec.retries,
                      agreement=rec.agreement)
+        if rec.agent is not None:                                   # W2-11 agent runs only
+            a = rec.agent
+            s.update(calls=a.llm_calls, verified=a.verified, verdict=a.verdict, stop_reason=a.stop_reason,
+                     tool_steps=a.tool_steps, tool_errors=sum(c.error is not None for c in rec.tool_calls or []),
+                     live_requests=a.live_requests, cache_hits=a.cache_hits,
+                     several_values=not a.calculations and len(a.values) > 1)
         scored.append(s)
     return scored
 
@@ -669,7 +736,13 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
             rate([s for s in sc if s["category"] == "refusal_test" and s["answer_type"] == kind]) for _, sc in runs)
             + " |")
     out += table("### 3. Hallucination and grounding checks (answers with a reply, not refused)", "Check", names)
-    for label, test in (("unsupported numbers", lambda s: bool(s["checks"].get("unsupported_numbers"))),
+    # With an agent run present, the count also under B0's rule (no calculation result is evidence), the like-for-
+    # like comparison: an agent's derived number counts as supported when its inputs were fetched figures
+    b0_rule = [("unsupported numbers, no calculation result counted as evidence (B0's rule; the same count for a "
+                "pack run)", lambda s: bool(s["checks"].get("unsupported_numbers_b0_rule",
+                                                             s["checks"].get("unsupported_numbers"))))] \
+        if any(m.context == "agent" for m, _ in runs) else []
+    for label, test in (("unsupported numbers", lambda s: bool(s["checks"].get("unsupported_numbers"))), *b0_rule,
                         ("wrong fiscal year", lambda s: s["checks"].get("wrong_year")),
                         ("wrong company", lambda s: s["checks"].get("wrong_company")),
                         ("cited a passage it was not given (closed-book: any citation)",
@@ -736,11 +809,12 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
             "| graders' Cohen's kappa | " + " | ".join(cells["g_kappa"]) + " |",
             "| final grade vs judge: exact agreement | " + " | ".join(cells["agree"]) + " |",
             "| final grade vs judge: Cohen's kappa | " + " | ".join(cells["kappa"]) + " |", ""]
-    out += table("### 8. Short numeric answers by whether the gold figures were in the passages (digit for digit)",
-                 "Gold dollar figures", names)
+    agent_note = " (an agent run: in what its own tools returned)" if any(m.context == "agent" for m, _ in runs) else ""
+    out += table("### 8. Short numeric answers by whether the gold figures were in the passages (digit for digit)"
+                 + agent_note, "Gold dollar figures", names)
     for label, flag in (("all in the passages", True), ("not all in the passages", False)):
         row = [rate([s for s in sc if s["answer_type"] == "short_numeric" and s.get("gold_figures_in_pack") is flag])
-               if meta.context == "rag" else "– (closed-book)" for meta, sc in runs]
+               if meta.context in ("rag", "agent") else "– (closed-book)" for meta, sc in runs]
         out.append(f"| {label} | " + " | ".join(row) + " |")
     out.append("")
     return "\n".join(out)
@@ -785,7 +859,8 @@ def paired_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     if len(runs) < 2:
         return ""
     (ref_meta, ref), others = runs[0], runs[1:]
-    out = table(f"### 10. Paired with {ref_meta.run_id} (B0): questions right only with the strategy / only with "
+    which = "the run" if any(m.context == "agent" for m, _ in others) else "the strategy"
+    out = table(f"### 10. Paired with {ref_meta.run_id} (B0): questions right only with {which} / only with "
                 f"B0, two-sided sign test", "Answers", [m.run_id for m, _ in others])
     by_id = {s["id"]: s for s in ref}
     for label, types in {**REPORT_TYPES, "All decided answers": ANSWER_TYPES}.items():
@@ -794,15 +869,52 @@ def paired_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
             pairs = [(s["correct"], by_id[s["id"]]["correct"]) for s in sc if s["answer_type"] in types
                      and s["correct"] is not None and by_id[s["id"]]["correct"] is not None]
             win, loss = sum(a and not b for a, b in pairs), sum(b and not a for a, b in pairs)
-            cells.append(f"{win} / {loss} (p = {sign_test(win, loss):.2f}, n = {len(pairs)})" if pairs else "–")
+            p = sign_test(win, loss)
+            shown = f"p = {p:.2f}" if p >= 0.005 else "p < 0.01"          # never "p = 0.00"
+            cells.append(f"{win} / {loss} ({shown}, n = {len(pairs)})" if pairs else "–")
         out.append(f"| {label} | " + " | ".join(cells) + " |")
+    return "\n".join(out) + "\n"
+
+
+def agent_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """W2-11: what only an agent run has, per agent run: the critic's verdict against the scorer's, the tool calls,
+    the limits, and the answers the B0 mapping could not give a single value."""
+    agents = [(m, sc) for m, sc in runs if m.context == "agent"]
+    if not agents:
+        return ""
+    out = table("### 11. The agent's own checks and cost", "Measure", [m.run_id for m, _ in agents])
+    rows: dict[str, list[str]] = {k: [] for k in (
+        "verified by its critic", "correct among the verified (decided)", "correct among the not verified (decided)",
+        "tool calls per question (mean); questions with none", "tool calls that returned an error",
+        "stopped by a limit (time, steps, tokens)", "live requests / cache hits (chat replies)",
+        "short numeric answers with several values and no calculation (no single value to score)")}
+    for _, sc in agents:
+        verified = [s for s in sc if s.get("verified")]
+        rows["verified by its critic"].append(f"{len(verified)}/{len(sc)}")
+        for key, pool in (("correct among the verified (decided)", verified),
+                          ("correct among the not verified (decided)", [s for s in sc if not s.get("verified")])):
+            decided = [s for s in pool if s["correct"] is not None]
+            rows[key].append(f"{sum(s['correct'] for s in decided)}/{len(decided)}" if decided else "–")
+        steps = [s.get("tool_steps", 0) for s in sc]
+        rows["tool calls per question (mean); questions with none"].append(
+            f"{statistics.fmean(steps):.1f}; {sum(n == 0 for n in steps)}")
+        rows["tool calls that returned an error"].append(f"{sum(s.get('tool_errors', 0) for s in sc)}/{sum(steps)}")
+        stops = Counter(s["stop_reason"] for s in sc if s.get("stop_reason"))
+        rows["stopped by a limit (time, steps, tokens)"].append(
+            f"{sum(stops.values())}" + (f" ({', '.join(f'{k} {n}' for k, n in sorted(stops.items()))})" if stops else ""))
+        rows["live requests / cache hits (chat replies)"].append(
+            f"{sum(s.get('live_requests', 0) for s in sc)} / {sum(s.get('cache_hits', 0) for s in sc)}")
+        rows["short numeric answers with several values and no calculation (no single value to score)"].append(
+            str(sum(bool(s.get("several_values")) and s["answer_type"] == "short_numeric" for s in sc)))
+    out += [f"| {k} | " + " | ".join(v) + " |" for k, v in rows.items()]
     return "\n".join(out) + "\n"
 
 
 def write_report(text: str, path: Path) -> None:
     block = f"{START}\n{text}{END}"
     title = REPORT_TITLES.get(path.name, REPORT_TITLES[REPORT_NAME])
-    placeholder = "(written for W1-15)" if title == REPORT_TITLES[REPORT_NAME] else "(written for W1-09)"
+    placeholder = {REPORT_TITLES[REPORT_NAME]: "(written for W1-15)",
+                   REPORT_TITLES[AGENT_REPORT]: "(written for W2-11)"}.get(title, "(written for W1-09)")
     old = path.read_text(encoding="utf-8") if path.exists() else \
         f"# {title}\n\n{START}\n{END}\n\n## Interpretation\n\n{placeholder}\n"
     if START not in old or END not in old:
@@ -817,18 +929,22 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]
     for; the W1-09 baselines put B0 (M1) next to the strategy runs (S1-S3); a development-set scoring has one
     report with every run."""
     strategy_runs = [r for r in runs if r[0].run_id.startswith("S")]
+    agent_runs = [r for r in runs if r[0].run_id.startswith("A")]
     if dev:
-        return {DEV_REPORT: report(runs) + strategy_table(runs)}
+        return {DEV_REPORT: report(runs) + strategy_table(runs) + agent_table(runs)}
     out = {}
     model_runs = [r for r in runs if r[0].run_id.startswith("M")]
     if model_runs:
         out[REPORT_NAME] = report(model_runs)
+    reference = [r for r in runs if r[0].run_id == B0_REFERENCE]
+    if (strategy_runs or agent_runs) and not reference:   # the paired table would silently compare with another run
+        raise ValueError(f"strategy and agent runs need the B0 reference {B0_REFERENCE} in the same runs directory")
     if strategy_runs:
-        reference = [r for r in runs if r[0].run_id == B0_REFERENCE]
-        if not reference:                       # the paired table would silently compare with another run
-            raise ValueError(f"strategy runs need the B0 reference {B0_REFERENCE} in the same runs directory")
         baseline = reference + strategy_runs
         out[BASELINE_REPORT] = report(baseline) + strategy_table(baseline)
+    if agent_runs:                              # W2-11: B0 first (the paired table's reference), S1-S3, the agent
+        compared = reference + strategy_runs + agent_runs
+        out[AGENT_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared)
     return out
 
 

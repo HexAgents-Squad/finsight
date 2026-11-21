@@ -15,9 +15,10 @@
 | `run_planner.py` | W2-02: the planner node on the development questions only (dev set + `planner_dev.jsonl`) -> `results/planner_runs/<run>.jsonl` and `results/planner_dev.md` (refusal decisions by rule, valid plans, tokens, seconds) |
 | `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json`; W1-09: `--run S1/S2/S3` runs a prompting strategy instead |
 | `strategies.py` | W1-09: the prompting strategies S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition (prompts in `agent/prompts/s*`, frozen) |
+| `run_agent.py` | W2-11: the agent graph over the same 102 questions (A1; it retrieves for itself) → `results/model_runs/A1_….jsonl` + `.meta.json`, each record with its tool calls, their evidence and the whole answer (ADR-034) |
 | `judge_summaries.py` | W1-13: LLM-as-judge grades (0/1/2) for the summary answers → `results/grading/judge_<run_id>.jsonl` |
 | `runs_schema.py` | W1-08: the runs-file format (B0 answer, run record, run meta) shared by the runner (W1-13) and the scorer |
-| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (M runs) and `results/prompting_baselines.md` (B0 = M1 next to S1-S3, W1-09) (docs/week1_plan.txt §2.6) |
+| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (M runs), `results/prompting_baselines.md` (B0 = M1 next to S1-S3, W1-09) and `results/agent_baselines.md` (the agent next to B0 and S1-S3, W2-11) (docs/week1_plan.txt §2.6) |
 | `grading.py` | W1-14: tools for the human grading (guide: `GRADING.md`): a blind copy of the sheet per grader, a passages handout, the merge of both graders' copies, and `results/failure_examples.md` |
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
@@ -116,6 +117,21 @@ The strategies keep B0's rules word for word and add one thing each (`eval/strat
 tuned on the 15 development questions only and are pinned by sha256 (`tests/test_strategies.py`), so a change
 needs a new version. S1's four examples are development questions, so judge S1 on the dev set without them.
 A development-set run is never written next to the gold runs (`results/dev/model_runs/`).
+
+## The agent on the gold set (W2-11)
+```bash
+python eval/run_agent.py --questions dev --out-dir /tmp/agent_dev   # smoke test on the 15 development questions
+python eval/run_agent.py --max-requests 400                         # A1: 80 gold + 22 refusal tests (~2 calls each)
+python eval/judge_summaries.py --runs-dir DIR_WITH_ONLY_A1          # LLM judge on its summaries (second opinion)
+python eval/score_answers.py                                        # -> results/agent_baselines.md + sheet rows
+```
+The agent reads the context packs for the questions and their earlier turns only: it retrieves for itself, and a
+follow-up gets its earlier questions (never an answer) as history, the way its memory works. Each record keeps
+every tool call with what it returned, which the scorer uses as the run's evidence (its numbers must come from
+there or the gold answer) and its valid citations (a source a tool returned). The answer is mapped to the B0
+fields by `run_agent.b0_answer` (value: the last calculation's result, else the one value, only when the answer states it and does not say the figure is not reported); a calculation's result counts as evidence only when its inputs are fetched figures. The prompts it runs are
+the pinned planner and composer prompts (`tests/test_planner.py`, `tests/test_composer.py`). The new rows of the
+grading sheet are graded in a `--pending` round (`GRADING.md`).
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
