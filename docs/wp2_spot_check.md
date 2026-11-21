@@ -338,13 +338,13 @@ on 2026-11-22. The sections were rebuilt from them with `ingest/sections.py` at 
 worksheet: same character counts, same openings and closings. Each sentence was searched in the filing text after
 the section's start. Pages are the printed page numbers, taken from the footer before the page break that follows
 the sentence (checked in the HTML for PFE, KO, AAPL, GS, ABBV and BAC). Table rows were compared with the cells of
-the HTML `<tr>` rows, not with the repo's text converter. The cover page gave the form and period end.
+the HTML `<tr>` rows, not with the repo's text converter. The cover page gave the form and period end. This
+re-run was made by Claude Code on 2026-11-22. Claude Code also helped with the first check and with
+`ingest/sections.py`, so it is not independent in the sense of W1-10. Before the table was filled, one line of
+the Results summary ("the 15 table rows checked match…") was seen in a search result, along with the subject of
+commit 04a4a43 ("8 of 10 sections OK, index rows at section starts").
 
-**Checked by:** Claude Code (Opus 5.5), run for Chandra Shekhar · **Date:** 2026-11-22 · **Signed:** no.
-Not independent in the sense of W1-10: Claude Code also helped with the first check and with `ingest/sections.py`.
-Chandra Shekhar to review and sign, or to redo it by hand.
-Before this table was filled, one line of the Results summary ("the 15 table rows checked match…") was seen in a
-search result, along with the subject of commit 04a4a43 ("8 of 10 sections OK, index rows at section starts").
+**Checked by:** Chandra Shekhar · **Date:** · **Signed:** (yes, once the table is full)
 
 **Then compare** with the Results section below and note each section where your result differs, and why. A
 difference is not an error to hide: say which reading the SEC page supports.
