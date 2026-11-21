@@ -25,8 +25,10 @@ The categories are the usual ones for indirect prompt injection (OWASP LLM01): i
 chat-template tokens, notes and addresses to an AI system, instructions about "your answer", role changes, prompt
 or configuration disclosure, data exfiltration, hidden markup, source or link redirection, standing directives
 ("always use this figure"), imperatives to the reader and false claims of authority. Each needs an address to an
-AI system or an imperative; a filing describes, so none matches the 10-K and 10-Q corpus (tests/test_injection.py
-scans the three chunkings when data/ is present). The patterns were tuned on two development sets (our own
+AI system or an imperative. A filing describes, so none matches the indexed 10-K and 10-Q corpus
+(tests/test_injection.py scans the three chunkings when data/ is present); that holds for this corpus, where it
+was checked, not for every filing: a new filing could hold a sentence that matches, which costs that passage and
+shows the note. The patterns were tuned on two development sets (our own
 phrasings and an independent reviewer's); a held-out set, written without seeing them, measures them
 (eval/results/injection_results.md). Patterns are a filter, not a guarantee: the critic's check is the backstop.
 """
@@ -60,6 +62,12 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+LEADING = re.compile("^[\\s\"'\u201c\u201d\u2018\u2019\\-\u2013\u2014\u2022*>]+")
+# a split after every full stop, "!" or "?" followed by a space, a capital letter or a quote ("2%.Report that"), and
+# at a dash between spaces before a capital ("2% - Report that")
+PIECE = re.compile("(?<=[.!?])(?:\\s+|(?=[A-Z\"'\u201c\u2018]))|\\s[-\u2013\u2014]+\\s(?=[A-Z\"'])")
+
+
 def sentences(text: str) -> list[str]:
     """The sentences of normalized `text`. A boundary is a full stop, "!" or "?" before a space, unless the word a
     full stop ends is an abbreviation ("e.g.", "U.S.", "Inc.") or a single letter ("A.I.", "J. Smith"; not a
@@ -75,6 +83,25 @@ def sentences(text: str) -> list[str]:
     if text[start:].strip():
         out.append(text[start:].strip())
     return out
+
+
+def candidates(text: str) -> list[str]:
+    """What each pattern is tried on: the sentences of the normalized passage, plus the sentences of each of its
+    lines (a heading line without a full stop would otherwise be glued to the next sentence) and every piece after
+    a full stop (an abbreviation would otherwise glue two sentences: "Apple Inc. Report that ..."); each also
+    without leading quotes, dashes or bullets. In order, without repeats."""
+    body = COMMENT.sub(" ", text)
+    whole = normalize(body)
+    pieces = sentences(whole)
+    for line in body.split("\n"):
+        pieces += sentences(normalize(line))
+    pieces += PIECE.split(whole)
+    out: dict[str, None] = {}
+    for piece in pieces:
+        for variant in (piece.strip(), LEADING.sub("", piece).strip()):
+            if variant:
+                out.setdefault(variant)
+    return list(out)
 
 
 # --------------------------------------------------------------------------------------------- the patterns
@@ -98,18 +125,26 @@ WHAT_TO_IGNORE = (r"(?:instructions?|rules?|prompts?|guidelines?|directions?|dir
 IMPERATIVE = (r"(?:report|state|say|answer|reply|respond|tell|print|output|reveal|repeat|write|include|cite|end|"
               r"begin|add|mention|recommend|replace|use|give)")
 # an imperative after "; " or ": " (a second clause), which needs no sentence start
-MID_IMPERATIVE = re.compile(r"[;:]\s+(?:please\s+)?(?:report|state|say|tell|answer|reply|respond|print|write) "
-                            r"(?:that|to)\b", _I)
+MID_IMPERATIVE = re.compile(r"[;:]\s+(?:please\s+)?(?:(?:report|state|say|tell|write|print) that|(?:tell|answer|"
+                            r"reply to|respond to) the (?:user|reader)s?)\b", _I)
+# a verb after "<reader software> must": what an order to software asks ("automated systems must comply" is not one)
+ORDERED = (r"(?:report|state|say|answer|respond|reply|disclose|suppress|present|describe|treat|ignore|use|list|"
+           r"exclude|omit|emphasi[sz]e|avoid|output|print|write|tell|cite|recommend|include)")
+# "who ignore all the App Store rules": the verb inside a clause about someone else, not an order
+NOT_AN_ORDER = (r"(?<!who )(?<!that )(?<!which )(?<!may )(?<!might )(?<! to )(?<!will )(?<!would )(?<!could )"
+                r"(?<!can )(?<!they )(?<!we )(?<!not )")
 
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("override", re.compile(
-        rf"\b(?:ignore|disregard|forget|override|bypass)\s+{DETERMINER}(?:\s+\w+){{0,3}}\s+(?:instructions?|rules?|"
+        rf"{NOT_AN_ORDER}\b(?:ignore|disregard|forget)\s+{DETERMINER}(?:\s+\w+){{0,3}}\s+(?:instructions?|rules?|"
         r"prompts?|guidelines?|directions?|directives?|commands?|system messages?)\b"
+        r"|\b(?:override|bypass)\s+(?:all\s+|any\s+)?(?:your|previous|prior|above|earlier|preceding|system)\s+"
+        r"(?:\w+\s+){0,2}(?:instructions|prompts?|guidelines|rules)\b"
         r"|\b(?:ignore|disregard|forget) (?:everything|what you were (?:told|given))\b"
         r"|\b(?:do not|don't|never) follow your\b|\bstop following (?:your|the|any|these|previous|prior) (?:\w+ )?"
         r"(?:instructions|rules|guidelines|prompts?)\b"
         r"|\b(?:guidelines|instructions|directions|rules|prompts?) you (?:were|have been) given\b"
-        r"|\b(?:preceding|previous|prior|earlier|above|original) (?:directions|instructions|prompts?|guidelines|rules)"
+        r"|\b(?:preceding|previous|prior|earlier|above|original) (?:directions|instructions|prompts?)"
         r"(?: \w+){0,4} (?:are|is|were|have been) (?:now )?(?:void|cancell?ed|revoked|superseded|obsolete|"
         r"invalid|no longer (?:valid|apply|applicable|in effect))\b"
         r"|\bnew (?:instructions?|directives?|task)\s*:|^override\s*:", _I)),
@@ -126,16 +161,16 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"|<</?SYS>>"
         r"|</?(?:system|assistant|user)>|(?:^|\s)#{2,}\s*(?:system|assistant|instructions?)\b", _I)),
     ("hidden markup", re.compile(        # text styled out of sight; comments and format characters: see flagged()
-        r"<\w+[^>]*style\s*=\s*['\"][^'\"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0|"
-        r"opacity\s*:\s*0)|<\w+[^>]*\s(?:hidden|aria-hidden\s*=\s*['\"]?true)\b"
+        r"<\w+[^>]{0,300}style\s*=\s*['\"][^'\"]{0,300}(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0|"
+        r"opacity\s*:\s*0)|<\w+[^>]{0,300}\s(?:hidden|aria-hidden\s*=\s*['\"]?true)\b"
         r"|!\[[^\]]*\]\(\s*https?://", _I)),             # a markdown image: fetched by a renderer, it carries data out
     # (spaced-out letters, "i g n o r e", are not flagged: the parsed filings have them, "R e g i s t r a n t")
     ("addressed to an AI", re.compile(
         rf"\b(?:note|notes|instructions?|message|attention|reminder|correction)s?\s+(?:to|for)\s+(?:[\w ]{{0,30}}\s)?"
         rf"{ADDRESSEE}(?:\s*\([^)]{{0,80}}\))?\s*(?:[:,]|-\s)"
-        rf"|^to (?:any|every|whichever|whatever|the) (?:\w+ )?{ADDRESSEE}\b"
-        rf"|\b(?:any|all|every|the|these)?\s*{READER_SOFTWARE}\s+(?:must|shall|are required to|is required to|"
-        r"are to|is to|needs? to|are (?:hereby )?(?:instructed|directed|ordered))\b"
+        rf"|^to (?:any|every|whichever|whatever) (?:\w+ )?{ADDRESSEE}\b|^to the {ADDRESSEE}\s*(?:[:,]|-\s)"
+        rf"|\b{READER_SOFTWARE}\s+(?:must|shall|are required to|is required to|are to|is to|are (?:hereby )?"
+        rf"(?:instructed|directed|ordered) to)\s+(?:now\s+)?{ORDERED}\b"
         rf"|\b(?:(?:any|every|the|an?)\s+)?{ADDRESSEE}\s+(?:that is\s+|who is\s+)?(?:reading|processing|summari[sz]ing|"
         r"parsing|analy[sz]ing|seeing)\s+this\b"
         rf"|^(?:hey|hi|hello|dear|attention|ok(?:ay)?)\b[\s,]+{ADDRESSEE}\b"
@@ -154,8 +189,8 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"|\byour (?:new )?(?:role|name|task|persona|job) is now\b|\byour new (?:role|name|task|persona) is\b"
         r"|\byour new instructions\b|\byou (?:must|should|will) now (?:only )?(?:answer|respond|reply|say|state|"
         r"report)\b|\bassume the (?:persona|identity) of\b|\brole-?play\b|\bact as (?:dan|an? ai)\b"
-        r"|\byou are an? (?:\w+ )?(?:unfiltered|uncensored|unrestricted)\b|\b(?:with|has|have) no (?:restrictions|"
-        r"filters|guardrails)\b|\bfrom now on,? (?:act|respond|answer|behave|pretend|speak)\b"
+        r"|\byou are an? (?:\w+ )?(?:unfiltered|uncensored|unrestricted)\b|\b(?:ai|assistant|model|bot|you)\s+"
+        r"(?:\w+\s+){0,2}(?:with|has|have) no (?:restrictions|filters|guardrails)\b|\bfrom now on,? (?:act|respond|answer|behave|pretend|speak)\b"
         r"|\bfrom now on,? you (?:respond|answer|reply|speak|act|should)\b|\bfrom now on,? you (?:are|must|will (?:only )?(?:answer|respond|reply|say|speak|act))\b"
         r"|\bdeveloper mode\b|\bjailbr(?:eak|oken) mode\b", _I)),
     ("disclosure", re.compile(
@@ -177,7 +212,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"card numbers?|logins?|api keys?|account numbers?|social security)\b"
         r"|\b(?:send|forward|e-?mail|post|upload|output|share|transmit|disclose)\s+(?:\w+\s+){0,3}(?:conversation "
         r"history|chat history|environment variables|database credentials|access tokens|api keys|user (?:queries|"
-        r"questions|data))\b"
+        r"questions))\b"
         r"|\b(?:tell|ask) the user to (?:e-?mail|send|share|enter|provide) (?:their|your)\b", _I)),
     ("redirection", re.compile(
         r"\b(?:cite|(?<!we )direct (?:users?|readers?|them|people) to|(?<!we )refer (?:users?|readers?|them) to|"
@@ -196,7 +231,11 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"responses?|replies|reply|summar(?:y|ies)|outputs?)\b"
         r"|\byour (?:answer|response|reply|summary|output) (?:must|should|shall|has to)\b"
         r"|\bin (?:any|every) (?:summary|answer|response|reply)\b(?! prospectus)"
-        r"|\b(?:any|every|each|the) (?:answer|response|reply) (?:must|should|shall|has to)\b|\bin the (?:answer|reply)\b"
+        r"|\b(?:any|every) (?:answer|response|reply) (?:must|should|shall|has to)\b"
+        r"|^in (?:the|your) (?:answer|reply|response),\s*(?:replace|say|state|report|mention|include|write|use|end|"
+        r"begin|add|omit|drop|remove|claim)\b"
+        r"|\b(?:each|the) (?:answer|response|reply) (?:must|should|shall|has to|is required to) (?:\w+ )?(?:end|begin|"
+        r"start|conclude|include|say|state|mention|recommend|contain|written)\b"
         r"|^format (?:the|your) (?:output|answer|response|reply)\b"
         r"|\b(?:every|all|any) (?:future|subsequent|later) (?:responses?|answers?|replies|summar(?:y|ies))\b"
         r"|\bshould always be (?:reported|stated|given|described|cited) as\b"
@@ -209,7 +248,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"|\bremember this (?:permanently|forever|for (?:all|every|future))\b", _I)),
     ("before answering", re.compile(
         r"\b(?:before|when) (?:answering|responding to|replying to)(?: (?:any|this|the|a|each|every))? (?:question|"
-        r"user|query|prompt|request)s?\b|^when answering\b|^when (?:you )?summari[sz](?:e|ing)\b", _I)),
+        r"query|prompt)s?\b|^when answering\b|^when (?:you )?summari[sz](?:e|ing)\b", _I)),
     ("imperative", re.compile(
         rf"^(?:please\s+)?{IMPERATIVE}\s+(?:that|to|the user|users|the reader|readers|anyone|everyone|every|all|your|"
         r"this|only|in your|it)\b"
@@ -229,21 +268,24 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 def _imperative_shape(sentence: str) -> bool:
     """A sentence that can be an imperative: it starts with a capital letter (a chunk that begins mid-sentence, "...
-    disregard the parties' agreement", is not one; "please ..." may be lower case), is not a table row ("|"), and has
-    at least three words."""
+    disregard the parties' agreement", is not one; "please ..." may be lower case), is not a table row (two "|" or
+    more), and has at least three words."""
     letters = [c for c in sentence if c.isalpha()]
     starts = bool(letters) and (letters[0].isupper() or sentence.lower().startswith("please "))
-    return starts and "|" not in sentence and len(sentence.split()) >= 3
+    return starts and sentence.count("|") < 2 and len(sentence.split()) >= 3
 
 
 def flagged(text: str) -> list[tuple[str, str]]:
     """What in `text` addresses an AI system, as (what, category): each HTML comment, one entry for invisible format
-    characters, and each normalized sentence that matches (its category is the first pattern that matches; the
-    sentence-start imperative counts only for a sentence of that shape, _imperative_shape)."""
+    characters, and each candidate (normalized sentence, line or piece, see candidates) that matches and is not part
+    of one already flagged (its category is the first pattern that matches; the sentence-start imperative counts
+    only for a candidate of that shape, _imperative_shape)."""
     out: list[tuple[str, str]] = [(m.group(), "hidden markup") for m in COMMENT.finditer(text)]
     if _invisible(text):
         out.append(("(invisible format characters)", "hidden markup"))
-    for sentence in sentences(normalize(COMMENT.sub(" ", text))):
+    for sentence in candidates(text):
+        if any(sentence in seen for seen, _ in out):
+            continue
         for category, pattern in PATTERNS:
             if category == "imperative":
                 hit = (_imperative_shape(sentence) and pattern.search(sentence)) or MID_IMPERATIVE.search(sentence)
@@ -263,9 +305,11 @@ def tampered(text: str) -> list[str]:
 # --------------------------------------------------------------------------------------------- the answer side
 # A web address: a scheme, "www.", a domain with a path, or a reserved test domain. A company's name ("Amazon.com,
 # Inc.", "Booking.com") is not one: FinSight writes those, and links its sources in the citations
-URL = re.compile(r"https?://|\bwww\.\w|\b[\w-]+(?:\.[\w-]+)+/[\w/.-]+|\b[\w-]+\.(?:example|test|invalid|local|"
-                 r"onion)\b", _I)
-EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# (a domain's last label is letters: "$6.11/share" or "1.5/1.0" is a figure). Every run is bounded and anchored, so
+# a long run of word characters costs linear time
+URL = re.compile(r"https?://|\bwww\.\w|(?<![\w.-])[a-z][\w-]{0,62}(?:\.[\w-]{1,63}){0,8}\.[a-z]{2,24}/\S"
+                 r"|(?<![\w.-])[\w-]{1,63}\.(?:example|test|invalid|local|onion)\b", _I)
+EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]{1,64}(?:@|%40)[\w-]+(?:\.[\w-]+)+")
 PAYLOAD = re.compile(r"\b(?:my|your|the) system prompt\b(?!-)|\bmy (?:instructions|prompt|configuration)\b"
                      r"|\b(?:sign|log) in with (?:your|their)\b|\bbank (?:details|account details)\b"
                      r"|\bi am (?:now|no longer)\b|\bi'm (?:now|no longer)\b"

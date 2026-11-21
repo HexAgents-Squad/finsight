@@ -201,15 +201,15 @@ class LangfuseTracer:
         handle: Span = _LangfuseSpan(raw, self.client, info) if raw is not None else _NoopSpan()
         try:
             yield handle
-        except asyncio.CancelledError:                     # the run's time limit, or the caller going away
-            handle.update(level="ERROR", status_message="cancelled")
-            self._close(cm, None, None, None)
+        except BaseException as err:                       # the span is marked failed (cancelled: the time limit)
+            try:
+                status = "cancelled" if isinstance(err, asyncio.CancelledError) else \
+                    mask_pii(f"{type(err).__name__}: {err}")[:MAX_STATUS_CHARS]    # masked first, then cut
+                handle.update(level="ERROR", status_message=status)
+            except Exception:                               # noqa: BLE001 - e.g. an exception whose __str__ fails
+                log.warning("langfuse: could not mark a span failed", exc_info=True)
             raise
-        except BaseException as err:                       # the span still closes, marked failed, text masked
-            handle.update(level="ERROR", status_message=f"{type(err).__name__}: {err}"[:MAX_STATUS_CHARS])
-            self._close(cm, None, None, None)
-            raise
-        else:
+        finally:                                            # always closed, never handed the exception
             self._close(cm, None, None, None)
 
     @staticmethod

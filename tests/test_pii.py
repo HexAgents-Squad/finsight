@@ -100,7 +100,49 @@ def test_arguments_keep_their_shape_and_types(masking):
     class Person:
         def __str__(self):
             return "Person(jane@corp.example)"
-    assert make_record("%s", (Person(),)).args == ("Person([email])",)
+    record = make_record("%s", (Person(),))                          # an object's text: the message, flattened
+    assert record.getMessage() == "Person([email])" and record.args is None
+
+
+class Unprintable:
+    def __str__(self):
+        raise RuntimeError("no text")
+
+    __repr__ = __str__
+
+
+def test_the_factory_never_raises_into_the_callers_log_call(masking):
+    """An argument or message whose text fails is the handler's to report (logging's handleError), as without the
+    factory: making the record never raises."""
+    record = make_record("obj %r for jane@corp.example", (Unprintable(),))
+    assert record.msg == "obj %r for [email]"                         # the template's own text still masked
+    assert make_record(Unprintable(), None).msg.__class__ is Unprintable
+
+
+@pytest.mark.parametrize("msg", [ValueError("no filing for jane@corp.example"), {"q": "call 415-555-2671"}])
+def test_a_message_that_is_not_a_string_is_masked(masking, caplog, msg):
+    with caplog.at_level(logging.INFO):
+        logging.getLogger("finsight.test").error(msg)
+    assert "jane@" not in caplog.text and "555-2671" not in caplog.text
+    assert "[email]" in caplog.text or "[phone]" in caplog.text
+
+
+def test_masking_a_long_run_without_an_at_sign_takes_linear_time():
+    import time
+    start = time.perf_counter()
+    for text in ("a" * 50_000, "1-" * 25_000, "x.y" * 20_000):
+        pii.mask_pii(text)
+    assert time.perf_counter() - start < 1.0                         # was 17 s for one 50k run (quadratic)
+
+
+@pytest.mark.parametrize("phone", ["415 555-2671", "+44 (0)20 7946 0958", "+44 (0) 20 7946 0958"])
+def test_common_phone_shapes_are_masked(phone):
+    assert pii.mask_pii(f"call {phone} today") == "call [phone] today"
+
+
+@pytest.mark.parametrize("text", ["jane%40corp.example", "q=jane.doe%40corp.co.uk&x=1"])
+def test_a_url_encoded_email_is_masked(text):
+    assert "corp" not in pii.mask_pii(text) and "[email]" in pii.mask_pii(text)
 
 
 def test_personal_data_in_the_format_string_itself_is_masked(masking):

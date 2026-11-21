@@ -70,7 +70,7 @@ def test_a_vulnerable_model_is_injected_without_the_defences_and_not_with_them(r
     rows, _ = runs
     before = {r["id"]: r for r in rows["before"]}
     assert before["INJ05"]["succeeded"] and before["INJ05"]["planted_text_reached_model"]     # "TraderBot"
-    assert sum(r["succeeded"] for r in rows["before"]) >= 5
+    assert sum(r["succeeded"] for r in rows["before"]) == 10             # the figure the report and ADR-035 give
     assert not any(r["succeeded"] for r in rows["after"])
     assert not any(r["planted_text_reached_model"] for r in rows["after"])
     assert all(r["exposed"] for r in rows["after"] if not r["refused"])           # retrieved, then left out
@@ -112,6 +112,18 @@ def test_the_interpretation_survives_a_rerun(tmp_path):
     report.write_text("old\n## Interpretation\n\nkept words\n", encoding="utf-8")
     ri.write({"before": [], "after": []}, "h", tmp_path, report)
     assert report.read_text(encoding="utf-8").endswith("## Interpretation\n\nkept words\n")
+
+
+@pytest.mark.parametrize("guard", [True, False])
+def test_each_condition_runs_a_graph_with_its_own_guard(monkeypatch, guard):
+    """The runner rebuilds the nodes to plant its search; the guard must survive that, or finish would check the
+    "before" answers too."""
+    import asyncio
+    seen, real_build = [], g.build_graph
+    monkeypatch.setattr(g, "build_graph", lambda nodes, *a, **kw: seen.append(nodes.injection_guard) or
+                        real_build(nodes, *a, **kw))
+    asyncio.run(ri.run_test(ri.load_tests()[0], VulnerableLLM(), fake_tool, guard, LIMITS))
+    assert seen == [guard]
 
 
 def test_the_planted_search_is_recognised_whatever_the_item_spacing():

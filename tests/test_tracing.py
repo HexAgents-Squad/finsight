@@ -231,6 +231,28 @@ def test_adapter_marks_a_failed_block_and_still_closes_the_span():
     assert client.exits == [None, None]       # closed without the exception: the SDK would record its raw text
 
 
+def test_a_long_error_is_masked_before_it_is_cut():
+    """Found in review (PR #46): cut first, an e-mail across the cut left a partial address in the status."""
+    client = FakeLangfuse()
+    with pytest.raises(ValueError):
+        with trace_run(INFO, "q", tracer=LangfuseTracer(client)):
+            raise ValueError("x" * 480 + " jane.doe@corp.example")
+    status = next(u["status_message"] for u in client.raws[0].updates if "status_message" in u)
+    assert "jane" not in status and "corp" not in status and len(status) <= tr.MAX_STATUS_CHARS
+
+
+def test_a_span_closes_even_when_the_error_text_fails():
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("no text")
+
+    client = FakeLangfuse()
+    with pytest.raises(Unprintable):
+        with trace_run(INFO, "q", tracer=LangfuseTracer(client)):
+            raise Unprintable()
+    assert client.exits == [None]
+
+
 @pytest.mark.parametrize("fail_on", [{"span"}, {"generation"}, {"trace"}])
 def test_a_langfuse_failure_never_changes_the_run(fail_on):
     client = FakeLangfuse(fail_on=fail_on)

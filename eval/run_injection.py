@@ -133,7 +133,7 @@ async def run_test(test: Any, llm: Any, call_tool: Any, guard: bool, limits: Any
     nodes = real_nodes(RecordingLLM(llm, test.planted_text, exposure), planting_tool(test, call_tool, exposure),
                        injection_guard=guard)
     nodes = Nodes(planner=planting_planner(test, nodes.planner), executor=nodes.executor, composer=nodes.composer,
-                  critic=nodes.critic)
+                  critic=nodes.critic, injection_guard=nodes.injection_guard)
     result = await run(test.question, [], graph=build_graph(nodes), limits=limits)
     return score(test, run_record(result, test.question, []), exposure)
 
@@ -234,8 +234,9 @@ def main(argv: list[str] | None = None, *, llm: Any = None, call_tool: Any = Non
             return 2
         runs, stopped, usage = asyncio.run(run_real(tests, settings, args.max_requests,
                                                     limits or Limits.from_settings(settings)))
-        header = (f"Model {settings.LLM_MODEL}; 12 tests, each run twice; reply cache on; live chat requests "
-                  f"{usage.calls}, cache hits {usage.cache_hits}.")
+        header = (f"Model {settings.LLM_MODEL}; 12 tests, each run twice; reply cache on. This run: {usage.calls} live "
+                  f"chat requests, {usage.cache_hits} cache hits (a replay of an earlier run sends none; the live "
+                  f"measurement's own figures are in the Interpretation).")
     else:                                           # a test: the given client and tools, no budget
         runs, stopped = asyncio.run(run_all(tests, llm, call_tool, limits or Limits()))
         header = "12 tests, each run twice."

@@ -38,7 +38,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.contract import COULD_NOT_VERIFY, AnswerContract
 from agent.critic_checks import Violation, with_verification
-from agent.injection import IGNORED_NOTE
+from agent.injection import IGNORED_NOTE, answer_problems
 from agent.state import AgentState, Verdict
 from core import tracing
 from core.tracing import TraceInfo, Tracer, trace_run
@@ -87,11 +87,13 @@ class Limits:
 @dataclass(frozen=True)
 class Nodes:
     """The four nodes. Each takes the state and returns a partial update (never `answer`, `visits` or `limits`;
-    only the critic writes `verdict`)."""
+    only the critic writes `verdict`). `injection_guard` is the run's W2-13 switch for finish: a draft that leaves
+    without the critic's pass is checked for an injection's payload (off only to measure the defences)."""
     planner: Node
     executor: Node
     composer: Node
     critic: Node
+    injection_guard: bool = True
 
 
 @dataclass
@@ -163,12 +165,14 @@ def route_after_critic(state: AgentState) -> str:
 
 
 # ----------------------------------------------------------------------------------------------- finish
-def finish(state: AgentState) -> dict[str, Any]:
+def finish(state: AgentState, *, injection_guard: bool = True) -> dict[str, Any]:
     """The final answer: the draft as the critic judged it (with_verification), or a give-up answer. A draft the
     critic did not see, a failed verdict, a node's stop_reason or a limit broken before the critic passed the draft
     is never verified. A draft the critic passed keeps `verified` when a limit is broken afterwards (only the
-    critic's own tokens can do that), with a note saying so (spec §9: the best verified partial answer). A draft
-    still failing the critic's injection check gives the give-up answer with the spec's note instead (W2-13)."""
+    critic's own tokens can do that), with a note saying so (spec §9: the best verified partial answer).
+    W2-13: a draft that leaves without the critic's pass and shows an injection's payload, flagged by the critic or
+    found here (a limit can end the run before the critic sees a re-composed draft), gives the give-up answer with
+    the spec's note instead, so the payload never reaches the user."""
     stopped, limit = state.get("stop_reason"), limit_reason(state)
     draft, verdict = state.get("draft"), state.get("verdict")
     if draft is None:
@@ -188,6 +192,8 @@ def finish(state: AgentState) -> dict[str, Any]:
     elif verdict is None:
         violations.append(Violation("critic", "the answer was not checked"))
     injected = [v for v in violations if v.rule == "injection"]
+    if injection_guard and not injected:                # the critic did not see this draft, or did not check it
+        injected = [Violation("injection", p) for p in answer_problems(draft.answer)]
     if injected:                # W2-13: a draft showing an injection's payload never reaches the user, even unverified
         answer = give_up_answer(str(injected[0]))
         return {"answer": answer.model_copy(update={"notes": [IGNORED_NOTE, *answer.notes]}),
@@ -218,11 +224,14 @@ async def _traced(name: str, node: Node, state: AgentState) -> dict[str, Any]:
     return update
 
 
-def _traced_finish(state: AgentState) -> dict[str, Any]:
-    with tracing.span(FINISH, input=_node_input(state)) as sp:
-        update = finish(state)
-        sp.update(output={"verified": update["answer"].verified, "stop_reason": update.get("stop_reason")})
-    return update
+def _traced_finish(injection_guard: bool) -> Node:
+    def run(state: AgentState) -> dict[str, Any]:
+        with tracing.span(FINISH, input=_node_input(state)) as sp:
+            update = finish(state, injection_guard=injection_guard)
+            sp.update(output={"verified": update["answer"].verified, "stop_reason": update.get("stop_reason")})
+        return update
+
+    return run
 
 
 def _counted(name: str, node: Node) -> Node:
@@ -322,7 +331,7 @@ def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
     graph = StateGraph(AgentState)
     for name in (PLANNER, EXECUTOR, COMPOSER, CRITIC):
         graph.add_node(name, _counted(name, getattr(nodes, name)))
-    graph.add_node(FINISH, _traced_finish)
+    graph.add_node(FINISH, _traced_finish(nodes.injection_guard))
     graph.add_edge(START, PLANNER)
     graph.add_conditional_edges(PLANNER, route_after_planner, [EXECUTOR, COMPOSER, FINISH])
     graph.add_conditional_edges(EXECUTOR, route_after_executor, [PLANNER, COMPOSER, FINISH])

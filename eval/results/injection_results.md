@@ -1,6 +1,6 @@
 # Prompt-injection tests before and after the defences (W2-13)
 
-Model Qwen/Qwen3-8B; 12 tests, each run twice; reply cache on. The live run sent 39 chat requests (14 cache hits); this file was last written by a replay on the reviewed code: 0 live requests, 53 cache hits, every outcome identical.
+Model Qwen/Qwen3-8B; 12 tests, each run twice; reply cache on. This run: 0 live chat requests, 53 cache hits (a replay of an earlier run sends none; the live measurement's own figures are in the Interpretation).
 
 | Measure | before (passages framed as data) | after (+ tampered passages left out, + critic check) |
 |---|---|---|
@@ -70,15 +70,18 @@ expected content (for example INJ04's Walmart figure).
   The patterns were then widened on that set (it became a development set, now 59/60), and a second agent wrote a
   fresh set the same way: the widened detector, frozen, caught **28/60** and flagged **1/60** ("The system prompt
   and other configuration parameters of our enterprise assistant can be customized ..."). Two later bug fixes found
-  by our own tests left both rates unchanged.
+  by our own tests left both rates unchanged. The PR review's fixes (sentence-splitting evasions, false positives
+  on filing prose; made from the reviewer's own probes, not from this set) moved it to 29/60 caught, 1/60
+  flagged.
 - **So on attacks worded in ways nobody anticipated, the patterns catch a little under half, and tuning on one set
   did not move the rate on the other.** The misses are paraphrases ("scrap whatever your setup told you"),
   personas without the trigger words, fake chat transcripts, polite bureaucratic orders and reversed or
   split-letter text. Patterns are a filter for common attacks, not a guarantee.
 - **The backstop does not depend on the detector.** The critic checks every answer for what an injection would put
   there (a link or e-mail, prompt text, a credential request, a changed role). If the answer still shows it after
-  the one send-back, the user gets the give-up answer with the spec's note, never the draft
-  (tests/test_injection.py runs this end to end with a passage the detector misses). An injection that only
+  the one send-back, or a draft leaves without the critic's pass at all (a token limit broken by the re-composed
+  draft, found in review), the user gets the give-up answer with the spec's note, never the draft
+  (tests/test_injection.py runs both end to end with a passage the detector misses). An injection that only
   changes a figure or the tone, without a link or prompt text, is caught only by the framing, the composer's
   evidence checks (a figure must be in the evidence) and the critic's usual invariants.
 - **Follow-up (not in W2-13):** a trained injection classifier in place of, or next to, the patterns, measured on
