@@ -6,9 +6,11 @@ Design:
     test) the calls are no-ops: no network, no import of `langfuse`.
   * A run is traced only when the caller passes `TraceInfo` to `agent.graph.run`; the tracer is then
     `default_tracer()` (from LANGFUSE_* in .env) or the one the caller gives (tests pass a recording fake).
-  * Everything sent is first passed through `scrub`: e-mail addresses and phone numbers are masked (plan §10) and long
-    texts are cut. A failure inside Langfuse is logged and ignored: tracing never changes an answer.
-  * This module imports nothing from agent/, tools/ or the rest of core/ at module level (core/llm.py and agent/ import it).
+  * Everything sent is first passed through `scrub`: e-mail addresses and phone numbers are masked (plan §10,
+    core/pii.py, shared with log masking since W2-13) and long texts are cut; tags and status messages are masked
+    too. A failure inside Langfuse is logged and ignored: tracing never changes an answer.
+  * This module imports nothing from agent/, tools/ or the rest of core/ at module level except core/pii.py, which
+    imports nothing from FinSight (core/llm.py and agent/ import this module).
 
 All Langfuse SDK calls (Python SDK v3, `langfuse>=3,<4`) are in `LangfuseTracer`; swapping the SDK means editing it only.
 """
@@ -17,42 +19,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import re
 from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import cache
 from typing import Any, Protocol
 
+# The masking lives in core/pii.py (W2-13); its names stay importable from here, as before
+from core.pii import EMAIL, MASK_EMAIL, MASK_PHONE, PHONE, mask_pii  # noqa: F401
+
 log = logging.getLogger(__name__)
 
 MAX_TEXT_CHARS = 4000          # per string sent to Langfuse; the full text stays in the run's own records
 MAX_ITEMS = 50                 # per list
 MAX_DEPTH = 6
-MASK_EMAIL = "[email]"
-MASK_PHONE = "[phone]"
-EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-# Two shapes, chosen so financial text is never masked: a run of years ("2023 2024 2025"), a bare figure
-# (383285000000 or 4155552671), a date (2024-09-28), a range (2023-2025), an accession number (0000320193-24-000123),
-# a negative column "(123) 456 789" or a signed change "+1.25 34.6" all stay.
-#   North American: 415-555-2671, 415.555.2671, (415) 555-2671, an optional leading 1; plain spaces only with a
-#     leading 1 ("1 800 555 1234"), since "391 035 2024" in a table is figures, not a phone number.
-#   International: +country code, then 2 to 4 groups of at least 2 digits joined by a space or a hyphen, at least
-#     10 digits in all (checked in _mask_phone); "+383285000000" or "+3.5 12.25" is a signed figure.
-# Not recognised, on purpose: "415 555 2671" (bare spaces), local numbers without a country code outside North
-# America ("020 7946 0958"), and anything without separators: all too close to columns of figures. Separators are
-# never line breaks.
-PHONE = re.compile(r"(?<![\w.+-])(?:\+\d{1,3}(?:[ -]\d{2,5}){2,4}"
-                   r"|(?:1[ .-]?)?(?:\(\d{3}\) ?\d{3}[ .-]\d{4}|\d{3}-\d{3}-\d{4}|\d{3}\.\d{3}\.\d{4})"
-                   r"|1 \d{3} \d{3} \d{4})(?![\w-]|[.,]\d)")
-MIN_INTERNATIONAL_DIGITS = 10
-
-
-def _mask_phone(match: re.Match[str]) -> str:
-    text = match.group()
-    if text.startswith("+") and sum(c.isdigit() for c in text) < MIN_INTERNATIONAL_DIGITS:
-        return text                                      # "+12 345 678": a signed figure, not a phone number
-    return MASK_PHONE
 
 
 # ----------------------------------------------------------------------------------------------- scrubbing
@@ -61,7 +41,7 @@ def scrub(value: Any, _depth: int = 0) -> Any:
     if value is None or isinstance(value, bool | int | float):
         return value
     if isinstance(value, str):
-        text = PHONE.sub(_mask_phone, EMAIL.sub(MASK_EMAIL, value))
+        text = mask_pii(value)
         if len(text) > MAX_TEXT_CHARS:
             return f"{text[:MAX_TEXT_CHARS]}…[{len(text) - MAX_TEXT_CHARS} more characters]"
         return text
@@ -116,7 +96,9 @@ class TraceInfo:
             raise ValueError("TraceInfo needs a question_id and a run_id")
 
     def all_tags(self, *extra: str) -> list[str]:
-        return list(dict.fromkeys([f"q:{self.question_id}", f"run:{self.run_id}", *self.tags, *extra]))
+        """The trace's tags, masked like everything else sent (a caller's tag could carry an address)."""
+        tags = [f"q:{self.question_id}", f"run:{self.run_id}", *self.tags, *extra]
+        return list(dict.fromkeys(mask_pii(t) for t in tags))
 
 
 class _NoopSpan:
@@ -165,7 +147,7 @@ class _LangfuseSpan:
                status_message: str | None = None, usage: dict[str, int] | None = None) -> None:
         fields = {"output": scrub(output) if output is not None else None,
                   "metadata": scrub(metadata) if metadata else None, "level": level,
-                  "status_message": status_message, "usage_details": usage}
+                  "status_message": mask_pii(status_message) if status_message else None, "usage_details": usage}
         try:
             self.raw.update(**{k: v for k, v in fields.items() if v is not None})
         except Exception:                                   # noqa: BLE001 - tracing never breaks a run

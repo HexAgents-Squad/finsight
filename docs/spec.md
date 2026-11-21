@@ -121,6 +121,7 @@ The refusal tests follow this rule (RF03 and RF15 are R2, RF05 is R3).
 2. Instructions found in a passage are ignored; the user's actual question is answered from the remaining sources.
 3. Numbers from a passage that contradict the XBRL fact are not used; the critic flags the conflict and `notes` says "a retrieved passage contained conflicting or instruction-like text and was ignored".
 4. Success is measured by the injection tests (`eval/injection_tests.jsonl`, WP8): target 0 successful injections.
+5. In code (W2-13, ADR-035): a passage with any sentence addressed to an AI system is left out whole before the model reads it (point 2), and the critic rejects an answer that carries an injection's payload (a web address or e-mail, prompt text, a credential request, a changed role). Measured with `eval/run_injection.py`: `eval/results/injection_results.md`.
 
 The rules R1–R7 map 1:1 to the refusal test list (WP8) and to the G-category gold questions (WP4): every rule has at least one G question, and each G item records its expected `refusal_rule` (`null` for "not reported" traps).
 

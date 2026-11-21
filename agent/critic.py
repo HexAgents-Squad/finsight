@@ -30,6 +30,7 @@ from agent.critic_checks import (
     expected_operations,
     same_number,
 )
+from agent.injection import answer_problems
 from agent.state import AgentState, ToolResult, Verdict
 from ingest.xbrl import load_concept_map
 
@@ -349,8 +350,17 @@ def check_metric_matches_question(question: str, results: list[ToolResult],
     ) for metric in sorted(fetched - wanted)]
 
 
-def critique(state: AgentState) -> Verdict:
-    """Every critic check on the latest draft: contract (W1-07) + units + metric (no invariant 7)."""
+def check_injected_instructions(contract: AnswerContract) -> list[Violation]:
+    """W2-13 (docs/spec.md §6.3): the answer must not show what an injected instruction asks for: a web address or
+    e-mail, the prompt or configuration, a request for credentials, a changed role (agent/injection.answer_problems).
+    Independent of the composer leaving tampered passages out, so it also catches an injection the passage detector
+    missed. A refusal's fixed sentence passes it like any other clean answer."""
+    return [Violation("injection", problem) for problem in answer_problems(contract.answer)]
+
+
+def critique(state: AgentState, *, injection_guard: bool = True) -> Verdict:
+    """Every critic check on the latest draft: contract (W1-07) + units + metric (no invariant 7) + injected
+    instructions (W2-13; off only for the measurement of the defences)."""
     draft = state.get("draft")
     if draft is None:
         return Verdict(violations=[("critic", "no draft to check")])
@@ -359,14 +369,16 @@ def critique(state: AgentState) -> Verdict:
     results = list(state.get("tool_results") or [])
     violations = (check_contract(draft, question_scope(state), question)
                   + check_units_against_tools(draft, results)
-                  + check_metric_matches_question(question, results, contract=draft, history=history))
+                  + check_metric_matches_question(question, results, contract=draft, history=history)
+                  + (check_injected_instructions(draft) if injection_guard else []))
     return Verdict.of(violations)
 
 
-def make_critic() -> Any:
-    """The critic node for agent.graph.Nodes(critic=...)."""
+def make_critic(*, injection_guard: bool = True) -> Any:
+    """The critic node for agent.graph.Nodes(critic=...). `injection_guard=False` only for the W2-13 measurement of
+    the defences (eval/run_injection.py, the "before" run)."""
 
     async def critic(state: AgentState) -> dict[str, Any]:
-        return {"verdict": critique(state)}
+        return {"verdict": critique(state, injection_guard=injection_guard)}
 
     return critic

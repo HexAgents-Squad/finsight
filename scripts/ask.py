@@ -42,6 +42,8 @@ async def ask(question: str, history: list[str], nodes: Any, limits: Any = None,
 def main(argv: list[str] | None = None, *, nodes: Any = None, limits: Any = None) -> int:
     from eval.validate_gold import safe_console
     safe_console()                                  # a Windows console cannot print "·" or "’": replace, not crash
+    from core.pii import install_log_masking
+    install_log_masking()                           # W2-13: a question's e-mail or phone number never reaches a log
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("question")
     parser.add_argument("--history", action="append", default=[], metavar="QUESTION",
