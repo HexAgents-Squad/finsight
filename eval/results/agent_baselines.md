@@ -63,9 +63,9 @@
 | Label | M1_qwen3-8b_rag_think-off_b0-v1 | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|---|---|---|---|
 | unit_confusion | 0 | 0 | 2 | 2 | 0 |
-| arithmetic_slip | 10 | 10 | 5 | 7 | 5 |
+| arithmetic_slip | 10 | 10 | 5 | 7 | 0 |
 | invented_number | 8 | 11 | 2 | 9 | 0 |
-| wrong_line_item | 7 | 5 | 14 | 7 | 1 |
+| wrong_line_item | 7 | 5 | 14 | 7 | 6 |
 | ignored_not_reported | 1 | 0 | 0 | 2 | 0 |
 | wrong_company | 5 | 5 | 2 | 2 | 0 |
 | over_refusal | 10 | 10 | 3 | 1 | 1 |
@@ -130,12 +130,16 @@
 ## Interpretation
 
 W2-11, 21 Nov 2026 (ADR-034). A1 is the agent graph (planner, executor, composer, critic; ADR-024 to ADR-031) on
-the same 80 gold questions and 22 refusal tests as B0 and S1-S3, run once by `eval/run_agent.py` on the shared
-endpoint (Qwen3-8B, thinking off, temperature 0): 187 live requests, no cache hits, no errors, no question stopped
-by a limit. Its prompts are the planner and composer prompts tuned on the development set and pinned by sha256
-before this run; the gold set was not read by any of them. Unlike B0 and S1-S3 it had no context pack: it chose its
-own tools (XBRL facts, the calculator, the filing search) and saw only each question and, for a follow-up, the
-earlier questions, never an earlier answer. Same scorer, same tolerances, paired on the same questions.
+the same 80 gold questions and 22 refusal tests as B0 and S1-S3. It was run once by `eval/run_agent.py` on the
+shared endpoint (Qwen3-8B, thinking off, temperature 0): 187 live requests, no errors, no question stopped by a
+limit. After the PR review fixed how runs are recorded and scored, the runs file was re-derived from the reply cache
+(`--replay-of`, 0 requests). Every answer and tool call is identical; the timings and cost above are the live run's,
+and the meta's `replay` says when and with which code.
+
+Its prompts are the planner and composer prompts tuned on the development set and pinned by sha256 before this
+run; the gold set was not read by any of them. Unlike B0 and S1-S3 it had no context pack. It chose its own tools
+(XBRL facts, the calculator, the filing search) and saw only each question and, for a follow-up, the earlier
+questions, never an earlier answer. Same scorer, same tolerances, paired on the same questions.
 
 **Decided answers.**
 - Short numeric: 42/48 against B0's 16/48 (29 right only with A1, 3 only with B0; sign test p ≈ 3×10⁻⁶).
@@ -147,44 +151,65 @@ earlier questions, never an earlier answer. Same scorer, same tolerances, paired
   the 12 summaries.
 
 **Why.** Table 8 says where the gain comes from. On 40 of the 46 numeric questions with gold dollar figures, the
-agent's own tools returned every gold figure, and it got all 40 right. On the other 6 it got none. Its arithmetic
-runs in the calculator, and its figures come from XBRL facts: no unsupported number in 81 answers, and every
-citation names a source a tool returned. B0's figures had to be read off pack passages, and 28 of these 46 packs
-lacked a gold figure. The bottleneck is now which figure the agent fetches, not how it reads or computes it.
+agent's own tools returned every gold figure (an XBRL fact is in the gold answers' millions), and it got all 40
+right. On the other 6 it got none. B0's figures had to be read off pack passages, and 28 of these 46 packs lacked a
+gold figure. The bottleneck is now which figure the agent fetches, not how it reads or computes it.
 
-**The 9 wrong answers.** Six of them are one failure, silent metric substitution: the facts tool has no metric for
-the line item asked, and the planner fetched a nearby one, which the answer then names as the one asked.
-- A06: total assets for total deposits.
-- B04: operating cash flow (−42,012) for noninterest expense, giving "23.7%".
-- B15: total assets and liabilities for current assets and liabilities.
-- B14: company-wide operating income for the AWS segment's.
-- C08: total revenue, with membership fees, for net sales (8.2% against 8.1%).
-- B08: answered "not reported separately" but still carried a value.
+**Grounding, and how it is measured.** An agent run's evidence is what its tools returned:
+- passages and fetched figures (facts and period rows);
+- a calculator result only when every input of that calculation is among them, so an invented input passed through
+  the calculator is not "supported" (B0's derived numbers never had that benefit).
+
+On those terms, no non-refused answer has an unsupported number (0/81), and every citation names a source a tool
+returned. The check asks whether a figure is grounded in what the tools returned, not whether it is the right line
+item. A06, B04, B14, B15 and C08 below pass it with grounded figures of the wrong metric. Since the calculator's
+arithmetic is exact, a wrong calculated value is labelled a wrong line item (fetched inputs) or an invented number
+(otherwise), never an arithmetic slip; B0's labels are unchanged.
+
+**The 9 wrong answers.** Six come from one gap: the facts tool has no metric for the line item asked.
+- **Substituted and named as the line item asked** (four): the planner fetched a nearby metric, and the answer
+  presents the result as the one asked.
+  - B04: operating cash flow (−42,012) for noninterest expense, giving "noninterest expense … 23.7%".
+  - B15: total assets and liabilities for current ones, giving "current ratio … 1.69".
+  - B14: company-wide operating income for the AWS segment's.
+  - C08: total revenue, which includes membership fees, for net sales (8.2% against 8.1%).
+- **Substituted openly** (one): A06 was asked for total deposits and answered with total assets, naming them.
+- **Missed** (one): B08 answered that UnitedHealth's medical cost ratio is not reported separately; the filing
+  reports it (85.5%).
 
 The other three are refusals:
 - RF14: a partial refusal refused whole.
 - RF10 and RF13: the right decision under the wrong rule (R2 for R6, R5 for R7).
 
-The critic verified every answer: 71 of the 80 verified decided answers are right, so it passed 9 wrong ones. It
-never sent a draft back, because the composer already fixes contract problems itself (node notes on E01 and E05).
-No current check compares the metric a value came from with the line item the answer names.
+**The critic.** It verified every answer: 71 of the 80 verified decided answers are right, so it passed 9 wrong
+ones. It never sent a draft back, because the composer already fixes contract problems itself (node notes on E01,
+E05 and E06). It has a metric check, `check_metric_matches_question` (agent/critic.py), but that check compares
+the metrics the question names (`named_metrics`) with those fetched, and its vocabulary misses these line items:
+- it finds no metric at all in A06 (deposits), B14 (a segment) or B15 (current assets and liabilities);
+- it reads B04's and C08's questions as plain revenue, which is the metric fetched;
+- its list of line items that must come from a search rather than an XBRL fact (`SEARCH_ONLY`) has three entries,
+  all stock-based compensation.
 
 **Summaries.** The LLM judge gives A1's 12 summaries 3 twos, 9 ones and no zero, against 8 or 9 twos for every
-other run. Its reasons are mostly "adds factors the reference does not mention" or "misses drivers the reference
-names". A1's summaries are longer, and rest on passages it found itself rather than the gold answer's section. The
-judge is a second opinion that marks additions down; the graders decide in the `--pending` round. The handout
-shows them what the agent retrieved.
+other run. A1's summaries are longer and rest on passages it found itself, rather than on the gold answer's
+section. The judge's reasons are of two kinds:
+- additions: factors the reference does not mention;
+- substance: some answers miss the drivers the reference names, e.g. E01 explains operating income rather than
+  the revenue growth asked about.
+
+The graders decide in the `--pending` round. The handout shows them what the agent retrieved, with each figure's
+company, year and unit.
 
 **Cost.** 1.8 model calls and 3.0k tokens per question (B0: 1 call, 3.5k), 5.0 s median and 12.4 s at p95 (the
 limit is 60 s). The facts tool was called 102 times, the calculator 34, the search 30; 4 of 166 calls returned an
-error, which the agent handled.
+error (`not_reported`, on G08-G10 and RF21), which the agent handled. The request counts are chat requests; the 30
+searches also embedded their queries through the search tool's own embedder, not counted here.
 
 **Limits of this comparison.**
 - One run at temperature 0.
 - B0 and S1-S3 were given oracle-filtered packs (W1-12), and A1 found its own sources, so the comparison is between
   systems, not prompts.
-- The hallucination check asks whether a figure is grounded in what the tools returned, not whether it is the
-  right line item, which is exactly how A06, B04 and B15 pass it.
+- Grounded is not correct: see the check above.
 
 ### Week 3 ablations (plan)
 
@@ -198,13 +223,17 @@ the calls it changes.
 
 | Run | Switched off | How | What it measures | Expected from A1 | New requests (est.) |
 |---|---|---|---|---|---|
-| A2 | the calculator | `calculate` removed from the executor's tools and the planner's tool list; the composer computes from the fetched values | what the tool adds over in-prompt arithmetic (S2's best was 4/12 period comparisons) | ratio 11/15 and period comparison 11/12 fall towards S2/S3 levels; facts unchanged | ~140 (every planner call, plus the composer on the 34 calculations) |
-| A3 | the critic | the critic passes every draft (verified = false) | what the critic catches | no answer changes: it rejected no A1 draft; only the verified flag | ~0 (every call replays) |
+| A2 | the calculator | `calculate` removed from the executor's tools and the planner's tool list | whether the agent can still answer a derived question: the composer drops any figure no evidence prints (node notes on B03, B04, B06, B13), so it cannot compute one itself | most of the 26 ratio and period-comparison answers that used the calculator (of 27) lose their value ("no value"), unless the composer's guard is relaxed too, which would be a second change and its own run | ~140 (every planner call, plus the composer on the 34 calculations) |
+| A3 | the critic | a new path in the graph: the composer's first draft becomes the answer, with no check (verified stays false; today a passing verdict sets it, a failing one sends the draft back once) | what the critic changes | no answer changes: it rejected no A1 draft | ~0 (planner and composer calls replay) |
 | A4 | statements first | `search_filings` without `StatementFirstIndex` (plain hybrid, ADR-017) | what the Item 8 preference adds | changes only on the 30 questions that searched, mostly summaries and traps | ~30 (composers after a search) |
 
-A3's expected null result is itself the finding: on these questions the critic adds no correction. So Week 3
-should strengthen it before ablating it, by checking that each value's metric is the line item the answer names,
-which would have flagged A06, B04, B14, B15 and C08. The metric gaps behind those (deposits, current assets and
-liabilities, segment figures, net sales separate from total revenue) are a tools fix. Order:
+A3's expected null result is itself the finding: on these questions the critic corrects nothing. So Week 3 should
+widen the vocabulary the existing check reads, not add a new check:
+- line items for `named_metrics`: deposits, noninterest expense, current assets and liabilities, segment figures,
+  and net sales as distinct from total revenue;
+- the same items in `SEARCH_ONLY`, where no XBRL metric covers them, so a substituted fact is rejected and the
+  draft goes back to search.
+
+The facts tool gaps behind those answers are a tools fix. Order:
 1. The ablations, on the frozen A1 configuration, so each switch is measured against the same baseline.
-2. The critic check and the metric additions, as a new version (A5) on the development set first.
+2. The vocabulary and metric additions, as a new version (A5) tuned on the development set first.

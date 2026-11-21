@@ -129,7 +129,7 @@ The agent reads the context packs for the questions and their earlier turns only
 follow-up gets its earlier questions (never an answer) as history, the way its memory works. Each record keeps
 every tool call with what it returned, which the scorer uses as the run's evidence (its numbers must come from
 there or the gold answer) and its valid citations (a source a tool returned). The answer is mapped to the B0
-fields by `run_agent.b0_answer` (value: the last calculation's result, else the one value). The prompts it runs are
+fields by `run_agent.b0_answer` (value: the last calculation's result, else the one value, only when the answer states it and does not say the figure is not reported); a calculation's result counts as evidence only when its inputs are fetched figures. The prompts it runs are
 the pinned planner and composer prompts (`tests/test_planner.py`, `tests/test_composer.py`). The new rows of the
 grading sheet are graded in a `--pending` round (`GRADING.md`).
 

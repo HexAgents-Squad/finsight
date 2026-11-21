@@ -157,7 +157,9 @@ def test_a_rounded_statement_of_the_value_counts_as_stating_it():
 
 
 def test_several_values_without_a_calculation_give_no_value_and_two_companies_no_company():
-    a = ra.b0_answer(record(values=[value(1.0, ticker="PFE"), value(2.0, ticker="JNJ")]))
+    """Even when the answer states both figures: which one is "the" value is not the mapping's to decide."""
+    a = ra.b0_answer(record(answer="Pfizer's net income was $2,119 million and Johnson & Johnson's $35,153 million.",
+                            values=[value(2119.0, ticker="PFE"), value(35153.0, ticker="JNJ")]))
     assert (a.value, a.unit, a.company, a.fiscal_year) == (None, None, None, 2024)
 
 
@@ -203,7 +205,7 @@ def test_a_record_keeps_the_tool_calls_their_evidence_and_the_cost():
 def test_a_question_answered_from_the_cache_is_marked_cached():
     rec = ra.run_record(ra.Item("A01", "Q?", ()), ra.RUN_ID,
                         agent_run(AnswerContract(answer="x", verified=True, refused=False)), ra.Counts(cache_hits=2))
-    assert rec.cached and rec.agent.live_requests == 0 and rec.agent.llm_calls == 2
+    assert rec.cached and rec.agent.live_requests == 0 and rec.agent.llm_calls == 2 and rec.agent.cache_hits == 2
 
 
 def test_counts_charge_each_question_its_own_share():
