@@ -295,20 +295,23 @@ def display_answer(rec: RunRecord) -> str:
 
 
 def input_supported(x: object, refs: list[Figure]) -> bool:
-    """Whether a calculator input is a figure the run fetched (at the precision it was given, either as a plain
-    figure or as a percentage)."""
+    """Whether a calculator input is a figure the run fetched, at the fetched figure's own precision (an input has
+    no tolerance of its own, so an invented round 14000 is not "supported" by a fetched 14276), as a plain figure
+    or as a percentage."""
     if not isinstance(x, (int, float)) or isinstance(x, bool):
         return False
-    value, tolerance = abs(float(x)), 0.5 * printed_step(x)
-    return any(supported(Figure(value, tolerance, percent, str(x)), refs) for percent in (False, True))
+    return any(supported(Figure(abs(float(x)), 0.0, percent, str(x)), refs) for percent in (False, True))
 
 
-def agent_texts(rec: RunRecord) -> list[str]:
+def agent_texts(rec: RunRecord, calculations: bool = True) -> list[str]:
     """What an agent run's tools returned (W2-11), in call order: its passages and fetched figures, and a
     calculation's result only when every input of that calculation is among them (or is an earlier such result).
     The planner chooses a calculation's inputs, so counting every result would make any derived number "supported",
-    an invented input included; B0's derived numbers never had that benefit."""
+    an invented input included. `calculations=False` counts no calculation result at all: B0's rule, under which a
+    derived number is supported only by the gold answer, kept as a second count so the two runs compare fairly."""
     fetched = [e.text for call in rec.tool_calls or [] if call.tool != "calculate" for e in call.evidence]
+    if not calculations:
+        return fetched
     refs = [f for t in fetched for f in figures(t)]
     for call in rec.tool_calls or []:
         if call.tool == "calculate" and call.evidence and \
@@ -372,6 +375,10 @@ def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str
     named = named_field or companies_named(a.answer, matchers)
     checks = out["checks"]
     checks["unsupported_numbers"] = sorted({f.text for f in shown if not a.refused and not supported(f, refs)})
+    if agent:                                          # the same check under B0's rule: no calculation result counts
+        b0_refs = evidence(q, pack, rag, agent_texts(rec, calculations=False))
+        checks["unsupported_numbers_b0_rule"] = sorted({f.text for f in shown
+                                                        if not a.refused and not supported(f, b0_refs)})
     checks["bad_citations"] = sorted({c.strip().strip("[]").strip().upper() for c in a.citations} - pids)
     checks["wrong_year"] = bool(q.fiscal_years and a.fiscal_year is not None and a.fiscal_year not in q.fiscal_years)
     checks["wrong_company"] = bool(q.companies and named and not named & set(q.companies))
@@ -446,7 +453,8 @@ def entity_outcome(q: Question, a: B0Answer, in_field: set[str], in_answer: set[
 def numeric_outcome(q: Question, a: B0Answer, refs: list[Figure], out: dict, exact_arithmetic: bool = False) -> dict:
     """`exact_arithmetic`: the value is an agent calculator's result (W2-11), whose arithmetic is exact, so a wrong
     derived value came from its inputs: a wrong line item when they were fetched figures, an invented number when
-    they were not (never an arithmetic slip)."""
+    they were not. A sign flip keeps its own label and reason (an arithmetic slip, "sign flipped": for the
+    calculator, inputs in the wrong order), as do unit confusion, the wrong year and the wrong company."""
     if a.value is None:
         label = "wrong_line_item" if NOT_REPORTED_RE.search(a.answer) else "malformed_output"
         out.update(reason="no value", suggested_label=label)
@@ -522,7 +530,8 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
         answer = display_answer(rec)
         s["gold_figures_in_pack"] = (
             gold_figures_in_pack(questions[rec.id], packs.get(rec.id, {})) if meta.context == "rag"
-            else gold_figures_in_pack(questions[rec.id], {}, agent_texts(rec)) if meta.context == "agent" else None)
+            else gold_figures_in_pack(questions[rec.id], {}, agent_texts(rec))
+            if meta.context == "agent" and rec.tool_calls is not None else None)     # an errored record: excluded
         s.update(run_id=meta.run_id, refused=bool(rec.parsed and rec.parsed.refused), json_valid=rec.json_valid,
                  retries=rec.retries, prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
                  latency_s=rec.latency_s, cached=rec.cached, error=rec.error is not None,
@@ -727,7 +736,13 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
             rate([s for s in sc if s["category"] == "refusal_test" and s["answer_type"] == kind]) for _, sc in runs)
             + " |")
     out += table("### 3. Hallucination and grounding checks (answers with a reply, not refused)", "Check", names)
-    for label, test in (("unsupported numbers", lambda s: bool(s["checks"].get("unsupported_numbers"))),
+    # With an agent run present, the count also under B0's rule (no calculation result is evidence), the like-for-
+    # like comparison: an agent's derived number counts as supported when its inputs were fetched figures
+    b0_rule = [("unsupported numbers, no calculation result counted as evidence (B0's rule; the same count for a "
+                "pack run)", lambda s: bool(s["checks"].get("unsupported_numbers_b0_rule",
+                                                             s["checks"].get("unsupported_numbers"))))] \
+        if any(m.context == "agent" for m, _ in runs) else []
+    for label, test in (("unsupported numbers", lambda s: bool(s["checks"].get("unsupported_numbers"))), *b0_rule,
                         ("wrong fiscal year", lambda s: s["checks"].get("wrong_year")),
                         ("wrong company", lambda s: s["checks"].get("wrong_company")),
                         ("cited a passage it was not given (closed-book: any citation)",

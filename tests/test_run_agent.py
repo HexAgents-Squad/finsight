@@ -103,7 +103,8 @@ def test_an_error_returned_nothing():
 
 
 @pytest.mark.parametrize(("value", "text"), [(60458000000.0, "60458000000"), (0.00001, "0.00001"), (22.1, "22.1"),
-                                             (7, "7"), (0.0, "0")])
+                                             (7, "7"), (0.0, "0"), (1e-7, "0.0000001"),
+                                             (1234.56789012, "1234.56789012"), (-42012.0, "-42012")])
 def test_figure_text_has_no_exponent_or_trailing_zeros(value, text):
     assert ra.figure_text(value) == text
 
@@ -149,6 +150,19 @@ def test_a_not_reported_answer_has_no_value_even_when_it_offers_a_related_figure
     assert a.value is None and a.company == "AMZN"
     s = sa.check(QUESTIONS["G08"], agent_record("G08", a, []), {}, False, MATCHERS)
     assert s["correct"] is True                                       # the trap is answered, not given a value
+
+
+def test_an_unstated_calculation_falls_back_to_the_one_stated_value():
+    a = ra.b0_answer(record(answer="Costco's net sales were $275,235 million in fiscal 2025.",
+                            values=[value(275235.0, ticker="COST", year=2025)],
+                            calculations=[{"operation": "growth", "result": 8.2, "unit": "%"}]))
+    assert (a.value, a.unit) == (275235.0, "USD millions")
+
+
+def test_a_not_reported_aside_after_the_answer_keeps_its_value():
+    a = ra.b0_answer(record(answer="Apple's total net sales were $391,035 million in fiscal 2024; the Services split "
+                                   "is not reported separately.", values=[value(391035.0)]))
+    assert a.value == 391035.0
 
 
 def test_a_rounded_statement_of_the_value_counts_as_stating_it():
@@ -303,6 +317,40 @@ def test_a_replay_keeps_the_earlier_runs_timings_cost_and_dates(tmp_path):
     assert meta["replay"]["requests"] == {"live": 0, "cache_hits": 0, "http_retries": 0}
 
 
+@pytest.mark.parametrize(("meta_change", "argv"), [
+    ({}, ["--run-id", "A3_qwen3-8b_agent_think-off_a3-v1"]),          # an ablation must not borrow A1's timings
+    ({"planner_prompt_sha256": "other"}, []),
+    ({"limits": {"max_steps": 5, "max_tokens": 12_000, "timeout_s": 10}}, []),
+    ({"context_pack_sha256": {"context_pack_gold.jsonl": "other"}}, []),
+])
+def test_a_replay_of_another_run_is_refused(tmp_path, capsys, meta_change, argv):
+    previous = earlier_run(tmp_path)
+    meta_path = previous.with_name(previous.stem + ".meta.json")
+    meta_path.write_text(json.dumps(json.loads(meta_path.read_text(encoding="utf-8")) | meta_change), encoding="utf-8")
+    out = tmp_path / "replay"
+    assert run_cli(out, "--replay-of", str(previous), *argv) == 2 and not out.exists()
+    assert "another run" in capsys.readouterr().err
+
+
+def test_a_replay_goes_live_at_most_once_and_then_writes_nothing(tmp_path, monkeypatch, capsys):
+    """A cache miss (a prompt changed) must not spend the shared key's budget: the budget is 1, and a replay that
+    sent anything is refused."""
+    previous = earlier_run(tmp_path)
+    budgets = []
+
+    async def fake_run_real(items, settings_, max_requests, limits, run_id):
+        budgets.append(max_requests)
+        records, _ = await ra.run_items(items, stub_nodes(), limits, run_id)
+        return records, None, SimpleNamespace(calls=1, cache_hits=186, http_retries=0)
+
+    monkeypatch.setattr(ra, "run_real", fake_run_real)
+    out = tmp_path / "replay"
+    code = ra.main(["--out-dir", str(out), "--replay-of", str(previous), "--max-requests", "400"],
+                   settings=settings(), limits=LIMITS)
+    assert code == 2 and budgets == [1] and not out.exists()
+    assert "not in the cache (1 live request(s))" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("change", [
     lambda r: r.update(raw_reply=json.dumps(json.loads(r["raw_reply"]) | {"answer": "another answer"})),
     lambda r: r.update(tool_calls=[{"tool": "calculate", "arguments": {}, "evidence": []}]),
@@ -370,6 +418,40 @@ def test_a_calculation_is_evidence_only_when_its_inputs_were_fetched():
                                                         calc_call([30.0, 20.0], 50.0)]))
     assert chained == ["10", "20", "30", "50%"]                       # an earlier result may feed a later one
     assert sa.agent_texts(agent_record("C01", None, [calc_call([], 5.0)])) == []         # no inputs: nothing
+
+
+def test_a_round_invented_input_is_not_supported_by_a_nearby_fetched_figure():
+    assert sa.agent_texts(agent_record("C01", None, [fact_call(8516.0, 14276.0), calc_call([8516.0, 14000.0], 64.4)])) \
+        == ["8516", "14276"]
+    assert sa.input_supported(14276.0, [f for f in sa.figures("14276")]) and not sa.input_supported(7, sa.figures("14276"))
+
+
+def test_under_b0s_rule_no_calculation_result_is_evidence():
+    q = QUESTIONS["C01"]
+    calls = [fact_call(8516.0, 14276.0), calc_call([8516.0, 14276.0], 67.6)]
+    assert sa.agent_texts(agent_record("C01", None, calls), calculations=False) == ["8516", "14276"]
+    a = B0Answer(answer="It grew 66.0%.", value=66.0, unit="%", refused=False)
+    s = score("C01", a, calls + [calc_call([8516.0, 14276.0], 66.0)])
+    assert s["checks"]["unsupported_numbers"] == [] and "66.0%" in s["checks"]["unsupported_numbers_b0_rule"]
+    assert "unsupported_numbers_b0_rule" not in sa.check(q, agent_record("C01", a, [], tool_calls=None, agent=None),
+                                                         {}, False, MATCHERS)["checks"]
+
+
+def test_a_sign_flipped_calculation_keeps_its_own_label():
+    calc = [{"operation": "growth", "inputs": [14276.0, 8516.0], "result": -40.3, "unit": "%"}]
+    q = QUESTIONS["C01"]
+    a = B0Answer(answer=f"It fell {abs(q.gold_value)}%.", value=-q.gold_value, unit="%", refused=False)
+    s = score("C01", a, [fact_call(8516.0, 14276.0)], calculations=calc)
+    assert s["suggested_label"] == "arithmetic_slip" and "sign flipped" in s["reason"]
+
+
+def test_an_errored_agent_record_is_left_out_of_table_8():
+    meta = RunMeta(run_id=ra.RUN_ID, model="m", endpoint="hosted", context="agent", thinking=False, temperature=0.0,
+                   max_tokens=1, prompt_version="a", context_pack="p", context_pack_sha256={})
+    err = RunRecord(id="A01", run_id=ra.RUN_ID, raw_reply=None, parsed=None, json_valid=False, retries=0,
+                    prompt_tokens=0, completion_tokens=0, latency_s=0.0, cached=False, error="RuntimeError: x")
+    [s] = sa.score_run(meta, [err], {"A01": QUESTIONS["A01"]}, GOLD_PACKS, MATCHERS)
+    assert s["gold_figures_in_pack"] is None and s["suggested_label"] == "malformed_output"
 
 
 def test_a_derived_number_from_an_invented_input_is_unsupported():
@@ -459,6 +541,8 @@ def test_the_agent_report_pairs_the_agent_with_b0_and_adds_its_own_checks(tmp_pa
     assert f"| Answer type | {B0} | {ra.RUN_ID} |" in report
     assert f"### 10. Paired with {B0} (B0)" in report and "### 11. The agent's own checks and cost" in report
     assert "| verified by its critic | 0/102 |" in report                    # the stubs never verify
+    assert "no calculation result counted as evidence (B0's rule" in report  # the like-for-like grounding row
+    assert "B0's rule" not in (out / sa.REPORT_NAME).read_text(encoding="utf-8")      # not in the M-run report
     assert "| tool calls per question (mean); questions with none | 0.0; 102 |" in report
     keyed = {line.split(",")[0]: line.split(",")[1]
              for line in (out / "grading" / sa.KEY_NAME).read_text(encoding="utf-8").splitlines()[1:]}

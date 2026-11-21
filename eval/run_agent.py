@@ -33,6 +33,7 @@ import sys
 import traceback
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -78,10 +79,12 @@ def load_items(pack_files: list[Path]) -> list[Item]:
 
 # --------------------------------------------------------------------------------------------- evidence
 def figure_text(value: Any) -> str:
-    """A number as a filing prints it: no exponent, no trailing zeros (60458000000, 0.00001, 22.1)."""
+    """A number as a filing prints it, every digit kept: no exponent, no trailing zeros (60458000000, 0.0000001,
+    1234.56789012, 22.1). A float is read through its shortest repr, so nothing is rounded away."""
     if isinstance(value, int):
         return str(value)
-    return format(value, "f").rstrip("0").rstrip(".") or "0"
+    text = format(Decimal(repr(value)), "f")
+    return (text.rstrip("0").rstrip(".") if "." in text else text) or "0"
 
 
 def is_number(x: Any) -> bool:
@@ -165,34 +168,35 @@ def only(items: list[Any]) -> Any:
 def b0_answer(record: dict[str, Any]) -> B0Answer:
     """The agent's answer (agent/transcript.run_record) in the B0 fields the scorer reads, by a fixed rule:
     - answer, refused, refusal_rule: as the agent gave them;
-    - value and unit: the last calculation's result (a ratio, a change) when there is a calculation, else the one
-      value when the answer has exactly one, else none (several values without a calculation: the scorer then says
-      "no value" and a grader can overturn it on the label row); and only when the answer's text states that
-      figure and does not say the figure asked is not reported (B0's model chose whether to fill `value`; the
-      mapping must not give an answer a figure it does not state, nor turn the related figure a "not reported"
-      answer offers, "it reports current liabilities of $179,431 million", into its answer);
+    - value and unit: the first of these the answer's text states: the last calculation's result (a ratio, a
+      change), then the one value when the answer has exactly one; else none (several values without a stated
+      calculation: the scorer then says "no value" and a grader can overturn it on the label row). B0's model chose
+      whether to fill `value`; the mapping must not give an answer a figure it does not state;
+    - no value at all when the answer opens (its first clause) by saying the figure asked is not reported: the figure it then offers
+      ("it reports current liabilities of $179,431 million") is not its answer. A "not reported" aside after a
+      stated answer ("...; the Services split is not reported separately") keeps the value;
     - company: the one ticker of the values (else of the citations), when they name exactly one;
     - fiscal_year: the one fiscal year of the values (else of the citations), when they name exactly one;
     - citations: each source's name (citation_id)."""
     from core.figures import figures
     from eval.score_answers import NOT_REPORTED_RE, supported, value_figure
     calcs, values, cites = record["calculations"], record["values"], record["citations"]
-    value = unit = None
-    if calcs:
-        value, unit = calcs[-1].get("result"), calcs[-1].get("unit")
-    elif len(values) == 1:
-        value, unit = values[0].get("value"), values[0].get("unit")
-    if not is_number(value):
-        value = unit = None
+    candidates = ([(calcs[-1].get("result"), calcs[-1].get("unit"))] if calcs else []) + \
+        ([(values[0].get("value"), values[0].get("unit"))] if len(values) == 1 else [])
     source = values or cites
-    answer = B0Answer(answer=record["answer"], value=value, unit=unit if isinstance(unit, str) else None,
-                      company=only([x.get("ticker") for x in source if x.get("ticker")]),
+    answer = B0Answer(answer=record["answer"], company=only([x.get("ticker") for x in source if x.get("ticker")]),
                       fiscal_year=only([x.get("fiscal_year") for x in source if isinstance(x.get("fiscal_year"), int)]),
                       citations=[citation_id(c) for c in cites],
                       refused=bool(record["refused"]), refusal_rule=record["refusal_rule"])
-    if answer.value is not None and (NOT_REPORTED_RE.search(answer.answer)
-                                     or not supported(value_figure(answer), figures(answer.answer))):
-        answer = answer.model_copy(update={"value": None, "unit": None})
+    opening = re.split(r"(?<=[.!?;])\s+", answer.answer.strip(), maxsplit=1)[0]      # up to the first ; or sentence end
+    if NOT_REPORTED_RE.search(opening):
+        return answer
+    stated = figures(answer.answer)
+    for value, unit in candidates:
+        if is_number(value):
+            candidate = answer.model_copy(update={"value": value, "unit": unit if isinstance(unit, str) else None})
+            if supported(value_figure(candidate), stated):
+                return candidate
     return answer
 
 
@@ -297,19 +301,30 @@ def run_meta(run_id: str, pack_files: list[Path], settings: Any, limits: Any, st
         context_pack_sha256={p.name: sha256(p) for p in pack_files},
         planner_prompt_sha256=planner.PROMPT_SHA256, composer_prompt_sha256=composer.PROMPT_SHA256,
         limits={"max_steps": limits.max_steps, "max_tokens": limits.max_tokens, "timeout_s": limits.timeout_s},
-        retrieval={"embed_model": settings.EMBED_MODEL, "rerank": settings.RETRIEVAL_RERANK},
+        # search_filings' fixed stack (ADR-017): C3 chunks, hybrid RRF, statements first (no switch yet; A4 adds one)
+        retrieval={"embed_model": settings.EMBED_MODEL, "rerank": settings.RETRIEVAL_RERANK, "chunks": "C3",
+                   "fusion": "hybrid RRF", "statements_first": True},
         reply_cache=settings.LLM_CACHE_DIR is not None, questions=questions, requests=totals,
         git_commit=git_commit(), started=started, finished=datetime.now(UTC).isoformat(timespec="seconds"))
 
 
-def carry_over(records: list[RunRecord], previous: Path) -> tuple[list[RunRecord], dict[str, Any]]:
+REPLAY_SAME = ("run_id", "model", "questions", "context_pack_sha256", "planner_prompt_sha256",
+               "composer_prompt_sha256", "limits")      # what makes two files the same run
+
+
+def carry_over(records: list[RunRecord], previous: Path, meta: RunMeta) -> tuple[list[RunRecord], dict[str, Any]]:
     """`records`, re-derived from the reply cache after a runner fix (`--replay-of`), with the earlier run's timings
     and cost: a replay's cache hits take no time and send nothing, but the answers are the earlier run's, so its
-    seconds, requests and tokens are the ones to report. Refused (ValueError) unless every question has the same
-    answer and the same tool calls as in `previous` (that runs file, read as JSON: it may predate fields added since).
+    seconds, requests and tokens are the ones to report. Refused (ValueError) unless `previous` (a runs file, read as
+    JSON: it may predate fields added since) is the same run (REPLAY_SAME: run id, model, questions, packs, prompts,
+    limits; so an ablation can never borrow A1's timings) and every question has the same answer and tool calls.
     Returns the records and the earlier meta."""
     prev = {r["id"]: r for r in map(json.loads, previous.read_text(encoding="utf-8").splitlines()) if r}
     prev_meta = json.loads(previous.with_name(previous.stem + ".meta.json").read_text(encoding="utf-8"))
+    now = json.loads(meta.model_dump_json())
+    differ = [k for k in REPLAY_SAME if prev_meta.get(k) != now.get(k)]
+    if differ:
+        raise ValueError(f"{previous.name} is another run ({', '.join(differ)} differ); not a replay")
     if set(prev) != {r.id for r in records}:
         raise ValueError(f"{previous.name} has other questions")
     out = []
@@ -369,13 +384,19 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
         return 2
     limits = limits or Limits.from_settings(settings)
     started = datetime.now(UTC).isoformat(timespec="seconds")
+    # A replay must come from the reply cache: one live request at most (the first miss), and then nothing is written
+    budget = 1 if args.replay_of else args.max_requests
     if nodes is None:
-        records, stopped, usage = asyncio.run(run_real(items, settings, args.max_requests, limits, args.run_id))
+        records, stopped, usage = asyncio.run(run_real(items, settings, budget, limits, args.run_id))
         # chat requests only: a search embeds its query through the search tool's own embedder, not this client
         totals = {"live": usage.calls, "cache_hits": usage.cache_hits, "http_retries": usage.http_retries}
     else:                                           # given nodes (a test): no client, no requests
         records, stopped = asyncio.run(run_items(items, nodes, limits, args.run_id))
         totals = {"live": 0, "cache_hits": 0, "http_retries": 0}
+    if args.replay_of and (stopped or totals["live"]):
+        print(f"--replay-of {args.replay_of}: a reply was not in the cache ({totals['live']} live request(s)); not a "
+              f"replay, nothing written", file=sys.stderr)
+        return 2
     if stopped:
         print(f"{stopped}; {len(records)}/{len(items)} answered, nothing written (re-run with a larger "
               f"--max-requests: the answered questions replay from the reply cache)", file=sys.stderr)
@@ -384,7 +405,7 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     meta = run_meta(args.run_id, pack_files, settings, limits, started, totals, args.questions)
     if args.replay_of:
         try:
-            records, prev = carry_over(records, args.replay_of)
+            records, prev = carry_over(records, args.replay_of, meta)
         except (ValueError, OSError, KeyError) as err:
             print(f"--replay-of {args.replay_of}: {err}; nothing written", file=sys.stderr)
             return 2
