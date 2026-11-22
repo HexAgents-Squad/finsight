@@ -3,6 +3,7 @@
 Usage:
     python eval/validate_dev_set.py              # format + overlap (CI)
     python eval/validate_dev_set.py --final      # also the split and a second person's verification on every item
+    python eval/validate_dev_set.py eval/dev_set_v2.jsonl [--final]    # the development set v2 (W3-02)
 
 The development set is where the prompting baselines S1-S3 (W1-09) are tuned, so it must teach nothing about
 the gold questions (CLAUDE.md: prompts are never tuned on gold-v1). Rules:
@@ -16,6 +17,10 @@ the gold questions (CLAUDE.md: prompts are never tuned on gold-v1). Rules:
   gold's own closest pair).
 - At least one item (an emptied file must not pass).
 - --final: the split DEV_TARGET_COUNTS and verified_by (a second person) on every item.
+The development set v2 (W3-02, eval/dev_set_v2.jsonl: questions for each failure class A1 showed, to tune the A5
+fixes on) passes the same rules with its own split (DEV2_TARGET_COUNTS) and ids numbered from 21, and is also kept
+apart from v1: no id of v1 and no question near a v1 question. v1 stays as it is, so the W1-09 tuning runs and the
+planner's development runs on it remain reproducible.
 Limit: the word check catches a reworded gold question, not the same idea in other words (a refusal on the same
 template, e.g. a forecast question about another company, scores low).
 Exit codes: 0 = valid, 1 = problems found, 2 = a file is missing or unreadable.
@@ -36,6 +41,12 @@ from eval.validate_gold import safe_console, validate_file  # noqa: E402
 
 EVAL_DIR = Path(__file__).resolve().parent
 DEV_FILE = EVAL_DIR / "dev_set.jsonl"
+DEV2_FILE = EVAL_DIR / "dev_set_v2.jsonl"           # W3-02
+# v2's split: line items outside the facts tool, a reported ratio and partial refusals (A); ratios and period changes
+# on them (B, C); 'what drove' summaries (E, at least 8); a margin follow-up (F); rule edge cases and traps (G)
+DEV2_TARGET_COUNTS: dict[str, int] = {"fact": 8, "ratio": 3, "period_comparison": 2, "multi_company": 1,
+                                      "qualitative": 8, "multi_turn": 1, "refuse": 7}
+DEV2_FIRST_NUMBER = 21                               # v2 ids run from dev-A21, so they never collide with v1's
 OTHER_QUESTION_FILES = (EVAL_DIR / "refusal_tests.jsonl", EVAL_DIR / "injection_tests.jsonl")
 # Word-set overlap at which a dev question counts as a gold question reworded. Measured on gold-v1 itself: two
 # different gold questions built on one template ("By what percentage did Alphabet's revenues / AbbVie's net
@@ -97,10 +108,31 @@ def other_test_questions(paths: tuple[Path, ...] = OTHER_QUESTION_FILES) -> list
     return out
 
 
-def final_problems(dev: list[GoldItem]) -> list[str]:
+def v1_problems(dev: list[GoldItem], v1: list[GoldItem]) -> list[str]:
+    """v2 against v1: ids numbered from DEV2_FIRST_NUMBER (so none is a v1 id) and no question near a v1 question."""
+    out = []
+    v1_ids = {d.id for d in v1}
+    for d in dev:
+        if d.id in v1_ids or int(d.id[-2:]) < DEV2_FIRST_NUMBER:
+            out.append(f"{d.id}: v2 ids are numbered from {DEV2_FIRST_NUMBER} (dev-A{DEV2_FIRST_NUMBER}), apart from v1's")
+        if d.category == "multi_turn":
+            continue
+        for old in v1:
+            score = similarity(d.question, old.question)
+            if score >= NEAR_DUPLICATE:
+                out.append(f"{d.id}: question {score:.2f} similar to v1's {old.id}: {old.question!r}")
+    return out
+
+
+def targets_for(path: Path) -> dict[str, int]:
+    """The split a dev file must have under --final: v2's for eval/dev_set_v2.jsonl, else v1's."""
+    return DEV2_TARGET_COUNTS if path.name == DEV2_FILE.name else DEV_TARGET_COUNTS
+
+
+def final_problems(dev: list[GoldItem], targets: dict[str, int] = DEV_TARGET_COUNTS) -> list[str]:
     out = []
     counts = Counter(d.category for d in dev)
-    for cat, target in DEV_TARGET_COUNTS.items():
+    for cat, target in targets.items():
         if counts.get(cat, 0) != target:
             out.append(f"category {CATEGORY_LETTER[cat]} {cat}: {counts.get(cat, 0)} items, target {target}")
     unverified = [d.id for d in dev if not d.verified_by]
@@ -134,12 +166,16 @@ def main(argv: list[str] | None = None) -> int:
     errors = list(dev_rep.errors) + ([] if dev_rep.items else [f"{args.path} has no items"])
     overlap, highest = overlap_problems(dev_rep.items, gold_rep.items, others)
     errors += overlap
+    targets = targets_for(args.path)
+    if targets is DEV2_TARGET_COUNTS:                    # v2: also apart from v1
+        v1_rep = validate_file(DEV_FILE, model=DevItem)
+        errors += v1_problems(dev_rep.items, v1_rep.items)
     if args.final:
-        errors += final_problems(dev_rep.items)
+        errors += final_problems(dev_rep.items, targets)
     counts = Counter(d.category for d in dev_rep.items)
     verified = sum(1 for d in dev_rep.items if d.verified_by)
     print(f"{len(dev_rep.items)} dev items | " + ", ".join(
-        f"{CATEGORY_LETTER[c]} {counts.get(c, 0)}/{t}" for c, t in DEV_TARGET_COUNTS.items())
+        f"{CATEGORY_LETTER[c]} {counts.get(c, 0)}/{t}" for c, t in targets.items())
         + f" | verified {verified}/{len(dev_rep.items)}")
     print(f"overlap with gold-v1: {len(overlap)} problem(s); highest question similarity {highest:.2f} "
           f"(limit {NEAR_DUPLICATE}) against {len(gold_rep.items)} gold questions and {len(others)} test questions")

@@ -4,6 +4,7 @@ Usage:
     python eval/score_answers.py                  # every eval/results/model_runs/*.jsonl
     python eval/score_answers.py --runs-dir DIR --out-dir DIR
     python eval/score_answers.py --questions dev  # W1-09 tuning runs: eval/results/dev/model_runs -> eval/results/dev
+    python eval/score_answers.py --questions dev2 # W3-02: the development set v2 -> eval/results/dev_v2
 
 Inputs: the runs files (eval/runs_schema.py), the gold set, the refusal tests and the context packs (the
 passages a RAG run saw, and the conversation history every run saw; a run's meta must name the packs' sha256).
@@ -24,6 +25,8 @@ Outputs:
                                            many answers each changed; they are kept out of agent_baselines.md
 With --questions dev the development questions are scored instead (no refusal tests; the development pack) and
 everything goes to eval/results/dev/, report dev_baselines.md: tuning the W1-09 prompts never reads gold scores.
+With --questions dev2 the development set v2 (W3-02, eval/dev_set_v2.jsonl) is scored the same way into
+eval/results/dev_v2/, report dev_v2_baselines.md: where the A5 fixes are tuned.
 Optional input: eval/results/grading/judge_<run_id>.jsonl ({"id", "score": 0|1|2, "reason"}), LLM-as-judge scores
 for summary answers, produced with the runner (W1-13); agreement with the human grades is reported.
 
@@ -42,7 +45,9 @@ Answer types (the mentor's split) and when an answer is correct:
     refusal        G01-G07 and refusal tests of kind "refusal": refused, with the expected rule
     trap           G08-G10: not refused, no value, the answer says the figure is not reported/disclosed (and does
                    not then work it out)
-    partial        refusal tests of kind "partial": not refused, refusal_rule = the expected rule
+    partial        refusal tests of kind "partial": not refused, refusal_rule = the expected rule. A question in the
+                   gold format with a refusal_rule on A-F (a partial refusal, spec §6; dev set v2) is scored by its
+                   own type and is also wrong when the answer does not decline under that rule (W3-02)
     control        refusal tests of kind "control": not refused and no refusal rule (their content has no gold
                    value to check; a rule would mean a partial refusal the question does not need)
 Hallucination checks: numbers in the answer text or `value` supported neither by the passages the run saw nor by
@@ -84,7 +89,7 @@ from pydantic import ValidationError  # noqa: E402
 
 from core.figures import GROUPED_FIGURE, SCALE_WORDS, Figure, figures  # noqa: E402  (shared with the critic)
 from core.llm import strip_thinking  # noqa: E402
-from eval.context_pack import DEV_PACK, GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
+from eval.context_pack import DEV2_PACK, DEV_PACK, GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
 from eval.context_pack import REFUSAL_PATH as REFUSALS_FILE  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 from eval.runs_schema import B0Answer, RunMeta, RunRecord  # noqa: E402
@@ -101,12 +106,14 @@ BASELINE_REPORT, DEV_REPORT = "prompting_baselines.md", "dev_baselines.md"
 AGENT_REPORT = "agent_baselines.md"                  # W2-11: the agent runs (A1, ...) next to B0 and S1-S3
 ABLATION_REPORT = "agent_ablations.md"               # W3-01: the ablations (A2-A4) next to A1, paired with it
 DEV_DIR = RESULTS_DIR / "dev"
+DEV2_DIR, DEV2_REPORT = RESULTS_DIR / "dev_v2", "dev_v2_baselines.md"     # W3-02
 B0_REFERENCE = "M1_qwen3-8b_rag_think-off_b0-v1"     # the zero-shot run the W1-09 strategies are compared with
 REPORT_TITLES = {REPORT_NAME: "Model comparison (W1-08 scorer)",
                  BASELINE_REPORT: "Prompting baselines B0 / S1 / S2 / S3 on Qwen3-8B (W1-09)",
                  AGENT_REPORT: "The agent (A1) next to B0 and S1 / S2 / S3 on Qwen3-8B (W2-11)",
                  ABLATION_REPORT: "Ablations A2 / A3 / A4: the agent with one component off, paired with A1 (W3-01)",
-                 DEV_REPORT: "Prompting baselines on the development set (W1-09 tuning; not a result)"}
+                 DEV_REPORT: "Prompting baselines on the development set (W1-09 tuning; not a result)",
+                 DEV2_REPORT: "The development set v2 (W3-02: where the A5 fixes are tuned; not a result)"}
 SHEET_NAME, KEY_NAME = "grading_sheet.csv", "grading_key.csv"
 START, END = "<!-- GENERATED:START (eval/score_answers.py) -->", "<!-- GENERATED:END -->"
 
@@ -137,7 +144,8 @@ KEY_HEX = 10
 # D items have no gold_value: the company the gold answer names as having more (its last sentence)
 D_WINNERS = {"D01": "AAPL", "D02": "GOOGL", "D03": "JPM", "D04": "C", "D05": "JNJ", "D06": "ABBV", "D07": "WMT",
              "D08": "PG", "D09": "AAPL", "D10": "GOOGL"}
-DEV_D_WINNERS = {"dev-D01": "JNJ", "dev-D02": "MSFT"}       # the development set's, by the same rule
+DEV_D_WINNERS = {"dev-D01": "JNJ", "dev-D02": "MSFT",       # the development set's, by the same rule
+                 "dev-D21": "BAC"}                          # v2 (W3-02)
 WINNERS = D_WINNERS | DEV_D_WINNERS
 
 UNIT_SCALE = {"USD": 1.0, "USD thousands": 1e3, "USD millions": 1e6, "USD billions": 1e9}
@@ -404,7 +412,18 @@ def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str
     if q.answer_type == "short_entity":
         return entity_outcome(q, a, named_field, companies_named(a.answer, matchers), out)
     exact = agent and rec.agent is not None and bool(rec.agent.calculations)    # its value is the calculator's
-    return numeric_outcome(q, a, refs, out, exact_arithmetic=exact)
+    return partial_outcome(q, a, numeric_outcome(q, a, refs, out, exact_arithmetic=exact))
+
+
+def partial_outcome(q: Question, a: B0Answer, out: dict) -> dict:
+    """A partial refusal in the gold format (an A-F question with a refusal_rule, spec §6): a right value is still
+    wrong when the answer did not decline the other part under that rule. No gold-v1 or dev v1 question has one."""
+    if not q.expected_rule or out.get("correct") is not True or a.refusal_rule == q.expected_rule:
+        return out
+    label = "under_refusal" if a.refusal_rule is None else "wrong_refusal_rule"
+    out.update(correct=False, reason=f"the value is right, but refusal_rule {a.refusal_rule}, expected "
+                                     f"{q.expected_rule} for the declined part", suggested_label=label)
+    return out
 
 
 def refusal_outcome(q: Question, a: B0Answer, out: dict) -> dict:
@@ -979,7 +998,8 @@ def write_report(text: str, path: Path) -> None:
     block = f"{START}\n{text}{END}"
     title = REPORT_TITLES.get(path.name, REPORT_TITLES[REPORT_NAME])
     placeholder = {REPORT_TITLES[REPORT_NAME]: "(written for W1-15)", REPORT_TITLES[AGENT_REPORT]: "(written for W2-11)",
-                   REPORT_TITLES[ABLATION_REPORT]: "(written for W3-01)"}.get(title, "(written for W1-09)")
+                   REPORT_TITLES[ABLATION_REPORT]: "(written for W3-01)",
+                   REPORT_TITLES[DEV2_REPORT]: "(written for W3-02)"}.get(title, "(written for W1-09)")
     old = path.read_text(encoding="utf-8") if path.exists() else \
         f"# {title}\n\n{START}\n{END}\n\n## Interpretation\n\n{placeholder}\n"
     if START not in old or END not in old:
@@ -989,7 +1009,7 @@ def write_report(text: str, path: Path) -> None:
     path.write_text(head + block + rest.split(END, 1)[1], encoding="utf-8", newline="\n")
 
 
-def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]:
+def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]], dev_report: str = DEV_REPORT) -> dict[str, str]:
     """Report name -> its generated text. The model comparison keeps the model runs (M1, M2, ...) it was written
     for; the W1-09 baselines put B0 (M1) next to the strategy runs (S1-S3); a development-set scoring has one
     report with every run."""
@@ -997,7 +1017,7 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]
     agent_runs = [r for r in runs if r[0].run_id.startswith("A") and not ablation_of(r[0])]
     ablation_runs = [r for r in runs if ablation_of(r[0])]
     if dev:
-        return {DEV_REPORT: report(runs) + strategy_table(runs) + agent_table(runs)}
+        return {dev_report: report(runs) + strategy_table(runs) + agent_table(runs)}
     out = {}
     model_runs = [r for r in runs if r[0].run_id.startswith("M")]
     if model_runs:
@@ -1044,8 +1064,9 @@ def load_questions(gold_file: Path, refusal_file: Path | None) -> dict[str, Ques
 def main(argv: list[str] | None = None) -> int:
     safe_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--questions", choices=("gold", "dev"), default="gold",
-                    help="dev: the W1-09 tuning runs on the development set (defaults under eval/results/dev)")
+    ap.add_argument("--questions", choices=("gold", "dev", "dev2"), default="gold",
+                    help="dev: the W1-09 tuning runs on the development set (defaults under eval/results/dev); "
+                         "dev2: the development set v2 (W3-02, under eval/results/dev_v2)")
     ap.add_argument("--runs-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_DIR / 'model_runs'})")
     ap.add_argument("--out-dir", type=Path, help=f"scores/, grading/ and the reports go here; default {RESULTS_DIR} "
                                                 f"(dev: {DEV_DIR})")
@@ -1053,18 +1074,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--gold", type=Path, default=GOLD_FILE)
     ap.add_argument("--refusal", type=Path, default=REFUSALS_FILE)
     args = ap.parse_args(argv)
-    dev = args.questions == "dev"
-    args.runs_dir = args.runs_dir or (DEV_DIR / "model_runs" if dev else RUNS_DIR)
-    args.out_dir = args.out_dir or (DEV_DIR if dev else RESULTS_DIR)
+    dev = args.questions in ("dev", "dev2")
+    dev_dir = DEV2_DIR if args.questions == "dev2" else DEV_DIR
+    args.runs_dir = args.runs_dir or (dev_dir / "model_runs" if dev else RUNS_DIR)
+    args.out_dir = args.out_dir or (dev_dir if dev else RESULTS_DIR)
+    dev_report = DEV2_REPORT if args.questions == "dev2" else DEV_REPORT
     run_files = sorted(p for p in args.runs_dir.glob("*.jsonl")) if args.runs_dir.exists() else []
     if not run_files:
         print(f"ERROR: no runs files in {args.runs_dir} (the runner, W1-13, writes them)", file=sys.stderr)
         return 2
     try:
         if dev:
-            from eval.validate_dev_set import DEV_FILE
-            questions = load_questions(DEV_FILE, None)
-            pack_files = [args.pack_dir / DEV_PACK]
+            from eval.validate_dev_set import DEV2_FILE, DEV_FILE
+            v2 = args.questions == "dev2"
+            questions = load_questions(DEV2_FILE if v2 else DEV_FILE, None)
+            pack_files = [args.pack_dir / (DEV2_PACK if v2 else DEV_PACK)]
         else:
             questions = load_questions(args.gold, args.refusal)
             pack_files = [args.pack_dir / GOLD_PACK, args.pack_dir / REFUSAL_PACK]
@@ -1086,7 +1110,7 @@ def main(argv: list[str] | None = None) -> int:
             apply_grades(scored, entered, read_judge(grading / f"judge_{meta.run_id}.jsonl", set(questions)))
             (scores_dir / f"{meta.run_id}.jsonl").write_text(
                 "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in scored), encoding="utf-8", newline="\n")
-        for name, chosen in reports(dev, [(m, sc) for m, _, sc in runs]).items():
+        for name, chosen in reports(dev, [(m, sc) for m, _, sc in runs], dev_report).items():
             write_report(chosen, args.out_dir / name)
     except (OSError, ValueError, ValidationError, KeyError) as err:
         hint = " (is the file open in Excel? close it and run again)" if isinstance(err, PermissionError) else ""
@@ -1095,7 +1119,7 @@ def main(argv: list[str] | None = None) -> int:
     for meta, _, scored in runs:
         print(f"{meta.run_id}: " + ", ".join(f"{label} {rate([s for s in scored if s['answer_type'] in types])}"
                                              for label, types in REPORT_TYPES.items()))
-    names = ", ".join(str(args.out_dir / n) for n in reports(dev, [(m, sc) for m, _, sc in runs]))
+    names = ", ".join(str(args.out_dir / n) for n in reports(dev, [(m, sc) for m, _, sc in runs], dev_report))
     print(f"reports: {names}; grading sheet: {grading / SHEET_NAME}")
     return 0
 

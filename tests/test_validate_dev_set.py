@@ -156,3 +156,45 @@ def test_cli_final_rules_fail_on_an_unverified_or_short_set(tmp_path, capsys):
     assert vd.main([str(path), "--final"]) == 1
     out = capsys.readouterr().out
     assert "not verified by a second person" in out and "category B ratio: 0 items, target 2" in out
+
+
+# ----------------------------------------------------------------------------------------------- dev set v2 (W3-02)
+V2 = validate_file(vd.DEV2_FILE, model=DevItem).items
+V1 = validate_file(vd.DEV_FILE, model=DevItem).items
+
+
+def test_the_committed_v2_set_is_valid_separate_and_has_its_planned_split():
+    assert vd.main([str(vd.DEV2_FILE)]) == 0                         # draft rules: format, overlap, apart from v1
+    assert Counter(i.category for i in V2) == Counter(vd.DEV2_TARGET_COUNTS) and len(V2) == 30
+    assert vd.targets_for(vd.DEV2_FILE) is vd.DEV2_TARGET_COUNTS and vd.targets_for(vd.DEV_FILE) is DEV_TARGET_COUNTS
+    assert sum(i.category == "qualitative" for i in V2) >= 8          # the ticket: at least 8 'what drove' summaries
+
+
+def test_v2_covers_every_failure_class_the_ticket_names():
+    partial = {i.refusal_rule for i in V2 if i.category != "refuse" and i.refusal_rule}
+    refusals = {i.refusal_rule for i in V2 if i.must_refuse}
+    traps = [i for i in V2 if i.category == "refuse" and not i.must_refuse]
+    assert partial == {"R1", "R2", "R4"}                              # partial refusals, answered in part
+    assert {"R2", "R3", "R6", "R7"} <= refusals                       # the rule edge cases (R2 vs R3, R6 vs R7)
+    assert len(traps) == 2 and all(i.gold_answer.startswith("not reported") for i in traps)
+    notes = " ".join(i.notes or "" for i in V2)
+    for failure_class in ("deposits", "noninterest expense", "current, not total", "segment", "net sales distinct",
+                          "a ratio the filing reports", "margin follow-up"):
+        assert failure_class in notes, failure_class
+
+
+def test_every_v2_item_is_written_by_one_member_and_left_for_a_second_to_verify():
+    assert {i.written_by for i in V2} == {"Claude (AI draft for Alok)"}
+    assert vd.final_problems(V2, vd.DEV2_TARGET_COUNTS) == [f"not verified by a second person: {[i.id for i in V2]}"] \
+        or all(i.verified_by for i in V2)                                # until verified, --final says exactly that
+
+
+def test_v2_ids_start_at_21_and_no_v2_question_is_near_a_v1_question():
+    assert vd.v1_problems(V2, V1) == []
+    assert all(int(i.id[-2:]) >= vd.DEV2_FIRST_NUMBER for i in V2)
+    clash = dev(id="dev-A01", question="What were Bank of America's total deposits in fiscal 2023?",
+                companies=["BAC"], gold_sources=[{"ticker": "BAC", "form": "10-K", "fiscal_year": 2023,
+                                                  "fiscal_period": "FY", "item": "Item 8"}])
+    assert any("numbered from 21" in p for p in vd.v1_problems([clash], V1))
+    copy = dev(id="dev-B29", category="ratio", question=V1[3].question, unit="%")
+    assert any("similar to v1's dev-B01" in p for p in vd.v1_problems([copy], V1))

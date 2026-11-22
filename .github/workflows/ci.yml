@@ -51,3 +51,8 @@ jobs:
       # from gold-v1 (no shared filing period or company-year, no reworded gold or test question)
       - name: Validate development set (final rules, no overlap with gold-v1)
         run: python eval/validate_dev_set.py --final
+
+      # The development set v2 (W3-02): draft rules (format, separation from gold-v1 and from v1; not the split) until a
+      # second member has verified every item; then this step takes --final like the line above
+      - name: Validate development set v2 (draft rules until verified, no overlap with gold-v1 or v1)
+        run: python eval/validate_dev_set.py eval/dev_set_v2.jsonl
