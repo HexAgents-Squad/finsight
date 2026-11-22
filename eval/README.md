@@ -15,10 +15,10 @@
 | `run_planner.py` | W2-02: the planner node on the development questions only (dev set + `planner_dev.jsonl`) -> `results/planner_runs/<run>.jsonl` and `results/planner_dev.md` (refusal decisions by rule, valid plans, tokens, seconds) |
 | `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json`; W1-09: `--run S1/S2/S3` runs a prompting strategy instead |
 | `strategies.py` | W1-09: the prompting strategies S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition (prompts in `agent/prompts/s*`, frozen) |
-| `run_agent.py` | W2-11: the agent graph over the same 102 questions (A1; it retrieves for itself) → `results/model_runs/A1_….jsonl` + `.meta.json`, each record with its tool calls, their evidence and the whole answer (ADR-034) |
+| `run_agent.py` | W2-11: the agent graph over the same 102 questions (A1; it retrieves for itself) → `results/model_runs/A1_….jsonl` + `.meta.json`, each record with its tool calls, their evidence and the whole answer (ADR-034); W3-01: `--ablation` runs A2-A4, A1 with one component off (ADR-036) |
 | `judge_summaries.py` | W1-13: LLM-as-judge grades (0/1/2) for the summary answers → `results/grading/judge_<run_id>.jsonl` |
 | `runs_schema.py` | W1-08: the runs-file format (B0 answer, run record, run meta) shared by the runner (W1-13) and the scorer |
-| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (M runs), `results/prompting_baselines.md` (B0 = M1 next to S1-S3, W1-09) and `results/agent_baselines.md` (the agent next to B0 and S1-S3, W2-11) (docs/week1_plan.txt §2.6) |
+| `score_answers.py` | W1-08: scores every `results/model_runs/*.jsonl` → `results/scores/`, the blind grading sheet `results/grading/grading_sheet.csv` and the tables in `results/model_comparison.md` (M runs), `results/prompting_baselines.md` (B0 = M1 next to S1-S3, W1-09) and `results/agent_baselines.md` (the agent next to B0 and S1-S3, W2-11) and `results/agent_ablations.md` (the ablations A2-A4 paired with A1, W3-01) (docs/week1_plan.txt §2.6) |
 | `grading.py` | W1-14: tools for the human grading (guide: `GRADING.md`): a blind copy of the sheet per grader, a passages handout, the merge of both graders' copies, and `results/failure_examples.md` |
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
@@ -134,6 +134,18 @@ there or the gold answer) and its valid citations (a source a tool returned). Th
 fields by `run_agent.b0_answer` (value: the last calculation's result, else the one value, only when the answer states it and does not say the figure is not reported); a calculation's result counts as evidence only when its inputs are fetched figures. The prompts it runs are
 the pinned planner and composer prompts (`tests/test_planner.py`, `tests/test_composer.py`). The new rows of the
 grading sheet are graded in a `--pending` round (`GRADING.md`).
+
+## The ablations (W3-01)
+```bash
+python eval/run_agent.py --ablation no-critic --max-requests 5              # A3: no critic (replays: ~0 requests)
+python eval/run_agent.py --ablation no-statements-first --max-requests 80   # A4: plain hybrid search (~20)
+python eval/run_agent.py --ablation no-calculator --max-requests 150        # A2: no calculation run (~90)
+python eval/score_answers.py                                                # -> results/agent_ablations.md
+```
+Each turns one component off on A1's configuration and is paired with A1 (`results/agent_ablations.md`; they are
+kept out of `agent_baselines.md`). Unchanged model calls replay from the reply cache, so a run costs only the calls
+its switch changes. An ablation's answer that is word for word A1's shares A1's grading row; the changed ones get
+new rows for a `--pending` round. ADR-036.
 
 ## Refusal and prompt-injection tests (WP8b)
 ```bash

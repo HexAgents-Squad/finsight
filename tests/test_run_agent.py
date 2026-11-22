@@ -3,6 +3,8 @@ or recording nodes, no endpoint, no data/, no .env; the real gold set, refusal t
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import shutil
 from types import SimpleNamespace
@@ -320,7 +322,7 @@ def test_a_replay_keeps_the_earlier_runs_timings_cost_and_dates(tmp_path):
 
 
 @pytest.mark.parametrize(("meta_change", "argv"), [
-    ({}, ["--run-id", "A3_qwen3-8b_agent_think-off_a3-v1"]),          # an ablation must not borrow A1's timings
+    ({}, ["--ablation", "no-critic"]),                                 # an ablation must not borrow A1's timings
     ({"planner_prompt_sha256": "other"}, []),
     ({"limits": {"max_steps": 5, "max_tokens": 12_000, "timeout_s": 10}}, []),
     ({"context_pack_sha256": {"context_pack_gold.jsonl": "other"}}, []),
@@ -340,7 +342,7 @@ def test_a_replay_goes_live_at_most_once_and_then_writes_nothing(tmp_path, monke
     previous = earlier_run(tmp_path)
     budgets = []
 
-    async def fake_run_real(items, settings_, max_requests, limits, run_id):
+    async def fake_run_real(items, settings_, max_requests, limits, run_id, ablation=None):
         budgets.append(max_requests)
         records, _ = await ra.run_items(items, stub_nodes(), limits, run_id)
         return records, None, SimpleNamespace(calls=1, cache_hits=186, http_retries=0)
@@ -588,3 +590,195 @@ def test_the_handout_shows_what_the_agent_retrieved_without_naming_it(tmp_path):
     assert "**MSFT 10-K 2023 Item7 C3 0004** (search_filings)" in text and passage.text in text   # no label: id
     assert "**AAPL 10-K FY2024 FY · total net sales (USD millions)** (get_financial_fact)" in text  # whose figure
     assert ra.RUN_ID not in text and "agent" not in text.lower()
+
+
+# ----------------------------------------------------------------------------------------------- the ablations (W3-01)
+@pytest.mark.parametrize(("name", "run_id", "statements_first"), [
+    ("no-calculator", "A2_qwen3-8b_agent_think-off_a-v1-no-calculator", True),
+    ("no-critic", "A3_qwen3-8b_agent_think-off_a-v1-no-critic", True),
+    ("no-statements-first", "A4_qwen3-8b_agent_think-off_a-v1-no-statements-first", False),
+])
+def test_an_ablation_writes_its_own_run_marked_as_an_ablation_of_a1(tmp_path, name, run_id, statements_first):
+    assert ra.ABLATIONS[name].run_id(name) == run_id
+    assert run_cli(tmp_path, "--ablation", name) == 0
+    meta = json.loads((tmp_path / f"{run_id}.meta.json").read_text(encoding="utf-8"))
+    assert (meta["ablation"], meta["ablation_of"]) == (name, ra.RUN_ID)
+    assert meta["retrieval"]["statements_first"] is statements_first
+    # the same prompts as A1, so its unchanged calls replay from the reply cache
+    from agent import composer, planner
+    assert (meta["planner_prompt_sha256"], meta["composer_prompt_sha256"]) == (planner.PROMPT_SHA256,
+                                                                               composer.PROMPT_SHA256)
+    assert len((tmp_path / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()) == 102
+    assert [p.name for p in tmp_path.iterdir()] == [f"{run_id}.jsonl", f"{run_id}.meta.json"]
+
+
+def test_a1s_meta_keeps_its_exact_keys(tmp_path):
+    assert run_cli(tmp_path) == 0
+    meta = json.loads((tmp_path / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
+    committed = json.loads((ra.RUNS_DIR / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
+    assert set(meta) == set(committed) - {"replay"} and "ablation" not in meta
+
+
+@pytest.mark.parametrize(("argv", "message"), [
+    (["--ablation", "no-critic", "--run-id", "A2_qwen3-8b_agent_think-off_a-v1-x"], "starts with A3"),
+    (["--ablation", "no-critic", "--run-id", ra.RUN_ID], "starts with A3"),
+    (["--run-id", "A3_qwen3-8b_agent_think-off_a3-v1"], "pass --ablation no-critic"),
+    (["--run-id", "A4_qwen3-8b_agent_think-off_x"], "pass --ablation no-statements-first"),
+])
+def test_a_run_id_must_say_which_component_is_off(tmp_path, capsys, argv, message):
+    assert run_cli(tmp_path, *argv) == 2 and not list(tmp_path.iterdir())
+    assert message in capsys.readouterr().err
+
+
+def test_an_ablation_with_its_own_numbered_run_id_is_accepted(tmp_path):
+    assert run_cli(tmp_path, "--ablation", "no-critic", "--run-id", "A3_qwen3-8b_agent_think-off_trial") == 0
+    assert (tmp_path / "A3_qwen3-8b_agent_think-off_trial.jsonl").exists()
+
+
+def test_a_live_ablation_run_builds_the_real_nodes_with_its_switch(tmp_path, monkeypatch):
+    seen = []
+
+    async def fake_run_real(items, settings_, max_requests, limits, run_id, ablation=None):
+        seen.append((run_id, ablation, max_requests))
+        records, _ = await ra.run_items(items, stub_nodes(), limits, run_id)
+        return records, None, SimpleNamespace(calls=0, cache_hits=0, http_retries=0)
+
+    monkeypatch.setattr(ra, "run_real", fake_run_real)
+    assert ra.main(["--out-dir", str(tmp_path), "--ablation", "no-calculator", "--max-requests", "150"],
+                   settings=settings(), limits=LIMITS) == 0
+    assert seen == [("A2_qwen3-8b_agent_think-off_a-v1-no-calculator", "no-calculator", 150)]
+
+
+class FakeLLM:
+    """No call is made: building the nodes must not touch the endpoint."""
+
+
+def test_ablation_nodes_turn_off_exactly_one_component():
+    a1 = ra.ablation_nodes(FakeLLM(), None)
+    assert all(getattr(a1, n) is not None for n in ("planner", "executor", "composer", "critic"))
+    assert ra.ablation_nodes(FakeLLM(), "no-critic").critic is None
+    assert ra.ablation_nodes(FakeLLM(), "no-calculator").critic is not None
+    assert ra.ablation_nodes(FakeLLM(), "no-statements-first").critic is not None
+
+
+def run_executor(nodes, plan_):
+    state = {"plan": plan_, "tool_results": [], "tokens": 0, "limits": {"max_steps": 10, "max_tokens": 12_000}}
+    return asyncio.run(nodes.executor(state))
+
+
+def test_the_no_calculator_nodes_never_run_the_calculation():
+    from agent.state import PlanStep
+    calls = []
+
+    async def tools(name, arguments):
+        calls.append(name)
+        return {**FACT, "fiscal_year": arguments["fiscal_year"]}
+
+    steps = [PlanStep(tool="get_financial_fact", purpose="x", arguments={"ticker": "AAPL", "metric": "revenue",
+                                                                         "fiscal_year": y, "fiscal_period": "FY"})
+             for y in (2023, 2024)]
+    p = Plan(reasoning="x", refuse=False, refusal_rule=None, steps=steps, calculation="growth")
+    run_executor(ra.ablation_nodes(FakeLLM(), None, tools), p)
+    assert calls == ["get_financial_fact", "get_financial_fact", "calculate"]
+    calls.clear()
+    out = run_executor(ra.ablation_nodes(FakeLLM(), "no-calculator", tools), p)
+    assert calls == ["get_financial_fact", "get_financial_fact"] and "calculator is switched off" in out["errors"][0]
+
+
+def test_the_no_statements_first_nodes_search_through_the_registry_without_them(monkeypatch):
+    from agent.state import PlanStep
+    from tools import registry
+    seen = []
+
+    async def call_tool_async(name, arguments, *, statements_first=True):
+        seen.append((name, statements_first))
+        return [{"chunk_id": "c", "text": "t"}]
+
+    monkeypatch.setattr(registry, "call_tool_async", call_tool_async)
+    p = Plan(reasoning="x", refuse=False, refusal_rule=None, steps=[PlanStep(tool="search_filings", purpose="x",
+                                                          arguments={"query": "risks", "ticker": "AAPL"})])
+    run_executor(ra.ablation_nodes(FakeLLM(), "no-statements-first"), p)
+    run_executor(ra.ablation_nodes(FakeLLM(), None), p)
+    assert seen == [("search_filings", False), ("search_filings", True)]
+
+
+# ----------------------------------------------------------------------------------------------- scoring the ablations
+A3 = ra.ABLATIONS["no-critic"].run_id("no-critic")
+A2 = ra.ABLATIONS["no-calculator"].run_id("no-calculator")
+
+
+def keyed_rows(out):
+    keyed = {line.split(",")[0]: line.split(",")[1]
+             for line in (out / "grading" / sa.KEY_NAME).read_text(encoding="utf-8").splitlines()[1:]}
+    return [(keyed[r["key"]], r) for r in sa.read_sheet_rows(out / "grading" / sa.SHEET_NAME) if r["key"] in keyed]
+
+
+def test_the_ablations_get_their_own_report_paired_with_a1_and_leave_the_agent_report_alone(tmp_path):
+    runs, out = agent_runs_dir(tmp_path)
+    assert sa.main(["--runs-dir", str(runs), "--out-dir", str(out)]) == 0
+    before = (out / sa.AGENT_REPORT).read_text(encoding="utf-8")
+    assert not (out / sa.ABLATION_REPORT).exists()                       # no ablation run, no report
+    assert run_cli(runs, "--ablation", "no-critic") == 0
+    assert sa.main(["--runs-dir", str(runs), "--out-dir", str(out)]) == 0
+    assert (out / sa.AGENT_REPORT).read_text(encoding="utf-8") == before      # A3 is not an agent baseline
+    report = (out / sa.ABLATION_REPORT).read_text(encoding="utf-8")
+    assert report.startswith(f"# {sa.REPORT_TITLES[sa.ABLATION_REPORT]}") and "(written for W3-01)" in report
+    assert f"| Answer type | {ra.RUN_ID} | {A3} |" in report and B0 not in report
+    assert f"### 10. Paired with {ra.RUN_ID} (A1): questions right only with the ablation / only with A1" in report
+    assert "| All decided answers | 0 / 0 (p = 1.00, n = " in report      # the stubs' answers are the same
+    assert f"### 12. What each ablation changed from {ra.RUN_ID}" in report
+    assert "| component switched off | no-critic |" in report
+    assert "| answers that differ from the reference's (text) | 0/102 |" in report
+    a1 = [json.loads(x) for x in (out / "scores" / f"{ra.RUN_ID}.jsonl").read_text(encoding="utf-8").splitlines()]
+    a3 = [json.loads(x) for x in (out / "scores" / f"{A3}.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(s["id"], s["correct"], s["sheet_key"]) for s in a1] == [(s["id"], s["correct"], s["sheet_key"])
+                                                                     for s in a3]       # graded once, shared
+    assert [run for run, _ in keyed_rows(out) if run == A3] == []           # nothing new for the graders
+
+
+def test_a_changed_ablation_answer_is_graded_on_its_own_and_a_grade_on_a1_carries_to_the_unchanged_ones(tmp_path):
+    runs, out = agent_runs_dir(tmp_path)
+    assert run_cli(runs, "--ablation", "no-calculator") == 0
+    summary = next(q.id for q in QUESTIONS.values() if q.answer_type == "summary")
+    other = [q.id for q in QUESTIONS.values() if q.answer_type == "summary"][1]
+    path = runs / f"{A2}.jsonl"
+    recs = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
+    for r in recs:
+        if r["id"] == summary:
+            r["parsed"]["answer"] += " A changed sentence."
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    assert sa.main(["--runs-dir", str(runs), "--out-dir", str(out)]) == 0
+    rows = keyed_rows(out)
+    ((_, changed),) = [(run, r) for run, r in rows if run == A2]           # one row: the changed answer
+    assert changed["task"] == "grade" and changed["model_answer"].endswith("A changed sentence.")
+    # the graders grade A1's row of the other summary: the unchanged A2 answer gets the same grade
+    a1_key = next(json.loads(x)["sheet_key"] for x in (out / "scores" / f"{ra.RUN_ID}.jsonl")
+                  .read_text(encoding="utf-8").splitlines() if json.loads(x)["id"] == other)
+    sheet = out / "grading" / sa.SHEET_NAME
+    lines = sheet.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split(",")
+    table = list(csv.DictReader(io.StringIO("\n".join(lines))))
+    for row in table:
+        if row["key"] == a1_key:
+            row.update(grader_1="2", grader_2="2", final="2")
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=header, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(table)
+    sheet.write_text(buf.getvalue(), encoding="utf-8")
+    assert sa.main(["--runs-dir", str(runs), "--out-dir", str(out)]) == 0
+    a2 = {json.loads(x)["id"]: json.loads(x) for x in (out / "scores" / f"{A2}.jsonl").read_text(encoding="utf-8")
+          .splitlines()}
+    assert a2[other]["human_grade"] == 2 and a2[other]["correct"] is True
+    assert a2[summary]["human_grade"] is None and a2[summary]["correct"] is None      # pending its own grade
+
+
+def test_an_ablation_without_its_reference_run_is_refused(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    for suffix in (".jsonl", ".meta.json"):
+        shutil.copy(sa.RUNS_DIR / f"{B0}{suffix}", tmp_path / f"{B0}{suffix}")
+    assert run_cli(runs, "--ablation", "no-critic") == 0
+    for suffix in (".jsonl", ".meta.json"):
+        shutil.copy(tmp_path / f"{B0}{suffix}", runs / f"{B0}{suffix}")
+    assert sa.main(["--runs-dir", str(runs), "--out-dir", str(tmp_path / "out")]) == 1
+    assert f"an ablation of {ra.RUN_ID}, which is not in the runs directory" in capsys.readouterr().err

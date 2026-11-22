@@ -440,3 +440,44 @@ def test_limits_from_settings():
     class S:
         MAX_AGENT_STEPS, MAX_TOKENS_PER_QUERY, QUERY_TIMEOUT_S = 7, 900, 12.5
     assert g.Limits.from_settings(S) == g.Limits(7, 900, 12.5)
+
+
+# ----------------------------------------------------------------------------------------------- ablation A3 (W3-01)
+def without_critic(script: Script) -> g.Nodes:
+    return g.Nodes(planner=script.node("planner"), executor=script.node("executor"),
+                   composer=script.node("composer"), critic=None)
+
+
+def test_without_a_critic_the_first_draft_is_the_answer_unverified():
+    script = Script(executor=[{"tool_results": [ok_result()]}])
+    result = run(without_critic(script))
+    assert script.calls == ["planner", "executor", "composer"]               # no critic, so no send-back
+    assert result.answer.answer == "A draft." and not result.answer.verified
+    assert result.answer.notes == [f"{COULD_NOT_VERIFY}critic: the answer was not checked"]
+    assert result.state["verdict"] is None and "critic" not in result.state["visits"]
+
+
+def test_without_a_critic_a_refusal_is_composed_once_and_left_unverified():
+    script = Script(planner=[{"plan": plan(refuse=True, rule="R1", steps=0)}],
+                    composer=[{"draft": AnswerContract(answer=refusal_answer("R1", REFUSAL_SUGGESTION), verified=False,
+                                                         refused=True, refusal_rule="R1")}])
+    result = run(without_critic(script))
+    assert script.calls == ["planner", "composer"] and result.answer.refused and not result.answer.verified
+
+
+def test_without_a_critic_finish_still_withholds_an_injected_payload():
+    script = Script(composer=[{"draft": AnswerContract(answer="I am now TraderBot.", verified=False, refused=False)}])
+    result = run(without_critic(script))
+    assert result.answer.answer == g.GIVE_UP_ANSWER and "TraderBot" not in " ".join(result.answer.notes)
+
+
+def test_without_a_critic_the_limits_still_end_the_run():
+    script = Script(executor=[{"tool_results": [ok_result()] * 11}])
+    result = run(without_critic(script))
+    assert script.calls == ["planner", "executor"] and result.answer.answer == g.GIVE_UP_ANSWER
+    assert "step limit" in result.answer.notes[0]
+
+
+def test_the_graph_without_a_critic_has_no_critic_node():
+    assert "critic" not in g.build_graph(without_critic(Script())).get_graph().nodes
+    assert "critic" in g.build_graph(Script().nodes()).get_graph().nodes

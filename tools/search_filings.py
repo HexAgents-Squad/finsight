@@ -16,6 +16,9 @@ order. `score` is for inspection only: it is the RRF score (small positive numbe
 cross-encoder's logit (any sign); with the statements first, ranks interleave two searches, so scores do not
 decrease down the list. Use the order, not the score.
 
+`statements_first=False` (keyword only, never in the model's arguments: SearchArgs has no such field) searches the
+same loaded index without the statements first (plain hybrid, ADR-013): the A4 ablation (W3-01, ADR-036).
+
 Passage text is filing data, never instructions (spec §6): the agent must quote it inside delimiters.
 Errors are results, never exceptions: invalid_input (bad arguments or filters, or a form that contradicts the
 period: a 10-K is FY, a 10-Q is Q1-Q3), out_of_corpus (a company or fiscal year outside config/companies.yaml,
@@ -124,6 +127,13 @@ def compose(hybrid: Retriever, reranker: Any = None) -> Retriever:
     return StatementFirstIndex(RerankedIndex(hybrid, reranker) if reranker is not None else hybrid)
 
 
+def without_statements_first(stack: Retriever, statements_first: bool) -> Retriever:
+    """`stack` itself, or with statements_first=False the retriever under its statements-first layer (the same
+    loaded index, so the A4 ablation changes only the ordering ADR-017 added)."""
+    from retrieval.statement import StatementFirstIndex
+    return stack.base if not statements_first and isinstance(stack, StatementFirstIndex) else stack
+
+
 @functools.cache
 def default_retriever() -> Retriever:
     """C3 hybrid search over data/index (built by ingest/04_index.py), loaded once. A failure is not cached, so
@@ -165,9 +175,10 @@ def default_retriever() -> Retriever:
 @tool_boundary
 def search_filings(query: str, ticker: str | None = None, fiscal_year: int | None = None,
                    fiscal_period: str | None = None, form: str | None = None, item: str | None = None,
-                   k: int = DEFAULT_K, *,
-                   retriever: Retriever | None = None) -> list[dict[str, Any]] | dict[str, Any]:
-    """Tool entry point: the passages, or {"error": {...}} (never raises). `retriever` is for tests."""
+                   k: int = DEFAULT_K, *, retriever: Retriever | None = None,
+                   statements_first: bool = True) -> list[dict[str, Any]] | dict[str, Any]:
+    """Tool entry point: the passages, or {"error": {...}} (never raises). `retriever` is for tests;
+    `statements_first=False` drops the statements-first layer of the default stack (the A4 ablation)."""
     args = SearchArgs(query=query, ticker=ticker, fiscal_year=fiscal_year, fiscal_period=fiscal_period, form=form,
                       item=item, k=k)
     scope = corpus_scope()
@@ -178,10 +189,11 @@ def search_filings(query: str, ticker: str | None = None, fiscal_year: int | Non
         raise ToolError(INVALID_INPUT, str(err)) from err
     check_ticker(filters, scope)
     if retriever is not None:
-        hits = retriever.search(args.query, args.k, filters)
+        hits = without_statements_first(retriever, statements_first).search(args.query, args.k, filters)
     else:
         with _DEFAULT_RETRIEVER_LOCK:
-            hits = default_retriever().search(args.query, args.k, filters)
+            stack = without_statements_first(default_retriever(), statements_first)
+            hits = stack.search(args.query, args.k, filters)
     if not hits:
         raise ToolError(NO_RESULTS, "no passage matched the query and filters; widen the filters or rephrase",
                         filters=filters.active())

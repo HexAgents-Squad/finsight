@@ -655,3 +655,33 @@ def test_a_failed_tokenizer_load_is_not_retried_on_every_count(monkeypatch):
     now[0] += ex.TOKENIZER_RETRY_S
     ex._default_count_tokens("ab")
     assert len(attempts) == 2                                       # retried after TOKENIZER_RETRY_S
+
+
+# ----------------------------------------------------------------------------------------------- ablation A2 (W3-01)
+def run_without_calculator(p: Plan) -> tuple[dict, FakeTools]:
+    tools = FakeTools()
+    node = ex.make_executor(tools, words, calculator=False)        # the node, as agent.nodes.real_nodes builds it
+    state = {"plan": p, "tool_results": [], "tokens": 0, "limits": {"max_steps": 10, "max_tokens": 12_000}}
+    return asyncio.run(node(state)), tools
+
+
+def test_without_the_calculator_the_same_steps_run_and_only_the_calculation_is_skipped():
+    p = plan(fact(year=2023), fact(year=2024), calculation="growth")
+    on, with_calculator = run(p)
+    off, tools = run_without_calculator(p)
+    assert [name for name, _ in with_calculator.calls] == ["get_financial_fact", "get_financial_fact", "calculate"]
+    assert tools.calls == with_calculator.calls[:2]                  # the plan's steps unchanged, calculate never sent
+    assert off["errors"] == [f"executor: growth not calculated: {ex.CALCULATOR_OFF}"]
+    assert off["tool_error"] is None and "stop_reason" not in off and len(off["tool_results"]) == 2
+
+
+def test_without_the_calculator_a_not_reported_fact_is_still_checked_on_its_statement():
+    off, tools = run_without_calculator(plan(fact(period="Q4"), fact(), calculation="difference"))
+    assert [name for name, _ in tools.calls] == ["get_financial_fact", "get_financial_fact", "search_filings"]
+    assert off["errors"] == [f"executor: difference not calculated: {ex.CALCULATOR_OFF}"]
+
+
+def test_without_the_calculator_a_plan_with_no_calculation_is_unchanged():
+    off, tools = run_without_calculator(plan(fact()))
+    on, with_calculator = run(plan(fact()))
+    assert tools.calls == with_calculator.calls and "errors" not in off and "errors" not in on

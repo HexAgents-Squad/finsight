@@ -3,6 +3,8 @@
     SCHEMAS                       [{name, description, parameters}] to give the model (OpenAI function format)
     call_tool(name, arguments)    run a tool from the model's arguments; always returns a result, never raises
     call_tool_async(...)          the same from async code (runs in a worker thread, see below)
+    call_tool(..., statements_first=False)   search_filings without the statements first (the A4 ablation, W3-01);
+                                  a run setting, never one of the model's arguments
     warm_up()                     load the XBRL store, the search index and the embedding model at start-up
 
 call_tool validates the arguments against the tool's own model before calling it, so an unknown or misspelt
@@ -51,8 +53,9 @@ def _parse_arguments(arguments: Any) -> tuple[dict[str, Any] | None, dict[str, A
     return dict(arguments), None
 
 
-def call_tool(name: str, arguments: Mapping[str, Any] | str | None) -> Any:
-    """The tool's result for the model's arguments, or {"error": {...}}; never raises."""
+def call_tool(name: str, arguments: Mapping[str, Any] | str | None, *, statements_first: bool = True) -> Any:
+    """The tool's result for the model's arguments, or {"error": {...}}; never raises. `statements_first` reaches
+    search_filings only (the A4 ablation)."""
     if not isinstance(name, str) or name not in TOOLS:
         return error_result(INVALID_INPUT, f"unknown tool {name!r}; use one of {sorted(TOOLS)}")
     parsed, error = _parse_arguments(arguments)
@@ -63,13 +66,15 @@ def call_tool(name: str, arguments: Mapping[str, Any] | str | None) -> Any:
         args = args_model.model_validate(parsed)
     except ValidationError as err:
         return error_result(INVALID_INPUT, validation_message(err))
-    return fn(**args.model_dump())
+    options = {"statements_first": False} if name == "search_filings" and not statements_first else {}
+    return fn(**args.model_dump(), **options)
 
 
-async def call_tool_async(name: str, arguments: Mapping[str, Any] | str | None) -> Any:
+async def call_tool_async(name: str, arguments: Mapping[str, Any] | str | None, *,
+                          statements_first: bool = True) -> Any:
     """call_tool for async callers: runs in a worker thread, so the search embedder's own event loop never runs
     inside the caller's."""
-    return await asyncio.to_thread(call_tool, name, arguments)
+    return await asyncio.to_thread(call_tool, name, arguments, statements_first=statements_first)
 
 
 @tool_boundary

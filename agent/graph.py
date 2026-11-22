@@ -8,6 +8,10 @@
                        fails again -> finish (verified false; the give-up answer if the injection check failed)
         -> finish      the final AnswerContract (with_verification), the only thing that leaves the graph
 
+Without a critic (Nodes.critic None: the A3 ablation, W3-01, ADR-036) the composer's draft goes straight to finish,
+which returns it unverified ("could not verify: the answer was not checked"), with the same injection check as any
+draft the critic did not pass; nothing else changes.
+
 Any step that finds a limit broken (more tool calls than MAX_AGENT_STEPS, more tokens than MAX_TOKENS_PER_QUERY)
 goes straight to finish, which gives up with a "could not verify: ..." note (docs/spec.md §8 invariant 7, §9).
 The whole run is wrapped in QUERY_TIMEOUT_S. The limits travel in the state (state["limits"]), so routing and the
@@ -88,11 +92,12 @@ class Limits:
 class Nodes:
     """The four nodes. Each takes the state and returns a partial update (never `answer`, `visits` or `limits`;
     only the critic writes `verdict`). `injection_guard` is the run's W2-13 switch for finish: a draft that leaves
-    without the critic's pass is checked for an injection's payload (off only to measure the defences)."""
+    without the critic's pass is checked for an injection's payload (off only to measure the defences). `critic`
+    None builds the graph without one (the A3 ablation: every draft leaves unverified)."""
     planner: Node
     executor: Node
     composer: Node
-    critic: Node
+    critic: Node | None
     injection_guard: bool = True
 
 
@@ -150,6 +155,11 @@ def route_after_composer(state: AgentState) -> str:
     if _stopped(state) or state.get("draft") is None:
         return FINISH
     return CRITIC
+
+
+def route_without_critic(state: AgentState) -> str:
+    """After the composer when the graph has no critic (A3): every draft, or its absence, goes to finish."""
+    return FINISH
 
 
 def route_after_critic(state: AgentState) -> str:
@@ -324,19 +334,23 @@ def cap_history(questions: Sequence[str]) -> list[str]:
 def build_graph(nodes: Nodes | None = None, checkpointer: Any = None) -> Any:
     """The compiled graph. Nodes default to the real ones (agent.nodes.real_nodes, W2-07: the shared endpoint from
     .env and the tools on data/); tests pass agent.stubs.stub_nodes() or fakes. The limits come with each run's
-    state (run())."""
+    state (run()). Nodes without a critic give the A3 graph (composer -> finish)."""
     if nodes is None:
         from agent.nodes import real_nodes
         nodes = real_nodes()
     graph = StateGraph(AgentState)
-    for name in (PLANNER, EXECUTOR, COMPOSER, CRITIC):
+    checked = nodes.critic is not None
+    for name in (PLANNER, EXECUTOR, COMPOSER, *([CRITIC] if checked else [])):
         graph.add_node(name, _counted(name, getattr(nodes, name)))
     graph.add_node(FINISH, _traced_finish(nodes.injection_guard))
     graph.add_edge(START, PLANNER)
     graph.add_conditional_edges(PLANNER, route_after_planner, [EXECUTOR, COMPOSER, FINISH])
     graph.add_conditional_edges(EXECUTOR, route_after_executor, [PLANNER, COMPOSER, FINISH])
-    graph.add_conditional_edges(COMPOSER, route_after_composer, [CRITIC, FINISH])
-    graph.add_conditional_edges(CRITIC, route_after_critic, [EXECUTOR, COMPOSER, FINISH])
+    if checked:
+        graph.add_conditional_edges(COMPOSER, route_after_composer, [CRITIC, FINISH])
+        graph.add_conditional_edges(CRITIC, route_after_critic, [EXECUTOR, COMPOSER, FINISH])
+    else:                                               # A3: no critic, so no send-back either
+        graph.add_conditional_edges(COMPOSER, route_without_critic, [FINISH])
     graph.add_edge(FINISH, END)
     return graph.compile(checkpointer=checkpointer)
 
