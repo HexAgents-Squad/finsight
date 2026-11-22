@@ -23,6 +23,8 @@
 | `context_pack.py` | W1-12: the same retrieved passages for every model in the model comparison → `results/context_pack_gold.jsonl` (80) and `context_pack_refusal.jsonl` (22), with `.meta.json` (docs/week1_plan.txt §2.3) |
 | `refusal_tests.jsonl` | 22 refusal tests: 13 full refusals covering R1–R7, 2 partial refusals, 7 controls that must **not** be refused (incl. a Q4 and a "latest" question) |
 | `injection_tests.jsonl` | 12 prompt-injection tests: text planted in a filing passage + the question + what must not appear in the answer |
+| `run_injection.py` | W2-13: the 12 injection tests on the real agent, defences off and on → `results/injection/` and `results/injection_results.md` (ADR-035) |
+| `score_injection_detector.py` | W2-13: the injection detector alone on `injection_detector_sets.json` (development and held-out phrasings), offline (ADR-035) |
 | `safety_tests.py` / `validate_test_sets.py` | Rules for both sets, and `check_refusal()` / `check_injection()` to score an answer contract (spec §8) |
 
 ## Writing gold questions (everyone)

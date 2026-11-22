@@ -1,4 +1,6 @@
 """Shared test setup."""
+import logging
+
 import pytest
 
 from core.settings import Settings
@@ -15,3 +17,12 @@ def _no_settings_from_the_shell(monkeypatch):
     for name, value in {"LLM_CACHE_DIR": "", "LLM_CONTEXT_TOKENS": "", "LLM_RETRY_BASE_S": "0",
                         "LLM_MIN_INTERVAL_S": "0"}.items():
         monkeypatch.setenv(name, value)
+
+
+@pytest.fixture(autouse=True)
+def _log_record_factory_restored():
+    """api.main.create_app installs the PII log masking process-wide (W2-13, core/pii.py): put the record factory
+    back after each test, so no test sees another test's logging setup."""
+    before = logging.getLogRecordFactory()
+    yield
+    logging.setLogRecordFactory(before)

@@ -189,6 +189,8 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
     """The app. With `graph` it serves that graph with `config` (default ApiConfig()); without, it builds the real
     graph from .env when it starts. `warm_up` runs on a thread at start-up (default tools.registry.warm_up when the
     graph is the real one, else nothing)."""
+    from core.pii import install_log_masking
+    install_log_masking()                       # W2-13: no e-mail or phone number from a question reaches a log
     state = _State(config or ApiConfig(), graph)
 
     @asynccontextmanager

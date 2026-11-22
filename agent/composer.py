@@ -64,6 +64,7 @@ from agent.critic_checks import (
 )
 from agent.executor import STATEMENT_OF_QUERY, STATEMENT_TITLES, call_key, checked_section_call
 from agent.guided import CompletionClient, GuidedReply, ask_guided
+from agent.injection import IGNORED_NOTE, tampered
 from agent.state import AgentState, Plan, ToolCall, ToolResult
 from core.figures import Figure, figures, located_figures
 from core.spec import Unit
@@ -192,6 +193,8 @@ class Evidence:
     passages: list[dict[str, Any]] = field(default_factory=list)         # search hits, numbered P1, P2 ...
     checked: list[dict[str, Any]] = field(default_factory=list)          # the statement a not-reported fact was
                                                                          # checked on (one hit each, W2-07)
+    removed: int = 0                                                     # passages left out: a sentence in
+                                                                         # them addresses an AI system (W2-13)
 
     @property
     def empty(self) -> bool:
@@ -283,8 +286,11 @@ def _is_statement_heading(line: str, title: re.Pattern[str]) -> bool:
     return "consolidated" in line.lower() or re.sub(r"\([^)]*\)", "", line).isupper()
 
 
-def gather(state: AgentState) -> Evidence:
-    """The current plan's evidence. Facts are kept once per (company, metric, year, period, duration)."""
+def gather(state: AgentState, *, injection_guard: bool = True) -> Evidence:
+    """The current plan's evidence. Facts are kept once per (company, metric, year, period, duration). With the
+    injection guard (W2-13, the default), a passage with any sentence addressed to an AI system is left out whole
+    (agent/injection.tampered): the model never sees it and no figure in it can be used, and the answer comes from
+    the remaining sources (docs/spec.md §6.3)."""
     plan = state.get("plan")
     results = list(state.get("tool_results") or [])
     evidence = Evidence()
@@ -311,6 +317,9 @@ def gather(state: AgentState) -> Evidence:
                 chunk = hit.get("chunk_id") if isinstance(hit, dict) else None
                 if chunk and chunk not in seen_chunks and len(evidence.passages) < MAX_PASSAGES:
                     seen_chunks.add(chunk)
+                    if injection_guard and tampered(str(hit.get("text", ""))):
+                        evidence.removed += 1                    # quarantined whole: nothing of it is shown
+                        continue
                     evidence.passages.append(hit)
     fact_values = [row["value"] for row in evidence.facts]
     for result in reversed(results):    # the latest calculation the plan asks for (none if None), over its figures
@@ -763,15 +772,28 @@ def _feedback(state: AgentState) -> list[str]:
     return [str(v) for v in verdict.as_violations()]
 
 
-async def compose(state: AgentState, llm: CompletionClient, *, llm_model: str | None = None) -> ComposeResult:
-    """The composer's work for one draft (see the module docstring)."""
+async def compose(state: AgentState, llm: CompletionClient, *, llm_model: str | None = None,
+                  injection_guard: bool = True) -> ComposeResult:
+    """The composer's work for one draft (see the module docstring). When the injection guard left passages out
+    because they address an AI system, the draft says so in its notes (docs/spec.md §6.3)."""
     plan = state.get("plan")
     if plan is None:                                     # the graph routes a failed plan to finish, not here
         return ComposeResult(AnswerContract(answer=NOTHING_FOUND, verified=False, refused=False),
                              ["composer: no plan to answer from"])
     if plan.refuse:
         return ComposeResult(refusal_draft(plan, state.get("entities")))
-    evidence = gather(state)
+    evidence = gather(state, injection_guard=injection_guard)
+    result = await _compose_from(state, llm, evidence, llm_model=llm_model)
+    if evidence.removed:
+        if IGNORED_NOTE not in result.draft.notes:
+            result.draft = result.draft.model_copy(update={"notes": [*result.draft.notes, IGNORED_NOTE]})
+        result.notes.append(f"composer: {evidence.removed} passage(s) with text addressed to an AI system left out")
+    return result
+
+
+async def _compose_from(state: AgentState, llm: CompletionClient, evidence: Evidence, *,
+                        llm_model: str | None = None) -> ComposeResult:
+    """A draft from `evidence` (compose, after the refusal and no-plan cases)."""
     if evidence.empty:
         draft, notes = fallback_draft(state, evidence)
         return ComposeResult(draft, ["composer: the plan fetched nothing to answer from", *notes])
@@ -834,11 +856,12 @@ def trimmed_draft(state: AgentState, evidence: Evidence,
     return draft, notes, dropped
 
 
-def make_composer(llm: CompletionClient, *, llm_model: str | None = None) -> Any:
-    """The composer node for agent.graph.Nodes(composer=...)."""
+def make_composer(llm: CompletionClient, *, llm_model: str | None = None, injection_guard: bool = True) -> Any:
+    """The composer node for agent.graph.Nodes(composer=...). `injection_guard=False` only for the W2-13 measurement
+    of the defences (eval/run_injection.py, the "before" run)."""
 
     async def composer(state: AgentState) -> dict[str, Any]:
-        result = await compose(state, llm, llm_model=llm_model)
+        result = await compose(state, llm, llm_model=llm_model, injection_guard=injection_guard)
         update: dict[str, Any] = {"draft": result.draft, "tokens": result.tokens}
         if result.notes:
             update["errors"] = result.notes
