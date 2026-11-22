@@ -204,6 +204,12 @@ def embedding_rows() -> tuple[list[str], list[list[str]]]:
 
 
 def week1_adrs() -> list[list[str]]:
+    return adrs_between(WEEK1_FIRST_DAY, WEEK1_LAST_DAY, "Week 1")
+
+
+def adrs_between(first: tuple[int, int], last: tuple[int, int], label: str) -> list[list[str]]:
+    """The ADRs dated from `first` to `last` (month, day) as (ADR, date, first sentence, status) rows (W2-14 reuses
+    it for Week 2)."""
     rows = []
     for line in read(REPO / "docs" / "decisions.md").splitlines():
         if not line.startswith("| ADR-") or line.startswith("| ADR-0xx"):
@@ -212,13 +218,13 @@ def week1_adrs() -> list[list[str]]:
         if len(c) != 7:                                 # a '|' inside a cell would shift the Status column
             raise SourceError(f"docs/decisions.md: {c[0]} has {len(c)} cells, not 7")
         m = re.match(r"(\d+) (\w{3})", c[1])
-        if not m or not WEEK1_FIRST_DAY <= (MONTHS.get(m.group(2), 0), int(m.group(1))) <= WEEK1_LAST_DAY:
+        if not m or not first <= (MONTHS.get(m.group(2), 0), int(m.group(1))) <= last:
             continue
         decision = re.split(r"(?<=\.)\s(?=[A-Z(`])", c[3], maxsplit=1)[0]      # the first full sentence
         rows.append([c[0], c[1], decision if len(decision) <= 160 else decision[:157].rstrip() + "...",
                      c[6].split(";")[0].split("(")[0].strip()])
     if not rows:
-        raise SourceError("docs/decisions.md: no ADR dated in Week 1")
+        raise SourceError(f"docs/decisions.md: no ADR dated in {label}")
     return sorted(rows)
 
 
