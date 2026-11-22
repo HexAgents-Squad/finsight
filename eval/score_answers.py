@@ -19,6 +19,9 @@ Outputs:
                                            agent's own checks (W2-11). An agent run's evidence is what its tools
                                            returned (runs file `tool_calls`), and a citation must name one of
                                            those sources; it never saw the packs' passages or earlier answers
+    eval/results/agent_ablations.md        W3-01: the ablation runs (A2-A4: meta `ablation`, `ablation_of`) next to
+                                           the run they switch a component off in (A1), paired with it, and how
+                                           many answers each changed; they are kept out of agent_baselines.md
 With --questions dev the development questions are scored instead (no refusal tests; the development pack) and
 everything goes to eval/results/dev/, report dev_baselines.md: tuning the W1-09 prompts never reads gold scores.
 Optional input: eval/results/grading/judge_<run_id>.jsonl ({"id", "score": 0|1|2, "reason"}), LLM-as-judge scores
@@ -53,6 +56,10 @@ Grading sheet: every answer a human must decide (task "grade": summaries, undeci
 it as text), in key order, model names hidden ([Pn] markers and reasoning removed). A grader's `final` on a
 "label" row overturns the automatic verdict (counted in the report). Re-running keeps what was entered; a graded
 row whose answer changed or is no longer needed stays as task "stale".
+Shared grades (W3-01): an ablation's answer that is word for word its reference run's answer to the same question,
+with the same automatic verdict and suggested label, takes the reference row's sheet key (share_grades), so it is
+graded once and the graders see only the answers the switch changed. A changed answer gets its own row; the graders'
+agreement (table 7) counts a shared grade once, under the reference.
 Exit codes: 0 = scored, 1 = invalid input files, 2 = no runs found.
 """
 from __future__ import annotations
@@ -92,11 +99,13 @@ SCORES_DIR, GRADING_DIR = RESULTS_DIR / "scores", RESULTS_DIR / "grading"
 REPORT_NAME = "model_comparison.md"
 BASELINE_REPORT, DEV_REPORT = "prompting_baselines.md", "dev_baselines.md"
 AGENT_REPORT = "agent_baselines.md"                  # W2-11: the agent runs (A1, ...) next to B0 and S1-S3
+ABLATION_REPORT = "agent_ablations.md"               # W3-01: the ablations (A2-A4) next to A1, paired with it
 DEV_DIR = RESULTS_DIR / "dev"
 B0_REFERENCE = "M1_qwen3-8b_rag_think-off_b0-v1"     # the zero-shot run the W1-09 strategies are compared with
 REPORT_TITLES = {REPORT_NAME: "Model comparison (W1-08 scorer)",
                  BASELINE_REPORT: "Prompting baselines B0 / S1 / S2 / S3 on Qwen3-8B (W1-09)",
                  AGENT_REPORT: "The agent (A1) next to B0 and S1 / S2 / S3 on Qwen3-8B (W2-11)",
+                 ABLATION_REPORT: "Ablations A2 / A3 / A4: the agent with one component off, paired with A1 (W3-01)",
                  DEV_REPORT: "Prompting baselines on the development set (W1-09 tuning; not a result)"}
 SHEET_NAME, KEY_NAME = "grading_sheet.csv", "grading_key.csv"
 START, END = "<!-- GENERATED:START (eval/score_answers.py) -->", "<!-- GENERATED:END -->"
@@ -550,14 +559,42 @@ def score_run(meta: RunMeta, records: list[RunRecord], questions: dict[str, Ques
 
 
 # --------------------------------------------------------------------------------------------- grading sheet
+def ablation_of(meta: RunMeta) -> str | None:
+    """The run an ablation switches a component off in (W3-01: its meta's `ablation_of`), or None."""
+    reference = (meta.model_extra or {}).get("ablation_of")
+    return reference if isinstance(reference, str) and reference else None
+
+
+def share_grades(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]]) -> None:
+    """An ablation's answer that is word for word its reference run's answer to the same question, with the same
+    answer type, automatic verdict and suggested label (which reads the run's own evidence), takes the reference
+    answer's sheet key: one row, graded once, the grade and label applied to both, and marked `shared_grade` (so the
+    graders' agreement counts it once, under the reference). Anything else keeps its own key."""
+    scored_by_run = {meta.run_id: scored for meta, _, scored in runs}
+    for meta, _, scored in runs:
+        reference = ablation_of(meta)
+        if reference is None:
+            continue
+        if reference not in scored_by_run:
+            raise ValueError(f"{meta.run_id} is an ablation of {reference}, which is not in the runs directory")
+        ref = {s["id"]: s for s in scored_by_run[reference]}
+        for s in scored:
+            r = ref[s["id"]]
+            same = ("model_answer", "answer_type", "correct", "suggested_label")
+            if all(s[k] == r[k] for k in same):
+                s.update(sheet_key=r["sheet_key"], shared_grade=True)
+
+
 def sheet_rows(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]], questions: dict[str, Question]) -> list[dict]:
-    """Answers a human must decide (grade) and wrong answers to label, ordered by key (stable, model-blind)."""
-    rows = []
+    """Answers a human must decide (grade) and wrong answers to label, ordered by key (stable, model-blind); a key
+    two runs share (share_grades) is one row, under the first run that has it."""
+    rows, seen = [], set()
     for meta, _, scored in runs:
         for s in scored:
             task = GRADE if s["correct"] is None else LABEL if s["correct"] is False else None
-            if task is None:
+            if task is None or s["sheet_key"] in seen:
                 continue
+            seen.add(s["sheet_key"])
             q = questions[s["id"]]
             rows.append({"key": s["sheet_key"], "task": task, "question": q.question, "gold_answer": q.gold_answer,
                          "model_answer": s["model_answer"], "suggested_label": s["suggested_label"] or "",
@@ -797,7 +834,8 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     out += table("### 7. Human grades: the two graders, and the LLM judge on summaries", "Measure", names)
     cells: dict[str, list[str]] = {k: [] for k in ("g_agree", "g_kappa", "agree", "kappa")}
     for _, sc in runs:
-        graders = [tuple(s["grader_grades"]) for s in sc if s.get("grader_grades")]       # before they talked
+        # before they talked; a grade an ablation shares with its reference run counts once, under the reference
+        graders = [tuple(s["grader_grades"]) for s in sc if s.get("grader_grades") and not s.get("shared_grade")]
         judged = [(s["human_grade"], s["judge_score"]) for s in sc
                   if s["answer_type"] == "summary" and s.get("human_grade") is not None
                   and s.get("judge_score") is not None]
@@ -859,9 +897,11 @@ def paired_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     if len(runs) < 2:
         return ""
     (ref_meta, ref), others = runs[0], runs[1:]
-    which = "the run" if any(m.context == "agent" for m, _ in others) else "the strategy"
-    out = table(f"### 10. Paired with {ref_meta.run_id} (B0): questions right only with {which} / only with "
-                f"B0, two-sided sign test", "Answers", [m.run_id for m, _ in others])
+    which = "the ablation" if any(ablation_of(m) for m, _ in others) else \
+        "the run" if any(m.context == "agent" for m, _ in others) else "the strategy"
+    short = "B0" if ref_meta.run_id == B0_REFERENCE else ref_meta.run_id.split("_", 1)[0]
+    out = table(f"### 10. Paired with {ref_meta.run_id} ({short}): questions right only with {which} / only with "
+                f"{short}, two-sided sign test", "Answers", [m.run_id for m, _ in others])
     by_id = {s["id"]: s for s in ref}
     for label, types in {**REPORT_TYPES, "All decided answers": ANSWER_TYPES}.items():
         cells = []
@@ -910,11 +950,36 @@ def agent_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     return "\n".join(out) + "\n"
 
 
+def ablation_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """W3-01: per ablation, what it switched off and which answers it changed from its reference run (runs[0])."""
+    (ref_meta, ref), ablations = runs[0], runs[1:]
+    by_id = {s["id"]: s for s in ref}
+    out = table(f"### 12. What each ablation changed from {ref_meta.run_id}", "Measure", [m.run_id for m, _ in ablations])
+    rows: dict[str, list[str]] = {k: [] for k in (
+        "component switched off", "answers that differ from the reference's (text)",
+        "of those: right both times / right only now / right only before / wrong both times / undecided",
+        "changed answers by type (numeric, entity, summary, refusal and not reported)")}
+    for meta, sc in ablations:
+        changed = [s for s in sc if s["model_answer"] != by_id[s["id"]]["model_answer"]]
+        rows["component switched off"].append(str((meta.model_extra or {}).get("ablation", "?")))
+        rows["answers that differ from the reference's (text)"].append(f"{len(changed)}/{len(sc)}")
+        pairs = [(s["correct"], by_id[s["id"]]["correct"]) for s in changed]
+        counts = [sum(a is x and b is y for a, b in pairs) for x, y in ((True, True), (True, False), (False, True),
+                                                                        (False, False))]
+        counts.append(sum(a is None or b is None for a, b in pairs))
+        rows["of those: right both times / right only now / right only before / wrong both times / undecided"].append(
+            " / ".join(map(str, counts)))
+        rows["changed answers by type (numeric, entity, summary, refusal and not reported)"].append(
+            ", ".join(str(sum(s["answer_type"] in types for s in changed)) for types in REPORT_TYPES.values()))
+    out += [f"| {k} | " + " | ".join(v) + " |" for k, v in rows.items()]
+    return "\n".join(out) + "\n"
+
+
 def write_report(text: str, path: Path) -> None:
     block = f"{START}\n{text}{END}"
     title = REPORT_TITLES.get(path.name, REPORT_TITLES[REPORT_NAME])
-    placeholder = {REPORT_TITLES[REPORT_NAME]: "(written for W1-15)",
-                   REPORT_TITLES[AGENT_REPORT]: "(written for W2-11)"}.get(title, "(written for W1-09)")
+    placeholder = {REPORT_TITLES[REPORT_NAME]: "(written for W1-15)", REPORT_TITLES[AGENT_REPORT]: "(written for W2-11)",
+                   REPORT_TITLES[ABLATION_REPORT]: "(written for W3-01)"}.get(title, "(written for W1-09)")
     old = path.read_text(encoding="utf-8") if path.exists() else \
         f"# {title}\n\n{START}\n{END}\n\n## Interpretation\n\n{placeholder}\n"
     if START not in old or END not in old:
@@ -929,7 +994,8 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]
     for; the W1-09 baselines put B0 (M1) next to the strategy runs (S1-S3); a development-set scoring has one
     report with every run."""
     strategy_runs = [r for r in runs if r[0].run_id.startswith("S")]
-    agent_runs = [r for r in runs if r[0].run_id.startswith("A")]
+    agent_runs = [r for r in runs if r[0].run_id.startswith("A") and not ablation_of(r[0])]
+    ablation_runs = [r for r in runs if ablation_of(r[0])]
     if dev:
         return {DEV_REPORT: report(runs) + strategy_table(runs) + agent_table(runs)}
     out = {}
@@ -945,6 +1011,14 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]]) -> dict[str, str]
     if agent_runs:                              # W2-11: B0 first (the paired table's reference), S1-S3, the agent
         compared = reference + strategy_runs + agent_runs
         out[AGENT_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared)
+    if ablation_runs:                           # W3-01: the reference (A1) first, then A2-A4 in run-id order
+        references = {ablation_of(m) for m, _ in ablation_runs}
+        reference = [r for r in runs if r[0].run_id in references]
+        if len(references) != 1 or not reference:
+            raise ValueError(f"the ablations need one reference run in the same runs directory, not {sorted(references)}")
+        compared = reference + ablation_runs
+        out[ABLATION_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared) + \
+            ablation_table(compared)
     return out
 
 
@@ -1003,6 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
             meta, records = read_run(path)
             check_packs(meta, pack_files)
             runs.append((meta, records, score_run(meta, records, questions, packs, matchers)))
+        share_grades(runs)                      # W3-01: an ablation's unchanged answer is graded once
         grading = args.out_dir / GRADING_DIR.name
         entered = write_sheet(sheet_rows(runs, questions), grading)
         scores_dir = args.out_dir / SCORES_DIR.name

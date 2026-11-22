@@ -733,3 +733,42 @@ def test_the_calculator_schema_explains_every_operation_and_the_unit():
         assert op in props["operation"]["description"]
     assert "margin" in props["operation"]["description"] and "Leave out (null)" in props["unit"]["description"]
     assert "current assets" not in props["operation"]["description"]           # gold B15's own definition
+
+
+# --- ablation A4 (W3-01): search without the statements first ----------------------------------------------------------
+
+def test_without_statements_first_the_search_uses_the_layer_below_on_the_same_index(monkeypatch):
+    from retrieval.statement import StatementFirstIndex
+    base = FakeRetriever([hit("plain")])
+    stack = StatementFirstIndex(base)
+    monkeypatch.setattr(search_filings, "default_retriever", lambda: stack)
+    query = "total net sales"                                  # a figure question: the statements layer would act
+    assert search_filings.search_filings(query, fiscal_year=2025, fiscal_period="FY", statements_first=False)
+    assert base.calls == [(query, 5, Filters(None, 2025, "FY", None, None))]           # one plain search
+    base.calls.clear()
+    search_filings.search_filings(query, fiscal_year=2025, fiscal_period="FY")
+    assert [f.item for _, _, f in base.calls] == [None, "Item 8"]                      # A1: all, then the statement Item
+    assert search_filings.without_statements_first(base, False) is base                 # nothing to remove
+
+
+def test_statements_first_is_a_run_setting_the_model_cannot_send():
+    args = {"query": "revenue", "statements_first": False}
+    assert error_type(registry.call_tool("search_filings", args)) == "invalid_input"
+    assert "statements_first" not in json.dumps(search_filings.SCHEMA)
+
+
+def test_the_registry_passes_statements_first_to_the_search_only(monkeypatch):
+    seen = {}
+    monkeypatch.setitem(registry.TOOLS, "search_filings",
+                        (lambda **kw: seen.setdefault("search", kw), *registry.TOOLS["search_filings"][1:]))
+    monkeypatch.setitem(registry.TOOLS, "calculate",
+                        (lambda **kw: seen.setdefault("calculate", kw), *registry.TOOLS["calculate"][1:]))
+    registry.call_tool("search_filings", {"query": "revenue"}, statements_first=False)
+    registry.call_tool("calculate", {"operation": "sum", "inputs": [1, 2]}, statements_first=False)
+    assert seen["search"]["statements_first"] is False and "statements_first" not in seen["calculate"]
+    seen.clear()
+    asyncio.run(registry.call_tool_async("search_filings", {"query": "revenue"}))
+    assert "statements_first" not in seen["search"]                              # A1's calls are exactly as before
+    seen.clear()
+    asyncio.run(registry.call_tool_async("search_filings", {"query": "revenue"}, statements_first=False))
+    assert seen["search"]["statements_first"] is False

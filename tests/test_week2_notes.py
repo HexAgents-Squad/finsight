@@ -149,7 +149,7 @@ def test_the_second_rounds_agreement_the_note_cites_is_the_sheets():
     from eval import score_answers as sa
     assert "(60 grades, kappa\n0.89, 133 labels)" in w2.NOTE.read_text(encoding="utf-8")
     run_of = {r["key"]: r["run_id"] for r in csv.DictReader((sa.GRADING_DIR / sa.KEY_NAME).open(encoding="utf-8"))}
-    second = [r for r in gr.load(gr.SHEET) if run_of[r["key"]][0] in "SA"]
+    second = [r for r in gr.load(gr.SHEET) if run_of[r["key"]][0] == "S" or run_of[r["key"]].startswith("A1_")]
     pairs = [(int(r["grader_1"]), int(r["grader_2"])) for r in second if r["task"] == sa.GRADE]
     labels = [r for r in second if r["task"] == sa.LABEL and r["failure_label"]]
     assert len(pairs) == 60 and round(gr.kappa(pairs), 2) == 0.89 and len(labels) == 133

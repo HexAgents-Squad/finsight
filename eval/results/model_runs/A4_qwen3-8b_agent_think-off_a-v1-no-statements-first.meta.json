@@ -1,0 +1,41 @@
+{
+  "run_id": "A4_qwen3-8b_agent_think-off_a-v1-no-statements-first",
+  "model": "Qwen/Qwen3-8B",
+  "endpoint": "hosted",
+  "context": "agent",
+  "thinking": false,
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "prompt_version": "planner-v1 + composer cb0c35b7bcf2",
+  "context_pack": "context_pack_gold.jsonl + context_pack_refusal.jsonl (questions and earlier turns only)",
+  "context_pack_sha256": {
+    "context_pack_gold.jsonl": "028cd87c5721dc5bb4058112746dc9d455d706a8064416f4f07cf1f51c77bca9",
+    "context_pack_refusal.jsonl": "2ed6aa48a069ca4662556c5d118cd59fc5d404f909eaf9f99e4bb8ea39ac6aba"
+  },
+  "planner_prompt_sha256": "8b792fa82ea7f88399aecb226390f457f8393380fb2c999f43933c1caf601925",
+  "composer_prompt_sha256": "cb0c35b7bcf25ad54bf0d9947f370e3a723fbf375e691a2bd997cc5ea38a2579",
+  "limits": {
+    "max_steps": 10,
+    "max_tokens": 12000,
+    "timeout_s": 60.0
+  },
+  "retrieval": {
+    "embed_model": "bge-small-en-v1.5",
+    "rerank": false,
+    "chunks": "C3",
+    "fusion": "hybrid RRF",
+    "statements_first": false
+  },
+  "ablation": "no-statements-first",
+  "ablation_of": "A1_qwen3-8b_agent_think-off_a-v1",
+  "reply_cache": true,
+  "questions": "gold",
+  "requests": {
+    "live": 18,
+    "cache_hits": 171,
+    "http_retries": 0
+  },
+  "git_commit": "3dbc75708694d57f4d9847061412f89df84a725e",
+  "started": "2026-11-22T09:04:43+00:00",
+  "finished": "2026-11-22T09:06:06+00:00"
+}

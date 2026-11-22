@@ -1,7 +1,7 @@
 """The executor node (W2-04): run the plan's tool steps, then the plan's calculation, within the run's limits.
 
-    make_executor(call_tool=None, count_tokens=None)   -> the node for agent.graph.Nodes(executor=...)
-    execute(state, call_tool, count_tokens=None)       the work (tests pass a fake call_tool and counter)
+    make_executor(call_tool=None, count_tokens=None, calculator=True)  -> the node for agent.graph.Nodes(executor=...)
+    execute(state, call_tool, count_tokens=None, calculator=True)      the work (tests pass a fake caller and counter)
     calculation_call(op, results)                      the calculate call ADR-025 asks for (fetched figures)
     checked_section_call(result)                       the statement a "not reported" fact was checked on (W2-07)
 
@@ -60,6 +60,10 @@ duration; the same figure fetched twice counts once; a not_reported fact is a pl
   date; difference and sum pass the shared unit.
 Anything else (too few figures, several series for growth, a count or mix the operation cannot take) means no
 calculation and a note in `errors`, never a guessed pair: the composer then answers from the fetched figures.
+
+`calculator=False` is the A2 ablation (W3-01, ADR-036): the calculation is never run, with a note
+(CALCULATOR_OFF), exactly as when a calculation is skipped for another reason; the plan, its steps and the checked
+statement are unchanged, so the run measures what the calculator adds and nothing else.
 """
 from __future__ import annotations
 
@@ -88,6 +92,7 @@ CHARS_PER_TOKEN_FLOOR = 2       # core/tokens.py: filing tables run at 2.2 chara
 ANSWERS = frozenset({NOT_REPORTED, UNDEFINED})       # typed results that answer the question: no replan
 TRANSIENT = frozenset({SERVICE_UNAVAILABLE})         # tools/base.py: "retry later": a repeat is sent once more
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
+CALCULATOR_OFF = "the calculator is switched off (ablation A2)"
 PAIR_OPERATIONS = frozenset({"ratio", "percent", "growth", "difference", "cagr"})   # tools.calculator: two inputs
 OVER_TIME = frozenset({"growth", "cagr"})            # one series, always chronological
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}   # within a fiscal year (the year ends with Q4)
@@ -329,9 +334,11 @@ def checked_section_call(result: ToolResult) -> ToolCall | None:
 
 
 # ----------------------------------------------------------------------------------------------- node
-async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None) -> dict[str, Any]:
+async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None, *,
+                  calculator: bool = True) -> dict[str, Any]:
     """One executor round (see the module docstring). Returns the new results, the round's tool error (None when
-    it had none), and a stop_reason / notes when a guard or the calculation needs saying."""
+    it had none), and a stop_reason / notes when a guard or the calculation needs saying. `calculator=False`: the
+    plan's calculation is not run (the A2 ablation)."""
     plan: Plan | None = state.get("plan")
     if plan is None or plan.refuse:
         return {}
@@ -395,7 +402,9 @@ async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenC
         if is_error(result):                           # a new error: the graph replans once, then "not found"
             return _update(state, new, result.error_type, notes, None)
     calc_error: str | None = None
-    if plan.calculation:
+    if plan.calculation and not calculator:
+        notes.append(f"executor: {plan.calculation} not calculated: {CALCULATOR_OFF}")
+    elif plan.calculation:
         call, why = calculation_call(plan.calculation, used)
         lost = [c for c in failed_before if c.name in FACT_TOOLS]
         if lost:
@@ -431,12 +440,14 @@ def _update(state: AgentState, new: list[ToolResult], tool_error: str | None, no
     return update
 
 
-def make_executor(call_tool: ToolCaller | None = None, count_tokens: TokenCounter | None = None) -> Any:
+def make_executor(call_tool: ToolCaller | None = None, count_tokens: TokenCounter | None = None, *,
+                  calculator: bool = True) -> Any:
     """The executor node for agent.graph.Nodes(executor=...); `call_tool` defaults to the tool registry and
-    `count_tokens` to core.tokens.count_tokens (offline tests pass their own)."""
+    `count_tokens` to core.tokens.count_tokens (offline tests pass their own). `calculator=False` is the A2
+    ablation: the plan's calculation is never run."""
     caller = call_tool or _default_call_tool
 
     async def executor(state: AgentState) -> dict[str, Any]:
-        return await execute(state, caller, count_tokens)
+        return await execute(state, caller, count_tokens, calculator=calculator)
 
     return executor

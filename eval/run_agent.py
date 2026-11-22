@@ -3,6 +3,7 @@
     python eval/run_agent.py                       # A1 on gold + refusal tests -> eval/results/model_runs/
     python eval/run_agent.py --max-requests 400    # stop before the 401st live chat request (cache hits are free)
     python eval/run_agent.py --questions dev       # the 15 development questions -> eval/results/dev/model_runs/
+    python eval/run_agent.py --ablation no-critic  # W3-01: A1 with one component off (A2-A4, below)
 
 The questions and their earlier turns come from the context packs (the same 102 records B0 and S1-S3 answered),
 but the agent retrieves for itself: the packs' passages are never shown to it. A follow-up (gold category F) gets
@@ -20,6 +21,16 @@ has a record; a run stopped by the budget is re-run with a larger one and replay
 the reply cache for free. After a fix to how a run is recorded or mapped (not to the agent), `--replay-of <the
 earlier runs file>` re-derives the file from the cache and keeps the earlier run's timings, requests and dates,
 only if every answer and tool call is the same; the meta's `replay` says when and with which code.
+The ablations (W3-01, ADR-036): `--ablation` turns one component off on the A1 configuration, everything else
+unchanged (prompts, limits, retrieval settings, questions), so each is paired with A1 question by question:
+- A2 `no-calculator`: the executor never runs the plan's calculation (the planner still names it; the composer
+  gets the fetched figures without a calculated one);
+- A3 `no-critic`: no critic node; the composer's draft is the answer, unverified, with no send-back;
+- A4 `no-statements-first`: search_filings on plain hybrid retrieval, without the statements-first layer.
+Each has its own run id (ABLATIONS); the meta records `ablation` and `ablation_of` (always A1's committed run id,
+RUN_ID: an ablation is paired with that run), and a replay is refused across runs, so an ablation never borrows A1's
+timings. Gold only: the development set has no A1 run to pair with, so `--ablation` with `--questions dev` is refused. Unchanged calls replay from the reply cache, so a
+run costs only the requests its switch changes. Nodes given by a test are used as they are (no switch applied).
 Exit codes: 0 = every question answered, 1 = some questions raised (recorded as errors), 2 = setup or budget.
 """
 from __future__ import annotations
@@ -57,6 +68,24 @@ RUNS_DIR = RESULTS_DIR / "model_runs"
 DEV_RUNS_DIR = RESULTS_DIR / "dev" / "model_runs"
 RUN_ID = "A1_qwen3-8b_agent_think-off_a-v1"
 CALCULATOR = "calculate"
+
+
+@dataclass(frozen=True)
+class Ablation:
+    """One W3-01 ablation: its run number, what it switches off, and its agent.nodes.real_nodes switch."""
+    number: str
+    off: str
+    switch: str
+
+    def run_id(self, name: str) -> str:
+        return f"{self.number}{RUN_ID[2:]}-{name}"          # A1's id with the ablation's number and name
+
+
+ABLATIONS = {
+    "no-calculator": Ablation("A2", "the calculator", "calculator"),
+    "no-critic": Ablation("A3", "the critic", "critic"),
+    "no-statements-first": Ablation("A4", "statements-first retrieval", "statements_first"),
+}
 
 
 @dataclass(frozen=True)
@@ -291,7 +320,7 @@ def git_commit() -> str | None:
 
 
 def run_meta(run_id: str, pack_files: list[Path], settings: Any, limits: Any, started: str, totals: dict[str, int],
-             questions: str) -> RunMeta:
+             questions: str, ablation: str | None = None) -> RunMeta:
     from agent import composer, planner
     return RunMeta(
         run_id=run_id, model=settings.LLM_MODEL, endpoint="hosted", context="agent",
@@ -301,15 +330,16 @@ def run_meta(run_id: str, pack_files: list[Path], settings: Any, limits: Any, st
         context_pack_sha256={p.name: sha256(p) for p in pack_files},
         planner_prompt_sha256=planner.PROMPT_SHA256, composer_prompt_sha256=composer.PROMPT_SHA256,
         limits={"max_steps": limits.max_steps, "max_tokens": limits.max_tokens, "timeout_s": limits.timeout_s},
-        # search_filings' fixed stack (ADR-017): C3 chunks, hybrid RRF, statements first (no switch yet; A4 adds one)
+        # search_filings' stack (ADR-017): C3 chunks, hybrid RRF, statements first (off only in the A4 ablation)
         retrieval={"embed_model": settings.EMBED_MODEL, "rerank": settings.RETRIEVAL_RERANK, "chunks": "C3",
-                   "fusion": "hybrid RRF", "statements_first": True},
+                   "fusion": "hybrid RRF", "statements_first": ablation != "no-statements-first"},
+        **({"ablation": ablation, "ablation_of": RUN_ID} if ablation else {}),     # A1's meta keeps its exact keys
         reply_cache=settings.LLM_CACHE_DIR is not None, questions=questions, requests=totals,
         git_commit=git_commit(), started=started, finished=datetime.now(UTC).isoformat(timespec="seconds"))
 
 
 REPLAY_SAME = ("run_id", "model", "questions", "context_pack_sha256", "planner_prompt_sha256",
-               "composer_prompt_sha256", "limits")      # what makes two files the same run
+               "composer_prompt_sha256", "limits", "ablation")      # what makes two files the same run
 
 
 def carry_over(records: list[RunRecord], previous: Path, meta: RunMeta) -> tuple[list[RunRecord], dict[str, Any]]:
@@ -343,15 +373,35 @@ def carry_over(records: list[RunRecord], previous: Path, meta: RunMeta) -> tuple
     return out, prev_meta
 
 
-async def run_real(items: list[Item], settings: Any, max_requests: int, limits: Any,
-                   run_id: str) -> tuple[list[RunRecord], str | None, Any]:
+def ablation_nodes(llm: Any, ablation: str | None, call_tool: Any = None) -> Any:
+    """The real nodes on `llm`, with the ablation's one component off (none: A1's nodes)."""
     from agent.nodes import real_nodes
+    switches = {ABLATIONS[ablation].switch: False} if ablation else {}
+    return real_nodes(llm, call_tool, **switches)
+
+
+async def run_real(items: list[Item], settings: Any, max_requests: int, limits: Any, run_id: str,
+                   ablation: str | None = None) -> tuple[list[RunRecord], str | None, Any]:
     from core.llm import LLMClient
     from eval.run_demo import BudgetedLLM
     async with LLMClient(settings) as client:
         budgeted = BudgetedLLM(client, max_requests)
-        records, stopped = await run_items(items, real_nodes(budgeted), limits, run_id, usage=client.usage)
+        records, stopped = await run_items(items, ablation_nodes(budgeted, ablation), limits, run_id,
+                                           usage=client.usage)
         return records, stopped, client.usage
+
+
+def run_id_problem(run_id: str, ablation: str | None) -> str | None:
+    """Why `run_id` cannot name this run, or None: it must be an agent run id, and its number is the ablation's
+    (A2-A4) exactly when the run is that ablation, so a file's name never hides a switched-off component."""
+    if not (re.fullmatch(RUN_ID_PATTERN, run_id) and run_id.startswith("A") and "_agent_" in run_id):
+        return f"not an agent run id (like {RUN_ID})"
+    number, taken = run_id.split("_", 1)[0], {a.number: name for name, a in ABLATIONS.items()}
+    if ablation and number != ABLATIONS[ablation].number:
+        return f"the {ablation} ablation's run id starts with {ABLATIONS[ablation].number}"
+    if not ablation and number in taken:
+        return f"{number} is the {taken[number]} ablation's number; pass --ablation {taken[number]}"
+    return None
 
 
 def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = None, limits: Any = None) -> int:
@@ -359,7 +409,10 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     safe_console()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--questions", choices=("gold", "dev"), default="gold")
-    ap.add_argument("--run-id", default=RUN_ID)
+    ap.add_argument("--ablation", choices=sorted(ABLATIONS),
+                    help="W3-01: switch one component off (A2-A4); the run id defaults to the ablation's")
+    ap.add_argument("--run-id", help=f"default {RUN_ID}, or the ablation's (e.g. "
+                    f"{ABLATIONS['no-critic'].run_id('no-critic')})")
     ap.add_argument("--max-requests", type=int, default=400, help="live chat requests this run may send")
     ap.add_argument("--out-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_RUNS_DIR})")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
@@ -367,12 +420,18 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
                     "cache after a runner fix, keeping its timings and cost (refused unless every answer and tool "
                     "call is the same)")
     args = ap.parse_args(argv)
+    ablation = ABLATIONS[args.ablation] if args.ablation else None
+    args.run_id = args.run_id or (ablation.run_id(args.ablation) if ablation else RUN_ID)
+    if problem := run_id_problem(args.run_id, args.ablation):
+        print(f"--run-id {args.run_id!r}: {problem}", file=sys.stderr)
+        return 2
+    if ablation and args.questions != "gold":
+        print(f"--ablation {args.ablation}: an ablation is paired with A1's gold run, so it runs on the gold questions "
+              "only", file=sys.stderr)
+        return 2
     dev = args.questions == "dev"
     out_dir = args.out_dir or (DEV_RUNS_DIR if dev else RUNS_DIR)
     pack_files = [args.pack_dir / DEV_PACK] if dev else [args.pack_dir / GOLD_PACK, args.pack_dir / REFUSAL_PACK]
-    if not (re.fullmatch(RUN_ID_PATTERN, args.run_id) and args.run_id.startswith("A") and "_agent_" in args.run_id):
-        print(f"--run-id {args.run_id!r} is not an agent run id (like {RUN_ID})", file=sys.stderr)
-        return 2
     try:
         items = load_items(pack_files)
         from agent.graph import Limits
@@ -387,7 +446,7 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     # A replay must come from the reply cache: one live request at most (the first miss), and then nothing is written
     budget = 1 if args.replay_of else args.max_requests
     if nodes is None:
-        records, stopped, usage = asyncio.run(run_real(items, settings, budget, limits, args.run_id))
+        records, stopped, usage = asyncio.run(run_real(items, settings, budget, limits, args.run_id, args.ablation))
         # chat requests only: a search embeds its query through the search tool's own embedder, not this client
         totals = {"live": usage.calls, "cache_hits": usage.cache_hits, "http_retries": usage.http_retries}
     else:                                           # given nodes (a test): no client, no requests
@@ -402,7 +461,7 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
               f"--max-requests: the answered questions replay from the reply cache)", file=sys.stderr)
         return 2
     from eval.run_models import write_run  # the runners' one writer: meta, then records, never half a file
-    meta = run_meta(args.run_id, pack_files, settings, limits, started, totals, args.questions)
+    meta = run_meta(args.run_id, pack_files, settings, limits, started, totals, args.questions, args.ablation)
     if args.replay_of:
         try:
             records, prev = carry_over(records, args.replay_of, meta)
