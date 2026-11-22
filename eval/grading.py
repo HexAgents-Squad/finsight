@@ -3,6 +3,7 @@
 Usage:
     python eval/grading.py copies --names Chandra Amresh --out DIR   # one blind copy of the sheet per grader
     python eval/grading.py handout --out FILE                        # passages for the "grade" rows (markdown)
+    python eval/grading.py handout --questions dev2 --sheet S --key K --out FILE   # the development set v2 (W3-02)
     python eval/grading.py check --grader 1 FILE                     # one returned copy, as soon as it arrives
     python eval/grading.py merge --g1 FILE --g2 FILE [--write]       # both copies -> the repo's sheet
     python eval/grading.py examples                                  # rows noted "example" -> failure_examples.md
@@ -36,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.settings import REPO_ROOT  # noqa: E402
-from eval.context_pack import GOLD_PACK  # noqa: E402
+from eval.context_pack import DEV2_PACK, GOLD_PACK  # noqa: E402
 from eval.score_answers import (  # noqa: E402
     GRADE,
     GRADING_DIR,
@@ -214,12 +215,13 @@ def agent_evidence(runs_dir: Path, run_ids: set[str]) -> dict[str, list[tuple[st
 
 
 def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: bool = False,
-            runs_dir: Path | None = None) -> str:
+            runs_dir: Path | None = None, dev: bool = False) -> str:
     """Markdown: for every question with a "grade" row, the question, the gold answer and the passages a RAG run
     saw, passages from the gold source first; where an agent run (A1, ...) has a grade row for the question, also
     what its tools returned (it searched for itself). It names no model: a question's passages are the same for
     every RAG run (the closed-book run saw none), and questions appear in sheet order. pending: only the ungraded
-    rows'. `runs_dir` holds the agent runs files (default eval/results/model_runs)."""
+    rows'. `runs_dir` holds the agent runs files (default eval/results/model_runs). dev: `gold_file` is a development
+    set (its dev- ids)."""
     rows = base_rows(sheet, pending)
     keyed = {r["key"]: (r["run_id"], r["id"]) for r in csv.DictReader(key.open(encoding="utf-8"))}
     ids = {k: qid for k, (_, qid) in keyed.items()}
@@ -228,7 +230,11 @@ def handout(sheet: Path, key: Path, pack_file: Path, gold_file: Path, pending: b
     retrieved = agent_evidence(runs_dir or RESULTS_DIR / "model_runs",
                                {keyed[k][0] for k in graded & agent_rows})
     agent_questions = {keyed[k][1] for k in graded & agent_rows}
-    gold = {i.id: i for i in validate_file(gold_file).items}
+    if dev:
+        from eval.validate_dev_set import DevItem
+        gold = {i.id: i for i in validate_file(gold_file, model=DevItem).items}
+    else:
+        gold = {i.id: i for i in validate_file(gold_file).items}
     packs = {p["id"]: p for p in (json.loads(x) for x in pack_file.read_text(encoding="utf-8").splitlines() if x)}
     seen, out = [], ["# Passages for the grade rows (W1-14)", "",
                      "The passages the models with passages were given (the closed-book model saw none). Use them to "
@@ -359,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--out", type=Path, required=True, help="a folder outside the repo (copies are not committed)")
     h = sub.add_parser("handout", help="passages for the grade rows, as markdown")
     h.add_argument("--out", type=Path, required=True)
+    h.add_argument("--questions", choices=("gold", "dev2"), default="gold",
+                   help="dev2: the development set v2's questions, pack and runs (W3-02; pass its --sheet and --key)")
     k = sub.add_parser("check", help="one grader's returned copy, on its own")
     k.add_argument("--grader", type=int, choices=(1, 2), required=True)
     k.add_argument("file", type=Path)
@@ -381,7 +389,13 @@ def main(argv: list[str] | None = None) -> int:
             print("\n".join(copies(args.sheet, args.names, args.out, args.pending)))
         elif args.cmd == "handout":
             args.out.parent.mkdir(parents=True, exist_ok=True)
-            replace_file(args.out, handout(args.sheet, args.key, RESULTS_DIR / GOLD_PACK, GOLD_FILE, args.pending))
+            if args.questions == "dev2":
+                from eval.validate_dev_set import DEV2_FILE
+                text = handout(args.sheet, args.key, RESULTS_DIR / DEV2_PACK, DEV2_FILE, args.pending,
+                               RESULTS_DIR / "dev_v2" / "model_runs", dev=True)
+            else:
+                text = handout(args.sheet, args.key, RESULTS_DIR / GOLD_PACK, GOLD_FILE, args.pending)
+            replace_file(args.out, text)
             print(f"written: {args.out}")
         elif args.cmd == "check":
             print("\n".join(check(args.sheet, args.file, args.grader, args.pending)))
