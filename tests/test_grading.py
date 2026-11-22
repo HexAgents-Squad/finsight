@@ -363,10 +363,13 @@ def test_a_pending_merge_fills_those_rows_and_leaves_the_graded_ones(graded_shee
         gr.merge(graded_sheet, g1, g2)                                       # without --pending: refused
 
 
-def test_the_committed_sheet_has_a_pending_round_for_the_strategy_and_agent_runs():
-    """The W1-09 strategy runs' rows and the W2-11 agent run's (A1) wait for one --pending round; every M row is
-    graded."""
-    todo = gr.pending_rows(gr.load(gr.SHEET))
+def test_the_committed_sheet_has_the_second_round_merged():
+    """W2-12: the --pending round for the W1-09 strategy runs (S1-S3) and the W2-11 agent run (A1) is merged, so no
+    row waits for a grader; every S and A grade row carries both graders' grades, and every label row a label."""
+    sheet = gr.load(gr.SHEET)
+    assert gr.pending_rows(sheet) == []
     key = {r["key"]: r["run_id"] for r in csv.DictReader((sa.GRADING_DIR / sa.KEY_NAME).open(encoding="utf-8"))}
-    runs = {key[r["key"]][0] for r in todo}
-    assert todo and runs == {"S", "A"}
+    second = [r for r in sheet if key[r["key"]][0] in "SA"]
+    assert len(second) == 193
+    assert all(r["grader_1"] and r["grader_2"] for r in second if r["task"] == sa.GRADE)
+    assert all(r["failure_label"] for r in second if r["task"] == sa.LABEL)
