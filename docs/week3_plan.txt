@@ -1,139 +1,176 @@
 ==============================================================================================================
-WEEK 3 PLAN: EVALUATE, HARDEN, SHIP (22 – 27 NOV 2026)
+WEEK 3 PLAN: EVALUATE, IMPROVE, HARDEN, SHIP (22 – 27 NOV 2026)
 ==============================================================================================================
-Jira: one Week 3 epic and tickets W3-01 … W3-09 (keys assigned on creation; dependencies as "Blocks" links).
+Jira: one Week 3 epic and tickets W3-01 … W3-14 (keys assigned on creation; dependencies as "Blocks" links).
+v2 (22 Nov): adds the accuracy track (development set v2, stronger critic checks, facts coverage, summaries, refusal
+edge cases, one integrated gold run A5), the optimization ticket and the mapping to the assessment criteria.
 
-Goal: the submission on Thu 26 Nov, a day before the 27 Nov deadline (no extensions): a reproducible repository
-that starts with one command, the full evaluation of the agent with its ablations and failure taxonomy, the trace
-dashboard with real runs, the responsible-AI evidence, and the 12-page report. Code freeze: Wed 25 Nov, 18:00.
-Presentation and live demo: Sat 5 Dec (preparation 28 Nov – 5 Dec).
+Goal: the strongest submission we can make by Thu 26 Nov, a day before the 27 Nov deadline (no extensions): a
+measurably better agent (version A5), a faster and leaner system, the full evaluation with ablations and the failure
+taxonomy, the trace dashboard, the responsible-AI evidence, a one-command deployment and the 12-page report, with
+every assessment criterion mapped to a ticket. Code freeze: Wed 25 Nov, 18:00 (code only; the report and the
+documents are finished on Thu 26). Presentation and live demo: Sat 5 Dec (preparation 28 Nov – 5 Dec).
 
 Everything below that does not exist yet is planned; the ticket that creates it is named.
 
-1. What Week 2 measured, and what it decides for Week 3
-=========================================================
-(docs/report/week2_results_note.md, eval/results/agent_baselines.md, ADR-034, ADR-035)
-- The agent is the system to ship: 42/48 numeric answers against B0's 16/48, all 102 answers 44 / 8 against B0
-  (p ≈ 4×10⁻⁷), median 5.0 s and p95 12.4 s within the 60 s limit. Week 3 measures it, it does not rebuild it.
-- What each part contributes is not measured yet: the plan's "compensating for a small model" section needs the
-  ablations (W3-01) on the frozen A1 configuration, each paired with A1 by the sign test.
-- The critic verified all 102 answers and caught none of the 16 wrong ones: six metric misses its metric check
-  does not see (A06, B04, B08, B14, B15, C08, each on a line item the facts tool has no metric for), three refusal
-  errors (RF10, RF13, RF14) and seven weak summaries. W3-02 fixes the checks and the metrics as a new version, A5,
-  tuned on the development set first; A1 stays the baseline the ablations are measured against.
-- Summaries are the weakest answer type (5/12, B0 8/12); the LLM judge is lenient against the graders (kappa
-  0.10-0.29), so any new summary score needs the graders.
-- Safety holds at the agent level (0/12 injections, planted text kept from the model, PII masked); W3-05 shows it
-  through the API, the way a user meets the system.
+1. Where the marks are, and how each is earned
+==============================================
+Published weights: technical depth and rigour 30 %, punctuality and consistent progress 25 %, a working deployed
+system 20 %, report and demo 25 %. The detailed rubric is not recorded yet; confirming it with the mentor in the
+Week 2 review is the first action, and the plan is adjusted to it.
+- Technical depth and rigour: ablations ("compensating for a small model"), an improved agent measured honestly
+  against A1 and B0 with paired tests, a stronger critic, the failure taxonomy, the held-out safety evaluation
+  (W3-01 … W3-09).
+- Punctuality and progress: every week's note and plan on time, the freeze on 25 Nov, the submission a day early,
+  one reviewed PR per ticket, the mentor sessions used (W3-12, W3-13).
+- Working deployed system: one-command Docker deployment, a clean-machine run, latency within budget, safety shown
+  through the API, a live demo with a backup recording (W3-07, W3-10, W3-11, W3-14).
+- Report and demo: 12 pages following the outline, every figure traceable, a rubric checklist, a rehearsed
+  10-minute demo (W3-12, W3-14).
+The project plan's deliverables checklist (§13) maps the same way: repository (W3-11, W3-13), trace dashboard and
+evaluation report with the failure taxonomy (W3-09), responsible-AI section (W3-10), 12-page report (W3-12), demo
+and backup recording (W3-14).
 
-2. Tickets, owners and execution order
+2. Accuracy: targets, and how we reach them without overfitting
+===============================================================
+(docs/report/week2_results_note.md, eval/results/agent_baselines.md, ADR-034)
+- A1, all 102 answers decided and human-graded: short numeric 42/48, short entity 10/10, summary 5/12, refusal and
+  not reported 29/32. Its 16 wrong answers: six metric misses on line items the facts tool has no metric for (A06,
+  B04, B08, B14, B15, C08), three refusal errors (RF10, RF13, RF14) and seven weak summaries; its critic verified
+  all 102 answers and caught none of them.
+- Targets for A5: numeric >= 46/48 (W3-04 facts coverage, W3-03 substitution and operation checks), entity 10/10
+  kept, summary >= 8/12, B0's level (W3-05, W3-03's summary check), refusal and not reported 32/32 (W3-06, W3-03's
+  refusal checks).
+- Integrity rules: the failure classes were found on A1's gold run, so every fix is a class-level change, developed
+  and tuned on a development set v2 of new questions for each class (W3-02; none from gold, each verified by a second
+  member); gold-v1 stays frozen; A5 runs on gold once, with its configuration pinned before the run; A1 stays the
+  reported baseline, and A5 is final only if no answer type is worse than A1. The report states all of this. Targets
+  are aims: A5 is reported as measured.
+
+3. The stronger critic (W3-03): deterministic checks, no model call
+===================================================================
+- Metric vocabulary: deposits, noninterest expense, current assets and liabilities, segment figures, net sales vs
+  total revenue, the medical cost ratio (named_metrics found no metric in some questions and checked nothing).
+- Operation rule: every fetched metric a calculation uses is named by the question or is its implied denominator
+  (a ratio passed as soon as its revenue denominator was named).
+- Substitution rule: a different metric is either named as such in the answer, or the draft goes back.
+- "Not reported" check: flagged when a fetched fact or cited passage holds the asked metric.
+- Period and duration: the stated period (fiscal year, quarter; 3 vs 12 months) matches the question and the values.
+- Summary check: a "what drove X" answer names X and cites the asked filing's MD&A.
+- Refusal checks: a partial refusal answers its factual part; the rule follows the spec's priority (R2 before R3).
+Every check has passing and failing tests and a mutation check, flags no correct development answer, and reports
+its catch rate on dev-v2's seeded failures (target at least 80 %). The ablation without the critic (W3-01) measures
+what it adds.
+
+4. Optimization (W3-07): time, cost, code, and the team's time
+==============================================================
+- Latency and cost: profile time and tokens per node and tool from the A1 runs and traces; trim the composer's
+  evidence to what it can cite; skip the composer's re-ask when no figure is missing; warm the index and clients at
+  API start-up; show the answer-cache hit rate. Target: median <= 5.0 s and <= 3,000 tokens per question (A1's), no
+  accuracy loss; any prompt change re-pinned and re-measured on the development set.
+- Code: dead code removed (e.g. the unused AgentState.messages), the longest functions simplified, docstrings
+  current, ruff clean, test coverage of agent/, core/ and api/ reported.
+- Test time: the corpus scans (about 8 minutes) behind an opt-in marker, the default suite under 2 minutes.
+- The team's time: a 15-minute stand-up at 10:00 each day; the accuracy and optimization PRs merged by Tue 14:00 so
+  A5 can run on Tuesday evening; reviews within 3 hours; the report written in parallel from Monday.
+
+5. Tickets, owners and execution order
 ======================================
-+----+-------+---------------------------------------------------------+-----------------+-----------------+--------+------------------+
-| #  | Ticket| Summary                                                 | Owner           | Backup          | Due    | Depends on       |
-+====+=======+=========================================================+=================+=================+========+==================+
-| 1  | W3-01 | Ablations A2-A4 on the gold set (no calculator, no      | Alok            | Amresh          | Mon 23 | –                |
-|    |       | critic, no statements-first retrieval)                  |                 |                 |        |                  |
-| 2  | W3-02 | Critic metric checks and the missing facts: version A5  | Amresh          | Giridharan      | Tue 24 | –                |
-| 3  | W3-03 | Evaluation report with the failure taxonomy             | Anirudh         | Alok            | Wed 25 | W3-01 (W3-02)    |
-| 4  | W3-04 | Trace dashboard with real runs (Langfuse)               | Anirudh         | Giridharan      | Mon 23 | –                |
-| 5  | W3-05 | Safety, refusal and PII tests through the API;          | Chandra Shekhar | Amresh          | Tue 24 | –                |
-|    |       | responsible-AI evidence                                 |                 |                 |        |                  |
-| 6  | W3-06 | Docker Compose, Makefile, reproducible README           | Giridharan      | Chandra Shekhar | Tue 24 | –                |
-| 7  | W3-07 | 12-page technical report                                | Alok (editor)   | Chandra Shekhar | Thu 26 | W3-01 … W3-06    |
-| 8  | W3-08 | Code freeze, release v1.0 and the submission            | Alok            | Amresh          | Thu 26 | all              |
-| 9  | W3-09 | Demo script, backup recording, presentation draft       | Chandra Shekhar | Anirudh         | Thu 26 | W3-04, W3-06     |
-+----+-------+---------------------------------------------------------+-----------------+-----------------+--------+------------------+
-Critical path: W3-01 → W3-03 → W3-07 → W3-08 (W3-02, W3-04, W3-05 and W3-06 in parallel on Mon-Tue). W3-03 uses A5
-only if W3-02's gold run is scored by Tue 24 evening; otherwise the report shows A1 and lists A5 as future work. Every
-member writes the report section of their Week 1-3 work (W3-07) and presents it on 5 Dec. The freeze (Wed 25, 18:00)
-is a code freeze: the report and the submission documents are finished on Thu 26.
++----+-------+---------------------------------------------------------+-----------------+-----------------+-----------+------------------+
+| #  | Ticket| Summary                                                 | Owner           | Backup          | Due       | Depends on       |
++====+=======+=========================================================+=================+=================+===========+==================+
+| 1  | W3-01 | Ablations A2-A4 (no calculator, no critic, no           | Alok            | Amresh          | Mon 23    | –                |
+|    |       | statements-first retrieval)                             |                 |                 |           |                  |
+| 2  | W3-02 | Development set v2: questions for each failure class    | Alok            | Amresh          | Mon 23 13h| –                |
+| 3  | W3-03 | Critic: stronger deterministic checks                   | Amresh          | Alok            | Tue 24 14h| W3-02            |
+| 4  | W3-04 | Facts coverage: the line items the facts tool lacked    | Giridharan      | Amresh          | Tue 24 14h| W3-02            |
+| 5  | W3-05 | Summary answers: the right section, the asked quantity  | Chandra Shekhar | Alok            | Tue 24 14h| W3-02            |
+| 6  | W3-06 | Planner refusal edge cases                              | Amresh          | Chandra Shekhar | Tue 24 14h| W3-02            |
+| 7  | W3-07 | Optimization: latency, tokens, code and test time       | Anirudh         | Giridharan      | Tue 24 14h| –                |
+| 8  | W3-08 | Version A5: integrated, dev-checked, one gold run,      | Alok            | Amresh          | Wed 25 12h| W3-03 … W3-07    |
+|    |       | graded and scored                                       |                 |                 |           |                  |
+| 9  | W3-09 | Trace dashboard and the evaluation report with the      | Anirudh         | Alok            | Wed 25    | W3-01 (W3-08)    |
+|    |       | failure taxonomy                                        |                 |                 |           |                  |
+| 10 | W3-10 | Safety, refusal and PII through the API; responsible-AI | Chandra Shekhar | Amresh          | Tue 24    | –                |
+| 11 | W3-11 | Docker Compose, Makefile and a reproducible README      | Giridharan      | Chandra Shekhar | Tue 24    | –                |
+| 12 | W3-12 | 12-page report, checked against the assessment criteria | Alok (editor)   | Chandra Shekhar | Thu 26    | W3-01, W3-08…11  |
+| 13 | W3-13 | Code freeze, release v1.0 and the submission            | Alok            | Amresh          | Thu 26    | all              |
+| 14 | W3-14 | Demo script, backup recording, presentation draft       | Anirudh         | Chandra Shekhar | Thu 26    | W3-09, W3-11     |
++----+-------+---------------------------------------------------------+-----------------+-----------------+-----------+------------------+
+Critical path: W3-02 → W3-03 / W3-04 / W3-05 / W3-06 → W3-08 (A5) → W3-09 → W3-12 → W3-13; W3-01, W3-07, W3-10 and
+W3-11 in parallel. If A5 misses the Tuesday go / no-go or Wednesday noon, A1 stays final, the report shows A1 with
+the ablations, and A5's fixes are listed as measured on the development set only.
 
-    Sun 22   Week 2 submission (W2-14) · Week 3 tickets created · shared-key budget agreed
-    Mon 23   W3-01 ablation switch and runs (Alok) · W3-04 traced runs (Anirudh) · W3-02 starts (Amresh)
-             W3-05 starts (Chandra) · W3-06 starts (Giridharan) · report sections start (everyone)
-    Tue 24   W3-02 A5 on dev, then once on gold · W3-05 · W3-06 (a second member runs it on a clean machine)
-    Wed 25   W3-03 evaluation report · W3-07 draft · code freeze 18:00 (W3-08)
-    Thu 26   W3-07 final · W3-09 recording · W3-08 tag v1.0 and submit
+    Sun 22   Week 2 submission · Week 3 tickets · shared-key budget agreed · rubric question to the mentor
+    Mon 23   W3-02 dev set v2 by 13:00 · W3-01 ablations · traced runs (W3-09) · W3-03 … W3-07, W3-10, W3-11 start
+             · report sections start (everyone)
+    Tue 24   accuracy and optimization PRs merged by 14:00 · dev-v2 run and go / no-go by 18:00 · A5 gold run
+    Wed 25   A5 graded and scored by noon · evaluation report · report draft · code freeze 18:00
+    Thu 26   final report and rubric checklist · demo recording · tag v1.0 · submit
     Fri 27   deadline (buffer day) · 28 Nov – 5 Dec: slides, two rehearsals, the 5 Dec presentation
 
-3. What each ticket delivers (acceptance in Jira)
-=================================================
-W3-01 Ablations (eval/run_agent.py --ablation, run ids A2-A4). Each turns one component off on the A1
-  configuration, otherwise unchanged (same questions, scorer, tolerances, prompts): A2 no calculator (the composer
-  reads figures, the critic recomputes nothing), A3 no critic (the draft is the answer), A4 no statements-first
-  retrieval (plain hybrid search). Offline tests for the switch; runs through the reply cache (an unchanged call
-  replays free); each scored by eval/score_answers.py and paired with A1 by the sign test in
-  eval/results/agent_ablations.md. A3's expected null result (the critic changed no answer in A1) is itself a
-  finding. Requests: about 170 on the shared key (estimates in eval/results/agent_baselines.md: A2 ~140, since
-  removing the calculator changes the planner's tool list and so every planner call, plus the composer on the 34
-  calculations; A3 ~0, all calls replay; A4 ~30, the composers after a search).
-W3-02 Version A5 (agent/critic.py, tools/financial_facts.py, config/concept_map.yaml): the metric check learns the
-  line items A1 missed (deposits, noninterest expense, current assets and liabilities, segment figures, net sales
-  apart from total revenue, the medical cost ratio); for an operation every fetched metric must be named by the
-  question or be its denominator; SEARCH_ONLY rejects only the substituted metric; the facts tool gains the XBRL
-  metrics it lacked. A new metric changes the tool schemas and so the planner's pinned inputs (ADR-025, ADR-026):
-  re-pin them, and re-extract the XBRL facts if a concept is new. Critic checks first (they need no new data), then
-  the metrics. Tuned on the development set (no gold question read), offline tests on the nine answers' shapes,
-  then one gold run A5 scored next to A1 (about 190 requests) if the development results hold by Tue 24 noon.
-  ADR-036.
-W3-03 Evaluation report (eval/report.py → eval/results/evaluation_report.md, its charts and a PDF): accuracy by
-  answer type per system version (B0 → best strategy → A1 → A5, with the ablations), the failure taxonomy of the
-  plan (retrieval miss, reasoning error, tool-call error, hallucination, refusal error) mapped from the graders'
-  labels and drawn as a stacked bar per version, task completion, tool calls and retries per task, citation
-  accuracy (the cited section contains the fact; project plan §9.2), tokens, latency p50/p95 and cache hit rate.
-  Generated from committed results only (tests, as for the Week 1 and 2 notes).
-W3-04 Trace dashboard: the 10 demo queries and A1's 16 wrong answers run traced in Langfuse (tags q:<id>,
-  run:<run_id>); scripts/trace_dashboard.py output committed in eval/results/traces/; screenshots of the trace list
-  and of one trace (planner → tools → composer → critic) in docs/screenshots/w3-04/; the dashboard link for the
-  submission. Requests: about 60 (the demo and the failures, through the cache where unchanged).
-W3-05 Safety through the API: the 12 injection tests and the 22 refusal tests sent to POST /ask; PII prompts with
-  their API log lines and trace shown masked; rate limit and cache shown (429 with Retry-After, a cache hit);
-  docs/responsible_ai.md (intended use, failure modes, refusals, adversarial tests, human-in-the-loop, limits,
-  with the evidence of each), the report's responsible-AI section. Requests: about 40.
-W3-06 Deployment: docker-compose.yml (api, ui, and Langfuse as an optional profile), the index and XBRL facts mounted
-  as volumes, secrets only in .env; a Makefile (make ingest, index, eval, test, up, down); README steps from a clean
-  clone to a running UI; health checks; a second member brings it up on a clean machine and records the time.
-W3-07 Report (docs/report/final_report.md → PDF, 12 pages, outline in the project plan §13): problem and scope,
-  architecture, data, evaluation design, prompting baselines, retrieval experiments, the agentic layer, compensating
-  for a small model with the ablations, end-to-end results with the failure taxonomy and cost, responsible AI,
-  limitations and future work. Every figure from a committed result; each member writes the section of their work.
-W3-08 Freeze and submission: freeze Wed 25 18:00 (after it, only fixes to submission blockers, each by PR); every
-  generated report current (--check), CI green, gold-v1 unchanged (tag), tag v1.0; the submission package (repo
-  link at v1.0, report PDF, evaluation report, trace dashboard link and screenshots, demo recording) uploaded on
-  Thu 26 and the mentor e-mailed.
-W3-09 Demo: the 10-minute script (project plan §13: architecture, live fact → ratio → comparison → follow-up →
-  refusal → blocked injection, the trace, the results), a recorded backup run, the first slides for 5 Dec.
+6. What each ticket delivers (full text and acceptance in Jira)
+===============================================================
+W3-01 Ablations: eval/run_agent.py --ablation, A2 no calculator, A3 no critic, A4 plain hybrid search; each paired
+  with A1 in eval/results/agent_ablations.md; about 170 requests (agent_baselines.md: A2 ~140, A3 ~0, A4 ~30). ADR-036.
+W3-02 Development set v2: about 25 new questions, at least 8 summaries, the line items outside the 13 metrics,
+  partial refusals and rule edge cases, "not reported" traps; verified by a second member; validate_dev_set.py
+  --final; A1's dev-v2 baseline run.
+W3-03 Critic: the checks in section 3, with tests, mutation checks and the catch rate on dev-v2.
+W3-04 Facts coverage: the missing XBRL concepts in config/concept_map.yaml and the Metric enum, facts re-extracted
+  if a concept is new, the planner's pinned inputs re-pinned (ADR-025, ADR-026) and its dev run repeated.
+W3-05 Summaries: a "what drove X" question searches the asked period's MD&A with X in the query; the answer opens
+  with X's change and the drivers the passage names; tuned on dev-v2 summaries graded by two members.
+W3-06 Refusal edge cases: partial refusals answered in part; rule priority from docs/spec.md §6; worked examples
+  without real figures, from dev-v2 only; the planner re-pinned and its development runs repeated.
+W3-07 Optimization: section 4.
+W3-08 A5: all PRs merged Tue 14:00, dev-v2 run and go / no-go by 18:00, one pinned gold run (about 250 requests),
+  the graders' --pending round on Wed morning, scored and paired with A1 and B0; ADR-037 records the decision.
+W3-09 Trace dashboard (Mon 23: the demo queries and A1's wrong answers traced, scripts/trace_dashboard.py output,
+  screenshots, link; about 60 requests) and eval/report.py: accuracy per version (B0 → best strategy → A1 → A5, with
+  A2-A4), the taxonomy (retrieval miss, reasoning error, tool-call error, hallucination, refusal error) as a stacked
+  bar per version, task completion, tool calls and retries per task, citation accuracy, tokens, latency, cache hits.
+W3-10 Safety through the API: the 12 injection and 22 refusal tests through POST /ask (about 40 requests), PII shown
+  masked in logs and traces, rate limit and cache shown; docs/responsible_ai.md.
+W3-11 Deployment: docker-compose.yml (api, ui, optional Langfuse), volumes for the index and facts, secrets in .env,
+  a Makefile, README steps, a clean-machine run by a second member.
+W3-12 Report: docs/report/final_report.md → PDF, 12 pages, every figure from a committed result, each member's
+  section; docs/report/rubric_checklist.md with the evidence for each criterion and deliverable.
+W3-13 Freeze and submission: freeze Wed 25 18:00; every report current, CI green, gold-v1 unchanged, tag v1.0;
+  the package submitted Thu 26 and the mentor e-mailed.
+W3-14 Demo: the 10-minute script, a recorded backup run on the Docker setup, the first slides, two rehearsals.
 
-4. Process (as in Weeks 1 and 2)
+7. Process (as in Weeks 1 and 2)
 ================================
-- Branches w3/UPGRAD-<key>-<short-desc>; every commit message starts with the Jira key; one review by the
-  ticket's backup; CI green before merge; a clean-clone run before a push.
-- Definition of done: tests offline and fast (fake LLM and fake tools; no key in CI), ruff clean, docs updated,
-  PR reviewed by the backup.
-- gold-v1 stays frozen; prompts are tuned on the development set only and pinned before a gold run; A1 is the
-  frozen baseline of the ablations.
+- Branches w3/UPGRAD-<key>-<short-desc>; every commit message starts with the Jira key; one review by the ticket's
+  backup; CI green before merge; a clean-clone run before a push.
+- Definition of done: tests offline and fast (fake LLM and fake tools; no key in CI), ruff clean, docs updated, PR
+  reviewed by the backup.
+- gold-v1 stays frozen; prompts are tuned on development sets only and pinned before a gold run.
 - The shared key: one run at a time, through the reply cache, announced in the team chat; the week's estimate is
-  about 460 requests (W3-01 170, W3-02 190, W3-04 60, W3-05 40), agreed before the first run.
+  about 900 requests (ablations 170, development runs about 380, the A5 gold run about 250, traces 60, the API
+  safety tests 40), agreed before the first run.
 - Decisions with numbers go into docs/decisions.md (next free ADR: ADR-036; the Week 2 notes stop at ADR-035).
 
-5. Risks
+8. Risks
 ========
 +--------------------------------------------+--------------------------------------------------------------+
 | Risk                                       | Mitigation                                                   |
 +============================================+==============================================================+
-| Shared-key budget or endpoint downtime     | estimate agreed first; replays from the reply cache; A1 and  |
-|                                            | the Week 2 results stand if a run cannot finish              |
-| A5 is worse than A1, or late               | reported as measured; A1 stays the baseline; A5 optional in  |
-|                                            | the report (W3-03) if not scored by Tue 24 evening           |
-| Docker on Windows laptops                  | WSL2; the clean-machine run on W3-06's second laptop         |
-| The report runs late                       | sections start Mon 23; draft Wed 25; editor merges on Thu 26 |
-| A change after the freeze breaks the build | only blocker fixes by PR after 18:00 Wed; tag v1.0 from green |
-| Team availability                          | every ticket has a backup who reviews and can take it over   |
+| A fix makes A5 worse somewhere, or A5 late | Tuesday go / no-go on dev-v2; A1 stays final if A5 regresses |
+|                                            | or misses Wed noon; both reported                            |
+| Overfitting to the gold failures           | class-level fixes, tuned on dev-v2 only, gold run once,      |
+|                                            | disclosed in the report                                      |
+| Shared-key budget or endpoint downtime     | estimate agreed first; replays from the reply cache; the     |
+|                                            | Week 2 results stand                                         |
+| Docker on Windows laptops                  | WSL2; the clean-machine run on a second laptop               |
+| The report runs late                       | sections from Mon 23, draft Wed 25, editor merges Thu 26     |
+| A change after the freeze breaks the build | only blocker fixes by PR after 18:00 Wed; v1.0 from green    |
 +--------------------------------------------+--------------------------------------------------------------+
 
-6. Carried from Week 2
+9. Carried from Week 2
 ======================
 - Jira: move W2-07, W2-08 and W2-11 to Done (their PRs are merged), and close the Week 2 epic UPGRAD-60.
 - The branch w2/UPGRAD-73-safety holds an earlier, unmerged W2-13 attempt ("Phase A", superseded by PR #46): its
   author decides whether to delete it.
-- The trace dashboard has not yet been run on real traces (W3-04).
+- The trace dashboard has not yet been run on real traces (W3-09).

@@ -21,7 +21,7 @@ The provided Qwen3-8B endpoint; a model comparison (Qwen3-8B vs Llama-3.2-3B, wi
 The agentic layer: a LangGraph planner → executor → composer → critic agent on the four tools, memory across turns, Langfuse tracing, a FastAPI service and a Streamlit UI, prompt-injection and PII defences; the 10 demo queries met their expectation and the agent's gold run (A1) got 42/48 numeric answers right against the Week 1 baseline's 16/48. Results: [docs/report/week2_results_note.md](docs/report/week2_results_note.md) (one page) and [docs/report/week2_detailed_results.md](docs/report/week2_detailed_results.md); plan, design and tickets: [docs/week2_plan.txt](docs/week2_plan.txt).
 
 ## Week 3 (22–27 Nov, next)
-Evaluate, harden, ship: ablations, the critic's metric checks, the evaluation report with the failure taxonomy, the trace dashboard, safety tests through the API, Docker Compose, the 12-page report; code freeze 25 Nov, submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt).
+Evaluate, improve, harden, ship: ablations; an improved agent (A5: stronger deterministic critic checks, the missing XBRL metrics, better summaries and refusal edge cases, tuned on a development set v2 and run on gold once); optimization of latency, tokens and code; the evaluation report with the failure taxonomy; the trace dashboard; safety tests through the API; Docker Compose; the 12-page report; code freeze 25 Nov, submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt).
 
 ## Folder structure
 ```
