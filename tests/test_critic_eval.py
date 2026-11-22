@@ -79,3 +79,25 @@ def test_main_refuses_a_replay_that_is_not_a1s_and_writes_nothing(tmp_path, caps
                    limits=LIMITS)
     assert code == 2 and not list(tmp_path.iterdir())               # the scripted drafts are not A1's answers
     assert "differ from A1's recorded answers" in capsys.readouterr().err and len(composed) == 30
+
+
+def test_main_refuses_a_replay_where_a_question_that_reached_the_critic_gives_no_draft(tmp_path, capsys):
+    base = stub_nodes()
+
+    async def no_plan(state):                                       # e.g. a replay that timed out or broke
+        return {"plan": None}
+
+    def nodes(record, current):
+        return replace(base, planner=no_plan, critic=ce.recording_critic(record, current, lambda s: Verdict()))
+
+    settings = SimpleNamespace(MAX_AGENT_STEPS=10, MAX_TOKENS_PER_QUERY=12_000, QUERY_TIMEOUT_S=10)
+    assert ce.main(["--questions", "dev2", "--out-dir", str(tmp_path)], nodes=nodes, settings=settings,
+                   limits=LIMITS) == 2 and not list(tmp_path.iterdir())
+    assert "no draft in the replay where A1's run reached the critic" in capsys.readouterr().err
+
+
+def test_main_refuses_an_embedding_backend_that_would_send_requests(tmp_path, capsys):
+    settings = SimpleNamespace(MAX_AGENT_STEPS=10, MAX_TOKENS_PER_QUERY=12_000, QUERY_TIMEOUT_S=10,
+                               EMBED_BACKEND="openai")
+    assert ce.main(["--questions", "dev2", "--out-dir", str(tmp_path)], settings=settings) == 2
+    assert "EMBED_BACKEND=sentence-transformers" in capsys.readouterr().err and not list(tmp_path.iterdir())

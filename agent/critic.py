@@ -335,7 +335,7 @@ def check_metric_matches_question(question: str, results: list[ToolResult],
         return [Violation(
             "metric",
             f"the question asks for {forbidden!r}, which is not a mapped metric; "
-            f"search_filings must be used for it, not get_financial_fact ({', '.join(metrics)})",
+            f"search_filings must be used, not get_financial_fact ({', '.join(metrics)})",
         )] if metrics else []
     if not wanted:
         return []

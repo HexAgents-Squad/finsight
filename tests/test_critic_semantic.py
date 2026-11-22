@@ -47,7 +47,8 @@ def fact(metric, v, ticker="BAC", year=2023, label=None, concept=None, duration=
 
 def search(*hits):
     return ToolResult(call=ToolCall(name="search_filings", arguments={"query": "q"}),
-                      output=[{"chunk_id": cid, "text": text} for cid, text in hits])
+                      output=[{"chunk_id": cid, "text": text, "citation": f"[{cid.split('_C3')[0]}]"}
+                              for cid, text in hits])
 
 
 def rules(violations):
@@ -63,7 +64,8 @@ def test_a_substituted_line_item_is_flagged_twice_not_stated_and_used_instead():
                      [value("total_assets", 3180151.0)], [xbrl()])
     found = cs.check_line_item(DEPOSITS_Q, [], draft, [fact("total_assets", 3180151.0)])
     assert rules(found) == ["line_item", "line_item"]
-    assert "does not state it" in found[0].message and "total assets fact" in found[1].message
+    assert "does not state it" in found[0].message and "gives total assets instead" in found[1].message
+    assert "say it is not available" in found[1].message                  # what the composer can do on a send-back
 
 
 def test_the_line_item_answered_from_a_passage_passes():
@@ -124,7 +126,7 @@ def test_a_calculation_input_the_question_does_not_name_is_flagged():
     rows = [fact("operating_cash_flow", -19669.0, ticker="C", year=2024, concept="us-gaap:X"),
             fact("revenue", 80722.0, ticker="C", year=2024, concept="us-gaap:Revenues")]
     found = cs.check_operation_inputs(MARGIN_Q, [], draft, rows)
-    assert rules(found) == ["operation"] and "operating cash flow" in found[0].message
+    assert rules(found) == ["inputs"] and "operating cash flow" in found[0].message
 
 
 def test_named_inputs_and_an_implied_revenue_denominator_pass():
@@ -177,7 +179,8 @@ def test_not_found_while_a_retrieved_passage_gives_the_item_is_flagged():
     draft = contract("FinSight did not find this in the indexed filings.")
     passage = search(("UNH_10-K_2023_Item7_C3_0011", "Medical care ratio (a) | 83.2 | 82.0 | 82.6"))
     found = cs.check_not_found(q, [], draft, [passage])
-    assert rules(found) == ["not_found"] and "UNH_10-K_2023_Item7_C3_0011" in found[0].message
+    assert rules(found) == ["not_found"] and "[UNH_10-K_2023_Item7]" in found[0].message          # its source tag
+    assert "83.2" in found[0].message and "C3_0011" not in found[0].message      # the composer never sees chunk ids
     assert cs.check_not_found(q, [], draft, [search(("x", "Medical costs rose with membership."))]) == []
 
 
@@ -361,3 +364,81 @@ def test_the_replay_client_is_cache_only():
     client = ce.cache_only(Client())
     with pytest.raises(ce.CacheMiss):
         asyncio.run(client._fetch({"model": "Qwen/Qwen3-8B"}, "Qwen/Qwen3-8B", None))
+
+
+# ----------------------------------------------------------------------------------------------- PR review follow-ups
+def test_a_partial_question_naming_net_income_with_its_holders_counts_as_a_fact():
+    q = "What was Pfizer's net income attributable to common shareholders in fiscal 2023, and should I buy the stock?"
+    assert rules(cs.check_refusal_rule(q, refused("R1"))) == ["refusal_rule"]
+
+
+def test_the_factual_part_must_be_a_reported_year():
+    q = "What were Goldman Sachs's total net revenues in fiscal 2019, and what will they be in fiscal 2026?"
+    assert cs.check_refusal_rule(q, refused("R2")) == []                  # no reported year: R3 / R2 territory
+
+
+def test_not_found_ignores_a_year_and_text_the_composer_did_not_see():
+    q = "What were Bank of America's total deposits at the end of fiscal 2023?"
+    draft = contract("Bank of America's total deposits are not reported.")
+    year_only = search((chunk(1), "Total deposits in 2023 were discussed in the deposits section."))
+    assert cs.check_not_found(q, [], draft, [year_only]) == []
+    late = search((chunk(2), "x" * 1600 + " Total deposits | 1,923,827"))  # past the 1,500 characters shown
+    assert cs.check_not_found(q, [], draft, [late]) == []
+
+
+def test_net_sales_and_segment_accept_an_answer_that_says_the_figure_is_not_available():
+    q = "What were Costco's net sales in fiscal 2025?"
+    admits = contract("Net sales are not available from the facts tool; Costco's total revenue was $275,235 million.",
+                      [value("revenue", 275235.0, ticker="COST", year=2025)], [xbrl("COST", 2025, "us-gaap:Revenues")])
+    total = fact("revenue", 275235.0, ticker="COST", year=2025, label="total revenues", concept="us-gaap:Revenues")
+    assert cs.check_net_sales(q, [], admits, [total]) == []
+    seg = contract("AWS's own operating income is not available; Amazon's operating income was $36,852 million.",
+                   [value("operating_income", 36852.0, ticker="AMZN")], [xbrl("AMZN")])
+    assert cs.check_segment("What was AWS's operating income in fiscal 2023?", [], seg,
+                            [fact("operating_income", 36852.0, ticker="AMZN")]) == []
+
+
+def test_a_fact_row_without_a_label_is_named_by_its_metric():
+    draft = contract("Bank of America's total assets were $3,180,151 million.", [value("total_assets", 3180151.0)],
+                     [xbrl()])
+    row = fact("total_assets", 3180151.0)
+    row.output["label"] = None
+    found = cs.check_line_item(DEPOSITS_Q, [], draft, [row])
+    assert "None" not in " ".join(v.message for v in found) and "total assets" in found[-1].message
+
+
+def test_a_follow_up_with_nothing_to_inherit_and_a_question_with_no_subject_are_left_alone():
+    assert cs.subject_text("What was it that year?", ["What is FinSight?"], cs.asked_line_items) == \
+        "What was it that year?"
+    assert cs.check_summary("Why did it?", [], contract("x", citations=[filing(1)]), []) == []
+    q = "Why did NVIDIA's Gaming revenue fall in fiscal 2023?"
+    uncited = contract("x", citations=[filing(9, ticker="NVDA", item="Item 7")])          # not in the results
+    assert cs.check_summary(q, [], uncited, [search(GAMING)]) == []
+
+
+def test_in_the_graph_a_refusal_under_the_wrong_rule_is_sent_back_once_and_leaves_unverified():
+    """A refusal is rebuilt from the plan on a send-back (no model call), so a refusal_rule flag cannot be repaired by
+    the composer: the run ends unverified with the flag in its notes, and nothing crashes."""
+    import asyncio
+
+    from agent import graph as g
+    from agent.composer import make_composer
+    from agent.critic import make_critic
+    from agent.state import Plan
+    from agent.stubs import stub_nodes
+
+    class NoModel:
+        async def complete(self, *args, **kwargs):
+            raise AssertionError("a refusal needs no model call")
+
+    async def planner(state):
+        return {"plan": Plan(reasoning="advice", refuse=True, refusal_rule="R1", steps=[]),
+                "entities": Entities(tickers=("AAPL",), years=(2024,), periods=("FY",))}
+
+    nodes = g.Nodes(planner=planner, executor=stub_nodes().executor, composer=make_composer(NoModel()),
+                    critic=make_critic())
+    q = "What was Apple's total revenue in fiscal 2024, and should I buy the stock?"
+    result = asyncio.run(g.run(q, [], graph=g.build_graph(nodes), limits=g.Limits(timeout_s=10)))
+    assert result.state["visits"]["critic"] == 2 and result.state["visits"]["composer"] == 2
+    assert result.answer.refused and not result.answer.verified
+    assert any("partial refusal" in n for n in result.answer.notes)

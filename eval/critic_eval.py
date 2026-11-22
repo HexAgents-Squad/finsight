@@ -3,7 +3,8 @@ ones (false flags), with no new model request.
 
     EMBED_BACKEND=sentence-transformers EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5 \\
         python eval/critic_eval.py --questions dev2        # -> eval/results/critic/critic_dev2.md
-    python eval/critic_eval.py --questions gold             # the regression check on gold (run once, not tuned on)
+    EMBED_BACKEND=sentence-transformers EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5 \
+        python eval/critic_eval.py --questions gold         # the regression check on gold (not tuned on)
 
 Each question goes through A1's graph again (eval/run_agent.py's real nodes: the same planner and composer prompts, the
 tools on data/) up to the composer's first draft. The planner's and composer's model calls are answered by the reply
@@ -11,7 +12,9 @@ cache, so the drafts are A1's own, at no request: the client is cache-only (a mi
 and nothing is written to the cache), so a cache miss stops the run with nothing written (a changed prompt or tool
 output would show as one). Search queries embed through EMBED_BACKEND: set the local
 copy of the embedding model (as above) and no request leaves the machine; it gives the same vectors as the endpoint
-(ADR-038). The critic of this checkout then judges that first draft, and the run stops there: no send-back, so nothing
+(ADR-038). Another backend is refused, since its searches would send requests this tool does not count. The replay's
+time limit is generous (REPLAY_TIMEOUT_S: a cold model load must not stop a question), and a question that reached the
+critic in A1's run but gives no draft in the replay stops the run (a replay that is not A1's). The critic of this checkout then judges that first draft, and the run stops there: no send-back, so nothing
 is re-composed. Each verdict is joined with the run's graded score (eval/results/.../scores/<run>.jsonl, the graders'
 final grades included): a flag on a wrong answer is a catch, a flag on a right one a false flag. An answer the scorer
 leaves undecided is reported apart. The replayed draft is compared with the run's recorded answer where A1's critic
@@ -39,6 +42,8 @@ from eval.run_agent import QUESTION_SETS, RUN_ID, Item, load_items  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 
 OUT_DIR = RESULTS_DIR / "critic"
+REPLAY_TIMEOUT_S = 600.0            # the steps and token limits stay A1's; only the wall clock is relaxed
+LOCAL_EMBEDDINGS = "sentence-transformers"
 SCORE_DIRS = {"gold": RESULTS_DIR / "scores", "dev2": RESULTS_DIR / "dev_v2" / "scores"}
 # Refusal tests scored on the refusal decision only (eval/score_answers.py): "right" says nothing about a figure, so a
 # flag on one may be a catch the score cannot see; the report names them apart
@@ -203,7 +208,12 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     except (ValueError, OSError) as err:
         print(f"setup incomplete: {str(err).splitlines()[0]}", file=sys.stderr)
         return 2
-    limits = limits or Limits.from_settings(settings)
+    if nodes is None and getattr(settings, "EMBED_BACKEND", None) != LOCAL_EMBEDDINGS:
+        print(f"set EMBED_BACKEND={LOCAL_EMBEDDINGS} (and EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5): another "
+              f"backend's searches would send requests", file=sys.stderr)
+        return 2
+    from dataclasses import replace
+    limits = replace(limits or Limits.from_settings(settings), timeout_s=REPLAY_TIMEOUT_S)
     try:
         if nodes is None:
             judged, usage = asyncio.run(run_live(items, settings, limits))
@@ -220,6 +230,12 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     unscored = sorted(set(judged) ^ set(scores))
     if unscored:
         print(f"the replay and the scores cover different questions: {', '.join(unscored)}", file=sys.stderr)
+        return 2
+    lost = sorted(q for q, j in judged.items() if j.answer is None
+                  and (runs[q].get("agent") or {}).get("visits", {}).get("critic", 0) > 0)
+    if lost:
+        print(f"no draft in the replay where A1's run reached the critic: {', '.join(lost)}; nothing written",
+              file=sys.stderr)
         return 2
     differ = same_as_recorded(judged, runs)
     if differ:
