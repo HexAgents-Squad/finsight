@@ -64,10 +64,10 @@
 | Label | A1_qwen3-8b_agent_think-off_a-v1 | A2_qwen3-8b_agent_think-off_a-v1-no-calculator | A3_qwen3-8b_agent_think-off_a-v1-no-critic | A4_qwen3-8b_agent_think-off_a-v1-no-statements-first |
 |---|---|---|---|---|
 | arithmetic_slip | 1 | 0 | 1 | 1 |
-| wrong_line_item | 4 | 2 | 4 | 4 |
+| wrong_line_item | 4 | 6 | 4 | 4 |
 | wrong_company | 0 | 1 | 0 | 0 |
 | over_refusal | 2 | 2 | 2 | 2 |
-| malformed_output | 0 | 26 | 0 | 0 |
+| malformed_output | 0 | 22 | 0 | 0 |
 | incomplete_summary | 7 | 7 | 7 | 4 |
 | wrong_refusal_rule | 2 | 2 | 2 | 2 |
 
@@ -183,10 +183,13 @@ checked on the development set v2 only, and the report must say where the idea c
 **Limits.**
 - Latency: A2-A4 replayed most calls from the cache, which takes no time (A3's median 0.1 s), so their seconds are not
   a cost; compare model calls and tokens.
-- Failure labels (table 6): the graders labelled 26 of A2's 27 wrong answers `malformed_output` ("the asked answer is
-  missing"): not broken output, but the figures without the calculation the calculator would have made. Four of them (B04, B14, B15, C08) also fetched a different line item than the one asked, which the same
-  graders labelled `wrong_line_item` (`arithmetic_slip` for C08) in A1's answers; the labels are theirs and do not
-  affect accuracy.
+- Failure labels (table 6): of A2's 29 wrong numeric answers, one is B08's over-refusal (as in A1), 22 are `malformed_output` ("the asked answer is missing"): not
+  broken output, but the right figures without the calculation the calculator would have made. Six are
+  `wrong_line_item`: A06 (total assets for deposits, the same answer and label as A1's), B02 (gross profit given as
+  the gross margin), and B04, B14, B15 and C08, which fetched a different line item than the one asked (operating cash flow for noninterest expense, Amazon's totals for AWS,
+  total for current assets and liabilities, total revenue for net sales). Those four were first labelled
+  `malformed_output` and relabelled after both graders agreed (22 Nov 2026), matching their A1 labels for B04, B14
+  and B15; A1's C08 keeps its Week 2 label, `arithmetic_slip`. Labels do not affect accuracy.
 - Grader agreement (table 7) counts only each run's own grades: a grade an ablation shares with A1 is counted once,
   under A1. On the ten new grades (A2 4, A4 6; A3 has none) the two graders agreed on all ten. Their 27 labels are
   also identical, note included, so the labels may not have been given independently.
