@@ -66,8 +66,8 @@ a 15-question development set kept apart from gold (W1-06); the answer contract 
 answer scorer with hallucination checks and a failure taxonomy (W1-08); two-grader human grading (W1-14); the
 34 safety tests verified by a second team member (W1-10).
 
-**Open items:** the 36 strategy summaries and 124 wrong strategy answers wait for the graders' second round;
-smoke tests on 4 more laptops and Chandra Shekhar's independent WP2 spot check (W1-10).
+**Open items (all closed in Week 2, W2-12):** the 36 strategy summaries and 124 wrong strategy answers waited for
+the graders' second round; smoke tests on 4 more laptops and Chandra Shekhar's independent WP2 spot check (W1-10).
 
 **Questions for you:** (1) the agent must answer within 60 s: may we keep the reranker and 5-sample voting as
 measured options only? (2) the graders agreed on 7 of 12 Qwen summaries (kappa 0.17): is a third grader or a

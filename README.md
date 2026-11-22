@@ -17,20 +17,25 @@ Built and tested: corpus download and Item-level parsing (`ingest/01`, `02`), XB
 ## Week 1 (10–14 Nov, complete; open items carried into Week 2)
 The provided Qwen3-8B endpoint; a model comparison (Qwen3-8B vs Llama-3.2-3B, with and without retrieval) on short and summary answers, refusals and hallucinations; prompting baselines (zero-shot, few-shot, chain-of-thought with self-consistency, decomposition); retrieval experiments (re-index, question-derived filters, statements first, reranker). Results: [docs/report/week1_results_note.md](docs/report/week1_results_note.md) (one page) and [docs/report/week1_detailed_results.md](docs/report/week1_detailed_results.md); tickets and contracts: [docs/week1_plan.txt](docs/week1_plan.txt).
 
-## Week 2 (16–21 Nov, in progress)
-The agentic layer: a LangGraph planner → executor → critic agent on the four tools, memory across turns, Langfuse tracing, a FastAPI service and a Streamlit UI; exit gate: an end-to-end demo on 10 queries and the agent's first scored run. Plan, design and tickets: [docs/week2_plan.txt](docs/week2_plan.txt).
+## Week 2 (16–22 Nov, complete)
+The agentic layer: a LangGraph planner → executor → composer → critic agent on the four tools, memory across turns, Langfuse tracing, a FastAPI service and a Streamlit UI, prompt-injection and PII defences; the 10 demo queries met their expectation and the agent's gold run (A1) got 42/48 numeric answers right against the Week 1 baseline's 16/48. Results: [docs/report/week2_results_note.md](docs/report/week2_results_note.md) (one page) and [docs/report/week2_detailed_results.md](docs/report/week2_detailed_results.md); plan, design and tickets: [docs/week2_plan.txt](docs/week2_plan.txt).
+
+## Week 3 (22–27 Nov, next)
+Evaluate, harden, ship: ablations, the critic's metric checks, the evaluation report with the failure taxonomy, the trace dashboard, safety tests through the API, Docker Compose, the 12-page report; code freeze 25 Nov, submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt).
 
 ## Folder structure
 ```
 config/        companies.yaml (corpus scope), concept_map.yaml (metric → XBRL tags)
-docs/          spec, decisions (ADRs), week-0 and week-1 plans, report/
+docs/          spec, decisions (ADRs), week 0-3 plans, report/ (the weekly results notes)
 data/          raw/ (SEC filings), sections/ (parsed sections), xbrl/ (structured financial data); not committed
 ingest/        download → parse sections → XBRL facts → chunk → index
 retrieval/     chunking, BM25, dense (Chroma), hybrid fusion (RRF), entities from the question, statements first, cross-encoder reranker
-agent/         (planned) planner, executor, critic, LangGraph graph; prompts/
+agent/         the LangGraph agent: planner, executor, composer, critic, graph, injection defences; prompts/
 tools/         search_filings, get_financial_fact, calculate, compare_periods
-api/           (planned) FastAPI service
-ui/            (planned) Streamlit app
-eval/          gold set (80 questions), evaluation scripts, results
-tests/         unit tests
+core/          LLM and embedding clients, settings, tracing (Langfuse), PII masking
+api/           FastAPI service: POST /ask, GET /health, sessions, cache, rate limit
+ui/            Streamlit chat app (talks to the API only)
+eval/          gold set (80 questions), development and safety sets, runners, scorer, results
+scripts/       command-line tools: ask a question, smoke test, trace dashboard, weekly notes
+tests/         offline unit tests (fake LLM and tools; no key needed)
 ```

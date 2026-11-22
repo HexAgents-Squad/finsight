@@ -60,6 +60,10 @@ Carried over from Week 0 (Jira UPGRAD-41), into W1-10 unless noted:
 | Smoke test against the endpoint on every laptop | everyone | `docs/smoke_tests.md` |
 | Page furniture removed from the section text, full re-index | Chandra Shekhar, Alok | done in W1-04 (ADR-023) |
 
+All carried actions are closed (22 Nov 2026): the test sets were verified in W1-10; the smoke test passed on all five
+laptops and Chandra Shekhar's independent WP2 check was signed in W2-12 (PR #45; `docs/smoke_tests.md`,
+`docs/wp2_spot_check.md`).
+
 ### Next session
 Not recorded. The Week 1 exit gate to show is in `docs/week1_plan.txt`: the model comparison, the prompting
 baseline table, and the retrieval table.

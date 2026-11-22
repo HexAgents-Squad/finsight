@@ -123,6 +123,6 @@ from the committed results by `scripts/week1_notes.py`; the full reports they co
   test, and only differences with p < 0.05 are called significant.
 - The comparison and baselines used oracle company and year filters; W1-05 showed question-derived filters
   equal them on the gold set, but real questions are phrased more freely.
-- Summary grades: two graders agreed on 7 of 12 Qwen summaries (kappa 0.17); the strategy summaries are not graded
-  yet.
+- Summary grades: two graders agreed on 7 of 12 Qwen summaries (kappa 0.17); the strategy summaries were graded in
+  the W2-12 round (`eval/results/prompting_baselines.md`).
 - One frozen prompt per strategy, tuned on 15 development questions.
