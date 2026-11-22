@@ -381,3 +381,26 @@ def test_committed_packs_match_their_inputs_and_the_budget(name, source, ids):
     assert info["evidence_in_pack"] == sum(r["evidence_in_pack"] is True for r in records)
     assert info["with_gold_sources"] == sum(r["evidence_in_pack"] is not None for r in records)
     assert info["max_n_tokens"] == max(r["n_tokens"] for r in records)
+
+
+# --- development set v2 (W3-02) --------------------------------------------------------------------------------
+
+V2 = validate_file(cp.DEV2_FILE, model=cp.DevItem).items
+
+
+def test_every_v2_question_without_companies_is_annotated_as_it_reads():
+    v2_refusals = {i.id: i.question for i in V2 if not i.companies}
+    assert set(v2_refusals) == {k for k in cp.DEV_QUESTION_FILTERS if int(k[-2:]) >= 21}
+    for qid, text in v2_refusals.items():
+        tickers, years, period = cp.DEV_QUESTION_FILTERS[qid]
+        named = (sorted(t for t, pattern in NAME_PATTERNS.items() if pattern.search(text)),
+                 sorted(int(y) for y in YEAR.findall(text)), QUARTER.findall(text))
+        assert named == (sorted(tickers), sorted(years), [period] if period else []), qid
+
+
+def test_the_committed_v2_pack_was_built_from_the_committed_v2_set():
+    meta = json.loads((cp.RESULTS_DIR / cp.DEV2_PACK).with_suffix(".meta.json").read_text(encoding="utf-8"))
+    assert meta["inputs"][cp.DEV2_FILE.name] == cp.sha256(cp.DEV2_FILE) and meta["questions"] == len(V2)
+    pack = [json.loads(x) for x in (cp.RESULTS_DIR / cp.DEV2_PACK).read_text(encoding="utf-8").splitlines()]
+    assert [r["id"] for r in pack] == [i.id for i in V2]
+    assert meta["evidence_in_pack"] == meta["with_gold_sources"]       # every answer's source section retrieved

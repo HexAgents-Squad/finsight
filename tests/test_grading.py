@@ -1,6 +1,7 @@
 """eval/grading.py offline, on the committed grading sheet and key (copied to a temporary folder; the repo's files
 are never written)."""
 import csv
+import json
 import shutil
 
 import pytest
@@ -374,3 +375,17 @@ def test_the_committed_sheet_has_the_second_round_merged():
     assert len(second) == 193
     assert all(r["grader_1"] and r["grader_2"] for r in second if r["task"] == sa.GRADE)
     assert all(r["failure_label"] for r in second if r["task"] == sa.LABEL)
+
+
+def test_the_dev_v2_handout_reads_the_v2_questions_pack_and_runs(tmp_path):
+    """W3-02: the development set v2 has its own sheet; the handout takes its questions, pack and agent runs."""
+    from eval.validate_dev_set import DEV2_FILE
+    sheet, key = sa.DEV2_DIR / "grading" / sa.SHEET_NAME, sa.DEV2_DIR / "grading" / sa.KEY_NAME
+    out = tmp_path / "handout.md"
+    assert gr.main(["handout", "--questions", "dev2", "--sheet", str(sheet), "--key", str(key), "--out", str(out)]) == 0
+    text = out.read_text(encoding="utf-8")
+    grade_ids = {r["id"] for r in csv.DictReader(key.open(encoding="utf-8"))
+                 if r["key"] in {x["key"] for x in gr.load(sheet) if x["task"] == sa.GRADE}}
+    questions = {i["id"]: i["question"] for i in map(json.loads, DEV2_FILE.read_text(encoding="utf-8").splitlines())}
+    assert grade_ids and all(f"## {questions[q]}" in text for q in grade_ids)
+    assert "A1_" not in text                                             # it names no model

@@ -1,0 +1,25 @@
+{
+  "pack_version": "cp-v1",
+  "questions": 30,
+  "retrieval": {
+    "variant": "C3",
+    "retriever": "hybrid",
+    "rrf_k": 60,
+    "candidates": 50,
+    "hits_per_filter": 10,
+    "embedding_model": "bge-small-en-v1.5",
+    "filters": "oracle: gold companies x fiscal years; QUESTION_FILTERS where none"
+  },
+  "token_budget": 4000,
+  "tokenizer": "Qwen/Qwen3-8B@b968826d9c46dd6066d109eabc6255188de91218",
+  "history": "earlier turns with gold answers",
+  "with_passages": 27,
+  "evidence_in_pack": 25,
+  "with_gold_sources": 25,
+  "max_n_tokens": 3947,
+  "inputs": {
+    "dev_set_v2.jsonl": "8589031f46672830c9c5a51dd9d9a08fa3fccee7c35e68f92681a3950f948709",
+    "chunks_C3.jsonl": "b646cae232a7b7ef07010d0a0fcc43415b7456f9e39e330dbee0d05ca7b7f5e5",
+    "bm25_C3.pkl": "1510282e74cc1dddba5962b2359f57cdf1fbdfa941afd7c8286440e0779e8fcb"
+  }
+}

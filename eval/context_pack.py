@@ -4,6 +4,7 @@ Usage:
     python eval/context_pack.py                                   # writes both packs to eval/results/
     python eval/context_pack.py --out-dir /tmp/packs --index-dir /tmp/idx --chunks-dir /tmp/chunks
     python eval/context_pack.py --dev                             # the development-set pack (W1-09 tuning)
+    python eval/context_pack.py --dev2                            # the development set v2 pack (W3-02)
 
 Every model in the comparison (docs/week1_plan.txt §3) answers from exactly the passages in these files, so a
 difference between models is a difference in the models, not in retrieval, and a run needs no index on the
@@ -12,7 +13,8 @@ machine that makes it. Output (docs/week1_plan.txt §2.3):
     eval/results/context_pack_refusal.jsonl    22 refusal tests
     <pack>.meta.json                           settings, tokenizer and input fingerprints (sha256)
 With --dev: eval/results/context_pack_dev.jsonl, the 15 development questions (eval/dev_set.jsonl) only, built
-the same way, for tuning the W1-09 prompts without touching the gold set or the refusal tests.
+the same way, for tuning the W1-09 prompts without touching the gold set or the refusal tests. With --dev2:
+eval/results/context_pack_dev_v2.jsonl, the development set v2 (eval/dev_set_v2.jsonl, W3-02), the same way.
 One line per question:
     {"id", "question", "history": [{"question", "answer"}], "filters": [{"ticker", "fiscal_year", ...}],
      "out_of_corpus": [...], "passages": [{"pid", "chunk_id", "citation", "ticker", "form", "fiscal_year",
@@ -59,7 +61,7 @@ from eval.retrieval_eval import build_query, hit_key  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR, load_retrievers  # noqa: E402
 from eval.safety_tests import RefusalTest  # noqa: E402
 from eval.schema import CorpusScope, DevItem, GoldItem, corpus_scope  # noqa: E402
-from eval.validate_dev_set import DEV_FILE  # noqa: E402
+from eval.validate_dev_set import DEV2_FILE, DEV_FILE  # noqa: E402
 from eval.validate_gold import DEFAULT_PATH as GOLD_PATH  # noqa: E402
 from eval.validate_gold import safe_console, validate_file  # noqa: E402
 from eval.validate_test_sets import SETS, validate_set  # noqa: E402
@@ -77,6 +79,7 @@ HITS_PER_FILTER = 10                                # candidates per search befo
 TOKEN_BUDGET = 4_000
 PASSAGE_SEPARATOR = "\n\n"
 GOLD_PACK, REFUSAL_PACK, DEV_PACK = "context_pack_gold.jsonl", "context_pack_refusal.jsonl", "context_pack_dev.jsonl"
+DEV2_PACK = "context_pack_dev_v2.jsonl"             # W3-02
 META_SUFFIX = ".meta.json"
 QUARTERS = frozenset({"Q1", "Q2", "Q3"})
 ANNUAL = "FY"
@@ -125,6 +128,12 @@ ANNOTATION_READINGS: dict[str, str] = {
 # The development set's questions that list no companies (W1-09 tuning pack), annotated the same way
 DEV_QUESTION_FILTERS: dict[str, tuple[tuple[str, ...], tuple[int, ...], str | None]] = {
     "dev-G01": (("C",), (2025,), None),
+    # development set v2 (W3-02)
+    "dev-G21": (("COST",), (2027,), None),
+    "dev-G22": (("BAC",), (2021,), None),
+    "dev-G23": ((), (), None),
+    "dev-G24": (("PFE",), (), None),
+    "dev-G25": (("KO",), (), None),
 }
 
 TokenCounter = Callable[[str], int]
@@ -299,12 +308,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--index-dir", type=Path, default=INDEX_DIR)
     ap.add_argument("--chunks-dir", type=Path, default=CHUNKS_DIR)
     ap.add_argument("--out-dir", type=Path, default=RESULTS_DIR)
-    ap.add_argument("--dev", action="store_true", help="build only the development-set pack (context_pack_dev.jsonl)")
+    which = ap.add_mutually_exclusive_group()
+    which.add_argument("--dev", action="store_true", help="build only the development-set pack (context_pack_dev.jsonl)")
+    which.add_argument("--dev2", action="store_true", help="build only the development set v2 pack (W3-02)")
     args = ap.parse_args(argv)
 
-    questions_file = DEV_FILE if args.dev else args.gold
+    dev_file, dev_pack = (DEV2_FILE, DEV2_PACK) if args.dev2 else (DEV_FILE, DEV_PACK)
+    args.dev = args.dev or args.dev2
+    questions_file = dev_file if args.dev else args.gold
     if args.dev:
-        rep, tests, errors = validate_file(DEV_FILE, model=DevItem), [], []
+        rep, tests, errors = validate_file(dev_file, model=DevItem), [], []
     else:
         rep = validate_file(args.gold)
         tests, errors = validate_set("refusal", args.refusal)   # the rules validate_test_sets.py (CI) applies
@@ -331,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         tokenizer = f"{QWEN_TOKENIZER}@{QWEN_TOKENIZER_REVISION}"
         chunks_file, bm25_file = chunks_path(VARIANT, args.chunks_dir), index_path(VARIANT, args.index_dir)
         packs = []                                      # both built first: a failure writes neither
-        sets = [(gold_questions(rep.items), questions_file, DEV_PACK)] if args.dev else [
+        sets = [(gold_questions(rep.items), questions_file, dev_pack)] if args.dev else [
             (gold_questions(rep.items), questions_file, GOLD_PACK), (refusal_questions(tests), args.refusal, REFUSAL_PACK)]
         for questions, source, name in sets:
             records = [build_record(q, retriever, count_tokens, scope) for q in questions]

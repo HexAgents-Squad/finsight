@@ -820,3 +820,22 @@ def test_a_shared_row_needs_the_same_text_verdict_and_suggested_label():
     assert [s["sheet_key"] for s in abl] == ["k1", "n2", "n3", "n4"]
     assert [bool(s.get("shared_grade")) for s in abl] == [True, False, False, False]
     assert not any(s.get("shared_grade") for s in ref)                  # the reference owns its rows
+
+
+# ----------------------------------------------------------------------------------------------- dev set v2 (W3-02)
+def test_the_dev_v2_questions_go_to_their_own_directory_with_their_pack(tmp_path):
+    assert run_cli(tmp_path, "--questions", "dev2") == 0
+    meta = RunMeta.model_validate_json((tmp_path / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
+    assert list(meta.context_pack_sha256) == [ra.DEV2_PACK] and meta.questions == "dev2"
+    lines = (tmp_path / f"{ra.RUN_ID}.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 30 and json.loads(lines[0])["id"] == "dev-A21"
+    assert ra.QUESTION_SETS["dev2"][1] == ra.DEV2_RUNS_DIR != ra.DEV_RUNS_DIR
+
+
+def test_a_dev_v2_follow_up_gets_its_earlier_question_only():
+    items = {i.id: i for i in ra.load_items([ra.RESULTS_DIR / ra.DEV2_PACK])}
+    assert items["dev-F21"].history == (items["dev-A24"].question,)
+
+
+def test_an_ablation_is_refused_on_dev_v2_too(tmp_path, capsys):
+    assert run_cli(tmp_path, "--questions", "dev2", "--ablation", "no-critic") == 2 and not list(tmp_path.iterdir())

@@ -135,6 +135,17 @@ fields by `run_agent.b0_answer` (value: the last calculation's result, else the 
 the pinned planner and composer prompts (`tests/test_planner.py`, `tests/test_composer.py`). The new rows of the
 grading sheet are graded in a `--pending` round (`GRADING.md`).
 
+## The development set v2 (W3-02)
+```bash
+python eval/validate_dev_set.py eval/dev_set_v2.jsonl --final    # every item verified (CI)
+python eval/context_pack.py --dev2                                # -> results/context_pack_dev_v2.jsonl
+python eval/run_agent.py --questions dev2 --max-requests 80       # A1 on v2 -> results/dev_v2/model_runs/
+python eval/score_answers.py --questions dev2                     # -> results/dev_v2/dev_v2_baselines.md
+```
+30 questions, one group per failure class A1 showed on gold (line items outside the facts tool, a reported ratio,
+partial refusals, rule edge cases, traps, eight "what drove" summaries), on company-years gold does not ask about and
+apart from v1 (ids from 21). The A5 fixes (W3-03 to W3-07) are tuned and checked here, never on gold. ADR-038.
+
 ## The ablations (W3-01)
 ```bash
 python eval/run_agent.py --ablation no-critic --max-requests 5              # A3: no critic (replays: ~0 requests)

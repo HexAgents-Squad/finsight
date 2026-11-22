@@ -3,6 +3,7 @@
     python eval/run_agent.py                       # A1 on gold + refusal tests -> eval/results/model_runs/
     python eval/run_agent.py --max-requests 400    # stop before the 401st live chat request (cache hits are free)
     python eval/run_agent.py --questions dev       # the 15 development questions -> eval/results/dev/model_runs/
+    python eval/run_agent.py --questions dev2      # W3-02: the development set v2 -> eval/results/dev_v2/model_runs/
     python eval/run_agent.py --ablation no-critic  # W3-01: A1 with one component off (A2-A4, below)
 
 The questions and their earlier turns come from the context packs (the same 102 records B0 and S1-S3 answered),
@@ -29,8 +30,9 @@ unchanged (prompts, limits, retrieval settings, questions), so each is paired wi
 - A4 `no-statements-first`: search_filings on plain hybrid retrieval, without the statements-first layer.
 Each has its own run id (ABLATIONS); the meta records `ablation` and `ablation_of` (always A1's committed run id,
 RUN_ID: an ablation is paired with that run), and a replay is refused across runs, so an ablation never borrows A1's
-timings. Gold only: the development set has no A1 run to pair with, so `--ablation` with `--questions dev` is refused. Unchanged calls replay from the reply cache, so a
-run costs only the requests its switch changes. Nodes given by a test are used as they are (no switch applied).
+timings. Gold only: a development set has no committed A1 run to pair with, so `--ablation` with `--questions dev`
+or `dev2` is refused. Unchanged calls replay from the reply cache, so a run costs only the requests its switch
+changes. Nodes given by a test are used as they are (no switch applied).
 Exit codes: 0 = every question answered, 1 = some questions raised (recorded as errors), 2 = setup or budget.
 """
 from __future__ import annotations
@@ -52,7 +54,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eval.context_pack import DEV_PACK, GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
+from eval.context_pack import DEV2_PACK, DEV_PACK, GOLD_PACK, REFUSAL_PACK, sha256  # noqa: E402
 from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 from eval.runs_schema import (  # noqa: E402
     RUN_ID_PATTERN,
@@ -66,6 +68,10 @@ from eval.runs_schema import (  # noqa: E402
 
 RUNS_DIR = RESULTS_DIR / "model_runs"
 DEV_RUNS_DIR = RESULTS_DIR / "dev" / "model_runs"
+DEV2_RUNS_DIR = RESULTS_DIR / "dev_v2" / "model_runs"      # W3-02: the development set v2
+# the packs each question set reads (questions and earlier turns only) and where its runs go
+QUESTION_SETS = {"gold": ((GOLD_PACK, REFUSAL_PACK), RUNS_DIR), "dev": ((DEV_PACK,), DEV_RUNS_DIR),
+                 "dev2": ((DEV2_PACK,), DEV2_RUNS_DIR)}
 RUN_ID = "A1_qwen3-8b_agent_think-off_a-v1"
 CALCULATOR = "calculate"
 
@@ -408,13 +414,15 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     from eval.validate_gold import safe_console
     safe_console()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--questions", choices=("gold", "dev"), default="gold")
+    ap.add_argument("--questions", choices=sorted(QUESTION_SETS), default="gold",
+                    help="gold (80 + 22 refusal tests), dev (the 15 development questions) or dev2 (the development "
+                         "set v2, W3-02)")
     ap.add_argument("--ablation", choices=sorted(ABLATIONS),
                     help="W3-01: switch one component off (A2-A4); the run id defaults to the ablation's")
     ap.add_argument("--run-id", help=f"default {RUN_ID}, or the ablation's (e.g. "
                     f"{ABLATIONS['no-critic'].run_id('no-critic')})")
     ap.add_argument("--max-requests", type=int, default=400, help="live chat requests this run may send")
-    ap.add_argument("--out-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_RUNS_DIR})")
+    ap.add_argument("--out-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_RUNS_DIR}; dev2: {DEV2_RUNS_DIR})")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
     ap.add_argument("--replay-of", type=Path, help="an earlier runs file of this run: re-derive it from the reply "
                     "cache after a runner fix, keeping its timings and cost (refused unless every answer and tool "
@@ -429,9 +437,9 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
         print(f"--ablation {args.ablation}: an ablation is paired with A1's gold run, so it runs on the gold questions "
               "only", file=sys.stderr)
         return 2
-    dev = args.questions == "dev"
-    out_dir = args.out_dir or (DEV_RUNS_DIR if dev else RUNS_DIR)
-    pack_files = [args.pack_dir / DEV_PACK] if dev else [args.pack_dir / GOLD_PACK, args.pack_dir / REFUSAL_PACK]
+    packs, default_dir = QUESTION_SETS[args.questions]
+    out_dir = args.out_dir or default_dir
+    pack_files = [args.pack_dir / name for name in packs]
     try:
         items = load_items(pack_files)
         from agent.graph import Limits
