@@ -6,9 +6,9 @@
 | Answer type | M1_qwen3-8b_rag_think-off_b0-v1 | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|---|---|---|---|
 | Short: numeric | 16/48 = 33% [22%–47%] | 17/48 = 35% [23%–50%] | 20/48 = 42% [29%–56%] | 21/48 = 44% [31%–58%] | 42/48 = 88% [75%–94%] |
-| Short: entity | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] | 6/8 = 75% [41%–93%], 2 pending | 8/10 = 80% [49%–94%] | pending (10) |
-| Summary | 8/12 = 67% [39%–86%] | pending (12) | pending (12) | pending (12) | pending (12) |
-| Refusal & not reported | 21/32 = 66% [48%–80%] | 27/32 = 84% [68%–93%] | 22/32 = 69% [51%–82%] | 18/32 = 56% [39%–72%] | 29/32 = 91% [76%–97%] |
+| Short: entity | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] | 6/10 = 60% [31%–83%] | 8/10 = 80% [49%–94%] | 10/10 = 100% [72%–100%] |
+| Summary | 8/12 = 67% [39%–86%] | 4/12 = 33% [14%–61%] | 3/12 = 25% [9%–53%] | 3/12 = 25% [9%–53%] | 5/12 = 42% [19%–68%] |
+| Refusal & not reported | 21/32 = 66% [48%–80%] | 31/32 = 97% [84%–99%] | 22/32 = 69% [51%–82%] | 19/32 = 59% [42%–74%] | 29/32 = 91% [76%–97%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
@@ -18,11 +18,11 @@
 | ratio | 7/15 = 47% [25%–70%] | 8/15 = 53% [30%–75%] | 6/15 = 40% [20%–64%] | 8/15 = 53% [30%–75%] | 11/15 = 73% [48%–89%] |
 | period_comparison | 0/12 = 0% [0%–24%] | 0/12 = 0% [0%–24%] | 4/12 = 33% [14%–61%] | 3/12 = 25% [9%–53%] | 11/12 = 92% [65%–99%] |
 | multi_turn | 1/6 = 17% [3%–56%] | 1/6 = 17% [3%–56%] | 2/6 = 33% [10%–70%] | 2/6 = 33% [10%–70%] | 6/6 = 100% [61%–100%] |
-| multi_company | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] | 6/8 = 75% [41%–93%], 2 pending | 8/10 = 80% [49%–94%] | pending (10) |
-| qualitative | 8/12 = 67% [39%–86%] | pending (12) | pending (12) | pending (12) | pending (12) |
-| refuse | 5/10 = 50% [24%–76%] | 7/10 = 70% [40%–89%] | 8/10 = 80% [49%–94%] | 6/10 = 60% [31%–83%] | 10/10 = 100% [72%–100%] |
+| multi_company | 5/10 = 50% [24%–76%] | 5/10 = 50% [24%–76%] | 6/10 = 60% [31%–83%] | 8/10 = 80% [49%–94%] | 10/10 = 100% [72%–100%] |
+| qualitative | 8/12 = 67% [39%–86%] | 4/12 = 33% [14%–61%] | 3/12 = 25% [9%–53%] | 3/12 = 25% [9%–53%] | 5/12 = 42% [19%–68%] |
+| refuse | 5/10 = 50% [24%–76%] | 10/10 = 100% [72%–100%] | 8/10 = 80% [49%–94%] | 7/10 = 70% [40%–89%] | 10/10 = 100% [72%–100%] |
 | refusal tests: refusal | 9/13 = 69% [42%–87%] | 13/13 = 100% [77%–100%] | 7/13 = 54% [29%–77%] | 5/13 = 38% [18%–64%] | 11/13 = 85% [58%–96%] |
-| refusal tests: partial | 0/2 = 0% [0%–66%] | 0/2 = 0% [0%–66%] | 0/2 = 0% [0%–66%] | 0/2 = 0% [0%–66%] | 1/2 = 50% [9%–91%] |
+| refusal tests: partial | 0/2 = 0% [0%–66%] | 1/2 = 50% [9%–91%] | 0/2 = 0% [0%–66%] | 0/2 = 0% [0%–66%] | 1/2 = 50% [9%–91%] |
 | refusal tests: control | 7/7 = 100% [65%–100%] | 7/7 = 100% [65%–100%] | 7/7 = 100% [65%–100%] | 7/7 = 100% [65%–100%] | 7/7 = 100% [65%–100%] |
 
 ### 3. Hallucination and grounding checks (answers with a reply, not refused)
@@ -43,8 +43,8 @@
 | precision (refused and should) | 18/28 | 20/30 | 14/17 | 13/14 | 20/21 |
 | recall (should refuse and did) | 18/20 | 20/20 | 14/20 | 13/20 | 20/20 |
 | right rule among correct refusals | 14/18 | 20/20 | 12/14 | 10/13 | 18/20 |
-| over-refusals | 10 | 10 | 3 | 1 | 1 |
-| under-refusals | 3 | 0 | 7 | 8 | 0 |
+| over-refusals | 10 | 5 | 9 | 4 | 2 |
+| under-refusals | 3 | 0 | 3 | 4 | 0 |
 
 ### 5. Output validity, tokens, latency and human corrections
 
@@ -57,32 +57,33 @@
 | completion tokens (mean) | 88 | 81 | 972 | 324 | 219 |
 | latency p50 / p95 (s, answered calls) | 2.4 / 3.6 | 2.1 / 3.1 | 22.9 / 31.7 | 8.2 / 16.1 | 5.0 / 12.4 |
 | cached replies | 102/102 | 0/102 | 101/102 | 0/102 | 0/102 |
-| automatic verdicts overturned by graders | 0 | 0 | 0 | 0 | 0 |
+| automatic verdicts overturned by graders | 0 | 4 | 0 | 1 | 0 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
 
 | Label | M1_qwen3-8b_rag_think-off_b0-v1 | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|---|---|---|---|
-| unit_confusion | 0 | 0 | 2 | 2 | 0 |
-| arithmetic_slip | 10 | 10 | 5 | 7 | 0 |
-| invented_number | 8 | 11 | 2 | 9 | 0 |
-| wrong_line_item | 7 | 5 | 14 | 7 | 6 |
-| ignored_not_reported | 1 | 0 | 0 | 2 | 0 |
+| wrong_fiscal_year | 0 | 0 | 0 | 1 | 0 |
+| unit_confusion | 0 | 1 | 2 | 2 | 0 |
+| arithmetic_slip | 10 | 11 | 5 | 6 | 1 |
+| invented_number | 8 | 8 | 2 | 8 | 0 |
+| wrong_line_item | 7 | 7 | 14 | 7 | 4 |
+| ignored_not_reported | 1 | 0 | 0 | 1 | 0 |
 | wrong_company | 5 | 5 | 2 | 2 | 0 |
-| over_refusal | 10 | 10 | 3 | 1 | 1 |
-| under_refusal | 3 | 0 | 7 | 8 | 0 |
-| malformed_output | 1 | 0 | 3 | 2 | 0 |
-| incomplete_summary | 4 | 0 | 0 | 0 | 0 |
-| wrong_refusal_rule | 3 | 0 | 2 | 3 | 2 |
+| over_refusal | 10 | 5 | 9 | 4 | 2 |
+| under_refusal | 3 | 0 | 3 | 4 | 0 |
+| malformed_output | 1 | 0 | 0 | 0 | 0 |
+| incomplete_summary | 4 | 8 | 8 | 9 | 7 |
+| wrong_refusal_rule | 3 | 0 | 6 | 7 | 2 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | M1_qwen3-8b_rag_think-off_b0-v1 | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|---|---|---|---|
-| graders' exact agreement (independent grades) | 7/12 | – | – | – | – |
-| graders' Cohen's kappa | 0.17 | – | – | – | – |
-| final grade vs judge: exact agreement | 12/12 | – | – | – | – |
-| final grade vs judge: Cohen's kappa | 1.00 | – | – | – | – |
+| graders' exact agreement (independent grades) | 7/12 | 11/12 | 14/14 | 10/12 | 21/22 |
+| graders' Cohen's kappa | 0.17 | 0.83 | 1.00 | 0.67 | 0.91 |
+| final grade vs judge: exact agreement | 12/12 | 7/12 | 5/12 | 5/12 | 6/12 |
+| final grade vs judge: Cohen's kappa | 1.00 | 0.29 | 0.12 | 0.10 | 0.29 |
 
 
 ### 8. Short numeric answers by whether the gold figures were in the passages (digit for digit) (an agent run: in what its own tools returned)
@@ -109,17 +110,17 @@
 | Answers | S1_qwen3-8b_rag_think-off_s1-v1 | S2_qwen3-8b_rag_think-off_s2-v1 | S3_qwen3-8b_rag_think-off_s3-v1 | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|---|---|---|
 | Short: numeric | 3 / 2 (p = 1.00, n = 48) | 6 / 2 (p = 0.29, n = 48) | 7 / 2 (p = 0.18, n = 48) | 29 / 3 (p < 0.01, n = 48) |
-| Short: entity | 1 / 1 (p = 1.00, n = 10) | 2 / 0 (p = 0.50, n = 8) | 3 / 0 (p = 0.25, n = 10) | – |
-| Summary | – | – | – | – |
-| Refusal & not reported | 6 / 0 (p = 0.03, n = 32) | 4 / 3 (p = 1.00, n = 32) | 1 / 4 (p = 0.38, n = 32) | 8 / 0 (p = 0.01, n = 32) |
-| All decided answers | 10 / 3 (p = 0.09, n = 90) | 12 / 5 (p = 0.14, n = 88) | 11 / 6 (p = 0.33, n = 90) | 37 / 3 (p < 0.01, n = 80) |
+| Short: entity | 1 / 1 (p = 1.00, n = 10) | 2 / 1 (p = 1.00, n = 10) | 3 / 0 (p = 0.25, n = 10) | 5 / 0 (p = 0.06, n = 10) |
+| Summary | 0 / 4 (p = 0.12, n = 12) | 0 / 5 (p = 0.06, n = 12) | 0 / 5 (p = 0.06, n = 12) | 2 / 5 (p = 0.45, n = 12) |
+| Refusal & not reported | 10 / 0 (p < 0.01, n = 32) | 4 / 3 (p = 1.00, n = 32) | 2 / 4 (p = 0.69, n = 32) | 8 / 0 (p = 0.01, n = 32) |
+| All decided answers | 14 / 7 (p = 0.19, n = 102) | 12 / 11 (p = 1.00, n = 102) | 12 / 11 (p = 1.00, n = 102) | 44 / 8 (p < 0.01, n = 102) |
 
 ### 11. The agent's own checks and cost
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
 | verified by its critic | 102/102 |
-| correct among the verified (decided) | 71/80 |
+| correct among the verified (decided) | 86/102 |
 | correct among the not verified (decided) | – |
 | tool calls per question (mean); questions with none | 1.6; 21 |
 | tool calls that returned an error | 4/166 |
@@ -144,14 +145,15 @@ run; the gold set was not read by any of them. Unlike B0 and S1-S3 it had no con
 (XBRL facts, the calculator, the filing search) and saw only each question and, for a follow-up, the earlier
 questions, never an earlier answer. Same scorer, same tolerances, paired on the same questions.
 
-**Decided answers.**
+**All 102 answers are decided** (the W2-12 grading round graded the 10 multi-company answers and the 12
+summaries, and confirmed the failure labels).
 - Short numeric: 42/48 against B0's 16/48 (29 right only with A1, 3 only with B0; sign test p ≈ 3×10⁻⁶).
   - By category: fact 14/15, ratio 11/15, period comparison 11/12 (B0 0/12, the best strategy 4/12), follow-ups 6/6.
+- Multi-company: 10/10 against B0's 5/10 (5 / 0, p ≈ 0.06).
 - Refusal and not reported: 29/32 against 21/32 (8 / 0, p ≈ 0.008).
   - Recall 20/20, precision 20/21, the right rule on 18 of 20, no under-refusal, the three "not reported" traps right.
-- All decided answers: 37 / 3 against B0 (p ≈ 2×10⁻⁸, n = 80).
-- Pending: the 10 multi-company answers name both companies, so a grader decides each (the scorer's rule). So do
-  the 12 summaries.
+- Summaries: 5/12 against B0's 8/12 (2 / 5, p ≈ 0.45), the one answer type where A1 is not ahead (see below).
+- All answers: 44 / 8 against B0 (p ≈ 4×10⁻⁷, n = 102).
 
 **Why.** Table 8 is consistent with the gain coming from what the agent fetches. On 40 of the 46 numeric questions
 with gold dollar figures, its own tools returned every gold figure (an XBRL fact is in the gold answers' millions),
@@ -169,11 +171,13 @@ of those right. The bottleneck is now which figure the agent fetches, not how it
   D05: a difference) against B0's 20 of 74.
 
 Either way the check asks whether a figure is grounded, not whether it is the right line item: A06, B04, B14, B15
-and C08 below are grounded figures of the wrong metric. Since the calculator's arithmetic is exact, a wrong
-calculated value is labelled a wrong line item (fetched inputs) or an invented number (otherwise), not an
-arithmetic slip; a sign flip keeps its own label. B0's labels are unchanged.
+and C08 below are grounded figures of the wrong metric. The scorer suggests a wrong line item (fetched inputs) or
+an invented number (otherwise) for a wrong calculated value, since the calculator's arithmetic is exact; the
+graders' labels (table 6) agree on A06, B04, B14 and B15, and label C08 an arithmetic slip and B08 an
+over-refusal. B0's labels are unchanged.
 
-**The 9 wrong answers.** Six come from one gap: the facts tool has no metric for the line item asked.
+**The 9 wrong decided answers** (plus 7 summaries graded below 2, under Summaries). Six come from one gap: the
+facts tool has no metric for the line item asked.
 - **Substituted and named as the line item asked** (four): the planner fetched a nearby metric, and the answer
   presents the result as the one asked.
   - B04: operating cash flow (−42,012) for noninterest expense, giving "noninterest expense … 23.7%".
@@ -188,10 +192,10 @@ The other three are refusals:
 - RF14: a partial refusal refused whole.
 - RF10 and RF13: the right decision under the wrong rule (R2 for R6, R5 for R7).
 
-**The critic.** It verified every answer: 71 of the 80 verified decided answers are right, so it passed 9 wrong
-ones, and it never sent a draft back. The composer does fix contract problems before the critic sees a draft (node
+**The critic.** It verified every answer: 86 of the 102 are right, so it passed 16 wrong ones (the 9 above and
+7 summaries graded 0 or 1), and it never sent a draft back. The composer does fix contract problems before the critic sees a draft (node
 notes on E01, E05, E06 and RF20), but that is not why the 9 got through: they are metric misses its checks do not
-see. Its metric check, `check_metric_matches_question` (agent/critic.py), compares the metrics the question names
+see (nor does it judge a summary's substance). Its metric check, `check_metric_matches_question` (agent/critic.py), compares the metrics the question names
 (`named_metrics`) with those the draft fetched:
 - it finds no named metric in A06 (deposits), B14 (a segment) or B15 (current assets and liabilities), so it checks
   nothing there;
@@ -201,16 +205,18 @@ see. Its metric check, `check_metric_matches_question` (agent/critic.py), compar
 - its list of line items that must come from a search rather than an XBRL fact (`SEARCH_ONLY`) has three entries,
   all stock-based compensation, and it rejects every fact row of such a draft, a legitimate denominator included.
 
-**Summaries.** The LLM judge gives A1's 12 summaries 3 twos, 9 ones and no zero, against 8 or 9 twos for every
-other run. A1's summaries are longer and rest on passages it found itself, rather than on the gold answer's
-section. The judge's reasons are of two kinds:
-- additions: factors the reference does not mention;
-- substance: some answers miss the drivers the reference names, e.g. E01 explains operating income rather than
-  the revenue growth asked about.
+**Summaries.** The graders give A1's 12 summaries 5 twos (E04, E08, E09, E11, E12), 3 ones (E02, E06, E10) and 4
+zeros (E01, E03, E05, E07): 5/12 against B0's 8/12. The four zeros answer a neighbouring question from the passages
+the agent found, e.g. E01 explains operating income rather than the revenue growth asked about. The two graders
+agree on 21 of A1's 22 graded rows (kappa 0.91). The LLM judge gave 3 twos and 9 ones and agrees with the final
+grades on 6 of 12 (kappa 0.29): higher on 4, lower on 2. A1's summaries are longer and rest on passages it found
+itself, rather than on the gold answer's section; the judge's reasons are of two kinds, additions (factors the
+reference does not mention) and substance (drivers the reference names, missed). The summary is A1's weakest
+answer type, and the agent's search for the section that answers "what drove ..." is the place to improve it.
 
-The graders decide in the `--pending` round. The handout shows them what the agent retrieved, with each figure's
-company, year and unit. That section tells graders one of the answers searched for itself, so the round is not
-fully blind to which rows are the agent's (GRADING.md says so).
+The handout showed the graders what the agent retrieved, with each figure's company, year and unit. That section
+told them one of the answers searched for itself, so the round was not fully blind to which rows are the agent's
+(GRADING.md says so).
 
 **Cost.** 1.8 model calls and 3.0k tokens per question (B0: 1 call, 3.5k), 5.0 s median and 12.4 s at p95 (the
 limit is 60 s). The facts tool was called 102 times, the calculator 34, the search 30; 4 of 166 calls returned an
@@ -223,7 +229,8 @@ searches also embedded their queries through the search tool's own embedder, not
   systems, not prompts.
 - Part of the refusal gain is the planner prompt, not the architecture: it has worked refusal examples (W2-02,
   tuned on the development set) shaped like the refusal tests' kinds, for example a fact followed by "should I
-  buy", while B0's zero-shot prompt has none. S1, whose few-shot examples include a refusal, reached 27/32.
+  buy", while B0's zero-shot prompt has none. S1, whose few-shot examples include a refusal, reached 31/32 once
+  the graders overturned four of its automatic verdicts (W2-12).
 - Grounded is not correct: see the check above.
 
 ### Week 3 ablations (plan)
