@@ -8,7 +8,7 @@ import yaml
 WORKFLOWS = sorted((Path(__file__).resolve().parents[1] / ".github" / "workflows").glob("*.yml"))
 REQUIRED_RUNS = ["ruff check .", "pytest -q", "python eval/validate_gold.py --final", "python eval/validate_test_sets.py --final",
                  "python eval/validate_dev_set.py --final",
-                 "python eval/validate_dev_set.py eval/dev_set_v2.jsonl"]   # W3-02: --final once every item is verified
+                 "python eval/validate_dev_set.py eval/dev_set_v2.jsonl --final"]   # W3-02, every item verified
 
 
 def test_there_is_a_workflow():

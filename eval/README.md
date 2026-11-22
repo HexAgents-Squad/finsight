@@ -137,7 +137,7 @@ grading sheet are graded in a `--pending` round (`GRADING.md`).
 
 ## The development set v2 (W3-02)
 ```bash
-python eval/validate_dev_set.py eval/dev_set_v2.jsonl            # draft rules (CI); --final once verified
+python eval/validate_dev_set.py eval/dev_set_v2.jsonl --final    # every item verified (CI)
 python eval/context_pack.py --dev2                                # -> results/context_pack_dev_v2.jsonl
 python eval/run_agent.py --questions dev2 --max-requests 80       # A1 on v2 -> results/dev_v2/model_runs/
 python eval/score_answers.py --questions dev2                     # -> results/dev_v2/dev_v2_baselines.md

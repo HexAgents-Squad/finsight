@@ -183,10 +183,10 @@ def test_v2_covers_every_failure_class_the_ticket_names():
         assert failure_class in notes, failure_class
 
 
-def test_every_v2_item_is_written_by_one_member_and_left_for_a_second_to_verify():
-    assert {i.written_by for i in V2} == {"Claude (AI draft for Alok)"}
-    assert vd.final_problems(V2, vd.DEV2_TARGET_COUNTS) == [f"not verified by a second person: {[i.id for i in V2]}"] \
-        or all(i.verified_by for i in V2)                                # until verified, --final says exactly that
+def test_every_v2_item_is_written_by_one_member_and_verified_by_another():
+    assert {i.written_by for i in V2} == {"Claude (AI draft for Alok)"} and {i.verified_by for i in V2} == {"Giridharan"}
+    assert vd.final_problems(V2, vd.DEV2_TARGET_COUNTS) == []           # CI runs --final on v2 too
+    assert vd.main([str(vd.DEV2_FILE), "--final"]) == 0
 
 
 def test_v2_ids_start_at_21_and_no_v2_question_is_near_a_v1_question():

@@ -377,13 +377,18 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("examples", help="rows noted 'example' -> eval/results/failure_examples.md")
     e.add_argument("--out", type=Path, default=EXAMPLES_FILE)
     for p in (c, h, k, m, e):
-        p.add_argument("--sheet", type=Path, default=SHEET)
+        p.add_argument("--sheet", type=Path, help=f"default {SHEET} (handout --questions dev2: the dev v2 sheet)")
     for p in (c, h, k, m):
         p.add_argument("--pending", action="store_true",
                        help="a later round: only the sheet's rows nobody has graded yet (see the module docstring)")
     for p in (h, e):
-        p.add_argument("--key", type=Path, default=KEY)
+        p.add_argument("--key", type=Path, help=f"default {KEY} (handout --questions dev2: the dev v2 key)")
     args = ap.parse_args(argv)
+    v2 = getattr(args, "questions", "gold") == "dev2"           # the development set v2 has its own sheet (W3-02)
+    grading_dir = RESULTS_DIR / "dev_v2" / GRADING_DIR.name if v2 else GRADING_DIR
+    args.sheet = args.sheet or grading_dir / SHEET_NAME
+    if hasattr(args, "key"):
+        args.key = args.key or grading_dir / KEY_NAME
     try:
         if args.cmd == "copies":
             print("\n".join(copies(args.sheet, args.names, args.out, args.pending)))

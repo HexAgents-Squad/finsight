@@ -47,7 +47,8 @@ Answer types (the mentor's split) and when an answer is correct:
                    not then work it out)
     partial        refusal tests of kind "partial": not refused, refusal_rule = the expected rule. A question in the
                    gold format with a refusal_rule on A-F (a partial refusal, spec §6; dev set v2) is scored by its
-                   own type and is also wrong when the answer does not decline under that rule (W3-02)
+                   own type and, for a numeric or entity answer, is also wrong when the answer does not decline under
+                   that rule (W3-02); on a summary the graders judge the declined part with the rest
     control        refusal tests of kind "control": not refused and no refusal rule (their content has no gold
                    value to check; a rule would mean a partial refusal the question does not need)
 Hallucination checks: numbers in the answer text or `value` supported neither by the passages the run saw nor by
@@ -410,14 +411,15 @@ def check(q: Question, rec: RunRecord, pack: dict, rag: bool, matchers: dict[str
         out.update(correct=None, reason="waiting for the human grade")
         return out
     if q.answer_type == "short_entity":
-        return entity_outcome(q, a, named_field, companies_named(a.answer, matchers), out)
+        return partial_outcome(q, a, entity_outcome(q, a, named_field, companies_named(a.answer, matchers), out))
     exact = agent and rec.agent is not None and bool(rec.agent.calculations)    # its value is the calculator's
     return partial_outcome(q, a, numeric_outcome(q, a, refs, out, exact_arithmetic=exact))
 
 
 def partial_outcome(q: Question, a: B0Answer, out: dict) -> dict:
-    """A partial refusal in the gold format (an A-F question with a refusal_rule, spec §6): a right value is still
-    wrong when the answer did not decline the other part under that rule. No gold-v1 or dev v1 question has one."""
+    """A partial refusal in the gold format (an A-F question with a refusal_rule, spec §6): a right value or company
+    is still wrong when the answer did not decline the other part under that rule (a summary's is the graders' call).
+    No gold-v1 or dev v1 question has one."""
     if not q.expected_rule or out.get("correct") is not True or a.refusal_rule == q.expected_rule:
         return out
     label = "under_refusal" if a.refusal_rule is None else "wrong_refusal_rule"
@@ -1067,9 +1069,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--questions", choices=("gold", "dev", "dev2"), default="gold",
                     help="dev: the W1-09 tuning runs on the development set (defaults under eval/results/dev); "
                          "dev2: the development set v2 (W3-02, under eval/results/dev_v2)")
-    ap.add_argument("--runs-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_DIR / 'model_runs'})")
+    ap.add_argument("--runs-dir", type=Path, help=f"default {RUNS_DIR} (dev: {DEV_DIR / 'model_runs'}; dev2: "
+                    f"{DEV2_DIR / 'model_runs'})")
     ap.add_argument("--out-dir", type=Path, help=f"scores/, grading/ and the reports go here; default {RESULTS_DIR} "
-                                                f"(dev: {DEV_DIR})")
+                                                f"(dev: {DEV_DIR}; dev2: {DEV2_DIR})")
     ap.add_argument("--pack-dir", type=Path, default=RESULTS_DIR)
     ap.add_argument("--gold", type=Path, default=GOLD_FILE)
     ap.add_argument("--refusal", type=Path, default=REFUSALS_FILE)

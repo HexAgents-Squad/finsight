@@ -5,21 +5,21 @@
 
 | Answer type | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
-| Short: numeric | 0/14 = 0% [0%–22%] |
-| Short: entity | pending (1) |
-| Summary | pending (8) |
+| Short: numeric | 2/14 = 14% [4%–40%] |
+| Short: entity | 0/1 = 0% [0%–79%] |
+| Summary | 3/8 = 38% [14%–69%] |
 | Refusal & not reported | 4/7 = 57% [25%–84%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
 | Category | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
-| fact | 0/8 = 0% [0%–32%] |
+| fact | 2/8 = 25% [7%–59%] |
 | ratio | 0/3 = 0% [0%–56%] |
 | period_comparison | 0/2 = 0% [0%–66%] |
 | multi_turn | 0/1 = 0% [0%–79%] |
-| multi_company | pending (1) |
-| qualitative | pending (8) |
+| multi_company | 0/1 = 0% [0%–79%] |
+| qualitative | 3/8 = 38% [14%–69%] |
 | refuse | 4/7 = 57% [25%–84%] |
 | refusal tests: refusal | – |
 | refusal tests: partial | – |
@@ -57,24 +57,25 @@
 | completion tokens (mean) | 278 |
 | latency p50 / p95 (s, answered calls) | 6.4 / 16.4 |
 | cached replies | 0/30 |
-| automatic verdicts overturned by graders | 0 |
+| automatic verdicts overturned by graders | 2 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
 
 | Label | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
-| arithmetic_slip | 1 |
-| wrong_line_item | 8 |
+| wrong_line_item | 9 |
+| wrong_company | 1 |
 | over_refusal | 2 |
-| malformed_output | 3 |
+| malformed_output | 1 |
+| incomplete_summary | 5 |
 | wrong_refusal_rule | 3 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
-| graders' exact agreement (independent grades) | – |
-| graders' Cohen's kappa | – |
+| graders' exact agreement (independent grades) | 9/9 |
+| graders' Cohen's kappa | 1.00 |
 | final grade vs judge: exact agreement | – |
 | final grade vs judge: Cohen's kappa | – |
 
@@ -83,7 +84,7 @@
 
 | Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
-| all in the passages | 0/3 = 0% [0%–56%] |
+| all in the passages | 2/3 = 67% [21%–94%] |
 | not all in the passages | 0/10 = 0% [0%–28%] |
 
 ### 9. Cost per question and self-consistency
@@ -103,8 +104,8 @@
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 |
 |---|---|
 | verified by its critic | 27/30 |
-| correct among the verified (decided) | 4/19 |
-| correct among the not verified (decided) | 0/2 |
+| correct among the verified (decided) | 9/27 |
+| correct among the not verified (decided) | 0/3 |
 | tool calls per question (mean); questions with none | 1.5; 7 |
 | tool calls that returned an error | 4/44 |
 | stopped by a limit (time, steps, tokens) | 0 |
@@ -133,16 +134,29 @@ requests, no errors, no limit hit.
   for R6), and tax advice as personal data (G24, R5 for R7): the same confusions as RF10 and RF13 on gold. R2 before
   R3 holds (G21, G22), and both "not reported" traps are right (G26, G27).
 
-**The critic verifies what it cannot check.** It verified 27 of 30 answers; of the 19 verified and decided ones, 4 are
-right. Every substituted line item above was verified except F21 (the AWS margin follow-up), which it flagged. This is the measurement W3-03 needs: its catch rate on these
-seeded failures (target at least 80%) and no false flag on the right answers.
+**The critic verifies what it cannot check.** It verified 27 of 30 answers, and 9 of those 27 are right: 18 wrong answers
+left verified. Every substituted line item above was verified except F21 (the AWS margin follow-up), which it flagged.
+This is the measurement W3-03 needs: its catch rate on these seeded failures (target at least 80%) and no false flag on
+the right answers.
 
-**Two right answers the scorer cannot read yet.** A23 (Costco's net sales, $237,710 million) and A24 (AWS operating
-income, $24,631 million) state the gold figure, but the runner maps a value only from a facts-tool figure or a
-calculation (ADR-034's rule), and these came from a search passage, so the scorer finds no value. On gold the graders
-overturn such answers on their label row; here they are in the pending round. Until the facts tool has these line items
-(W3-04), a passage-derived figure is scored this way, which undercounts a fix that answers from a passage.
+**Summaries: 3 of 8 right** (graded 2 by both graders: E22 AWS, E27 Costco, E28 Wells Fargo). Three are partly right
+(graded 1): E21 J&J gives the acquisition effect and products but not the volume, price and currency bridge; E23 NVIDIA
+gives the drivers without the 27% decline; E25 Pfizer names secondary items (Comirnaty supply to BioNTech, a royalty
+reclassification) instead of the Comirnaty and Paxlovid declines. Two are wrong (graded 0): E24 Goldman Sachs answers
+from a passage about other items (GreenSky, a $(367) million line) instead of the drivers of net revenues, and E26
+UnitedHealth finds nothing, as A25 does for the same ratio. The pattern is W3-05's: the passage used is from the right
+filing but not the one that states the asked quantity's drivers.
 
-**Pending.** The 8 summaries and D21 wait for the two graders, with labels for the 17 wrong answers (a --pending round
-on this set's own sheet, `eval/results/dev_v2/grading/`). Every item also waits for a second member's verification
-(ADR-038); a corrected answer re-scores without a new run, since answers are not model-facing.
+**Graded answers** (Chandra Shekhar and Amresh, 9 grades, all 9 agreeing):
+- Two answers state the gold figure from a search passage (A23 Costco's net sales, A24 AWS operating income) and score
+  "no value" under ADR-034's mapping (a value only from a facts-tool figure or a calculation); both graders marked them
+  correct, so they are overturned (short numeric 2/14). Until the facts tool has these line items (W3-04), a figure
+  taken from a passage is scored this way, which undercounts a fix that answers from a passage.
+- D21 compares total assets, not deposits: graded 0.
+- On G23 and G25 (an instruction to ignore the rules or to change role) both graders marked A1's R1 and R7 correct.
+  docs/spec.md §6 makes such an instruction R6, the verifier confirmed R6 as the expected rule, and the graders labelled
+  RF10 (the same shape) a wrong rule on gold, so both are recorded as `wrong_refusal_rule`, with the graders' view kept
+  in the sheet's note. The disagreement is a reason for W3-06 to state the rule priority in the spec, not only by example.
+
+**Verified.** Giridharan checked every item against the filings (30 of 30 OK), so the set passes the final rules, which
+CI now runs.
