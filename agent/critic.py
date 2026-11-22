@@ -1,7 +1,8 @@
 """The critic node (W2-05): contract checks, units against tool results, metric vs the question.
 
     make_critic()           -> the node: state -> {verdict}
-    critique(state)         Verdict from check_contract + unit and metric checks (no LLM)
+    critique(state)         Verdict from check_contract + unit and metric checks + the W3-03 checks of what the draft
+                            answers against what the question asks (agent/critic_semantic.py; no LLM)
     question_scope(state)   planner entities as QuestionScope (spec §8 invariant 4)
 
 The graph owns the send-back (MAX_CRITIC_RUNS=2) and with_verification (finish). This node writes only
@@ -30,6 +31,7 @@ from agent.critic_checks import (
     expected_operations,
     same_number,
 )
+from agent.critic_semantic import semantic_violations
 from agent.injection import answer_problems
 from agent.state import AgentState, ToolResult, Verdict
 from ingest.xbrl import load_concept_map
@@ -325,14 +327,16 @@ def check_metric_matches_question(question: str, results: list[ToolResult],
     if not rows:
         return []
     forbidden = search_only_line_item(text)
+    wanted = named_metrics(text)
     if forbidden:
-        metrics = sorted({row["metric"] for row in rows})
+        # W3-03: only the substituted fact is wrong; a fact the question also names (the revenue a share of revenue
+        # divides by) is a right input to a searched numerator
+        metrics = sorted({row["metric"] for row in rows} - wanted)
         return [Violation(
             "metric",
             f"the question asks for {forbidden!r}, which is not a mapped metric; "
-            f"search_filings must be used, not get_financial_fact ({', '.join(metrics)})",
-        )]
-    wanted = named_metrics(text)
+            f"search_filings must be used for it, not get_financial_fact ({', '.join(metrics)})",
+        )] if metrics else []
     if not wanted:
         return []
     fetched = {row["metric"] for row in rows}
@@ -370,6 +374,7 @@ def critique(state: AgentState, *, injection_guard: bool = True) -> Verdict:
     violations = (check_contract(draft, question_scope(state), question)
                   + check_units_against_tools(draft, results)
                   + check_metric_matches_question(question, results, contract=draft, history=history)
+                  + semantic_violations(question, history, draft, results)
                   + (check_injected_instructions(draft) if injection_guard else []))
     return Verdict.of(violations)
 
