@@ -27,8 +27,9 @@ unchanged (prompts, limits, retrieval settings, questions), so each is paired wi
   gets the fetched figures without a calculated one);
 - A3 `no-critic`: no critic node; the composer's draft is the answer, unverified, with no send-back;
 - A4 `no-statements-first`: search_filings on plain hybrid retrieval, without the statements-first layer.
-Each has its own run id (ABLATIONS); the meta records `ablation` and `ablation_of` (A1's run id), and a replay is
-refused across runs, so an ablation never borrows A1's timings. Unchanged calls replay from the reply cache, so a
+Each has its own run id (ABLATIONS); the meta records `ablation` and `ablation_of` (always A1's committed run id,
+RUN_ID: an ablation is paired with that run), and a replay is refused across runs, so an ablation never borrows A1's
+timings. Gold only: the development set has no A1 run to pair with, so `--ablation` with `--questions dev` is refused. Unchanged calls replay from the reply cache, so a
 run costs only the requests its switch changes. Nodes given by a test are used as they are (no switch applied).
 Exit codes: 0 = every question answered, 1 = some questions raised (recorded as errors), 2 = setup or budget.
 """
@@ -423,6 +424,10 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
     args.run_id = args.run_id or (ablation.run_id(args.ablation) if ablation else RUN_ID)
     if problem := run_id_problem(args.run_id, args.ablation):
         print(f"--run-id {args.run_id!r}: {problem}", file=sys.stderr)
+        return 2
+    if ablation and args.questions != "gold":
+        print(f"--ablation {args.ablation}: an ablation is paired with A1's gold run, so it runs on the gold questions "
+              "only", file=sys.stderr)
         return 2
     dev = args.questions == "dev"
     out_dir = args.out_dir or (DEV_RUNS_DIR if dev else RUNS_DIR)

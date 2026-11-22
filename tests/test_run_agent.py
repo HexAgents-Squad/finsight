@@ -609,7 +609,7 @@ def test_an_ablation_writes_its_own_run_marked_as_an_ablation_of_a1(tmp_path, na
     assert (meta["planner_prompt_sha256"], meta["composer_prompt_sha256"]) == (planner.PROMPT_SHA256,
                                                                                composer.PROMPT_SHA256)
     assert len((tmp_path / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()) == 102
-    assert [p.name for p in tmp_path.iterdir()] == [f"{run_id}.jsonl", f"{run_id}.meta.json"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"{run_id}.jsonl", f"{run_id}.meta.json"]   # any OS order
 
 
 def test_a1s_meta_keeps_its_exact_keys(tmp_path):
@@ -734,6 +734,7 @@ def test_the_ablations_get_their_own_report_paired_with_a1_and_leave_the_agent_r
     assert [(s["id"], s["correct"], s["sheet_key"]) for s in a1] == [(s["id"], s["correct"], s["sheet_key"])
                                                                      for s in a3]       # graded once, shared
     assert [run for run, _ in keyed_rows(out) if run == A3] == []           # nothing new for the graders
+    assert all(s["shared_grade"] for s in a3)                              # counted once, under A1, in table 7
 
 
 def test_a_changed_ablation_answer_is_graded_on_its_own_and_a_grade_on_a1_carries_to_the_unchanged_ones(tmp_path):
@@ -782,3 +783,40 @@ def test_an_ablation_without_its_reference_run_is_refused(tmp_path, capsys):
         shutil.copy(tmp_path / f"{B0}{suffix}", runs / f"{B0}{suffix}")
     assert sa.main(["--runs-dir", str(runs), "--out-dir", str(tmp_path / "out")]) == 1
     assert f"an ablation of {ra.RUN_ID}, which is not in the runs directory" in capsys.readouterr().err
+
+
+# ----------------------------------------------------------------------------------------------- review follow-ups (W3-01)
+def test_an_ablation_runs_on_the_gold_questions_only(tmp_path, capsys):
+    assert run_cli(tmp_path, "--questions", "dev", "--ablation", "no-critic") == 2 and not list(tmp_path.iterdir())
+    assert "paired with A1's gold run" in capsys.readouterr().err
+
+
+def test_a_replay_is_refused_when_the_earlier_file_switched_another_component(tmp_path, capsys):
+    first = tmp_path / "first"
+    assert run_cli(first, "--ablation", "no-critic") == 0
+    meta_path = first / f"{A3}.meta.json"
+    meta_path.write_text(json.dumps(json.loads(meta_path.read_text(encoding="utf-8")) | {"ablation": "no-calculator"}),
+                         encoding="utf-8")                      # same run id, another switch: not the same run
+    out = tmp_path / "replay"
+    assert run_cli(out, "--ablation", "no-critic", "--replay-of", str(first / f"{A3}.jsonl")) == 2
+    assert not out.exists() and "(ablation differ)" in capsys.readouterr().err
+
+
+def scored_row(qid, answer, correct, label, key):
+    return {"id": qid, "model_answer": answer, "answer_type": "short_numeric", "correct": correct,
+            "suggested_label": label, "sheet_key": key}
+
+
+def test_a_shared_row_needs_the_same_text_verdict_and_suggested_label():
+    a1 = SimpleNamespace(run_id=ra.RUN_ID, model_extra={})
+    a3 = SimpleNamespace(run_id=A3, model_extra={"ablation": "no-critic", "ablation_of": ra.RUN_ID})
+    ref = [scored_row("B01", "x", False, "wrong_line_item", "k1"), scored_row("B02", "y", False, "wrong_line_item", "k2"),
+           scored_row("B03", "z", None, None, "k3"), scored_row("B04", "w", False, None, "k4")]
+    abl = [scored_row("B01", "x", False, "wrong_line_item", "n1"),        # identical: shares A1's row
+           scored_row("B02", "y", False, "invented_number", "n2"),        # its own evidence reads otherwise: own row
+           scored_row("B03", "z changed", None, None, "n3"),              # changed text: own row
+           scored_row("B04", "w", None, None, "n4")]                      # another automatic verdict: own row
+    sa.share_grades([(a1, [], ref), (a3, [], abl)])
+    assert [s["sheet_key"] for s in abl] == ["k1", "n2", "n3", "n4"]
+    assert [bool(s.get("shared_grade")) for s in abl] == [True, False, False, False]
+    assert not any(s.get("shared_grade") for s in ref)                  # the reference owns its rows

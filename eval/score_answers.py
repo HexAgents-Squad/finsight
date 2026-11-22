@@ -57,8 +57,9 @@ it as text), in key order, model names hidden ([Pn] markers and reasoning remove
 "label" row overturns the automatic verdict (counted in the report). Re-running keeps what was entered; a graded
 row whose answer changed or is no longer needed stays as task "stale".
 Shared grades (W3-01): an ablation's answer that is word for word its reference run's answer to the same question,
-with the same automatic verdict, takes the reference row's sheet key (share_grades), so it is graded once and the
-graders see only the answers the switch changed. A changed answer gets its own row.
+with the same automatic verdict and suggested label, takes the reference row's sheet key (share_grades), so it is
+graded once and the graders see only the answers the switch changed. A changed answer gets its own row; the graders'
+agreement (table 7) counts a shared grade once, under the reference.
 Exit codes: 0 = scored, 1 = invalid input files, 2 = no runs found.
 """
 from __future__ import annotations
@@ -566,8 +567,9 @@ def ablation_of(meta: RunMeta) -> str | None:
 
 def share_grades(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]]) -> None:
     """An ablation's answer that is word for word its reference run's answer to the same question, with the same
-    answer type and automatic verdict, takes the reference answer's sheet key: one row, graded once, the grade
-    applied to both. Anything else keeps its own key (a changed answer is graded on its own)."""
+    answer type, automatic verdict and suggested label (which reads the run's own evidence), takes the reference
+    answer's sheet key: one row, graded once, the grade and label applied to both, and marked `shared_grade` (so the
+    graders' agreement counts it once, under the reference). Anything else keeps its own key."""
     scored_by_run = {meta.run_id: scored for meta, _, scored in runs}
     for meta, _, scored in runs:
         reference = ablation_of(meta)
@@ -578,9 +580,9 @@ def share_grades(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]]) -> Non
         ref = {s["id"]: s for s in scored_by_run[reference]}
         for s in scored:
             r = ref[s["id"]]
-            if (s["model_answer"], s["answer_type"], s["correct"]) == (r["model_answer"], r["answer_type"],
-                                                                        r["correct"]):
-                s["sheet_key"] = r["sheet_key"]
+            same = ("model_answer", "answer_type", "correct", "suggested_label")
+            if all(s[k] == r[k] for k in same):
+                s.update(sheet_key=r["sheet_key"], shared_grade=True)
 
 
 def sheet_rows(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]], questions: dict[str, Question]) -> list[dict]:
@@ -832,7 +834,8 @@ def report(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     out += table("### 7. Human grades: the two graders, and the LLM judge on summaries", "Measure", names)
     cells: dict[str, list[str]] = {k: [] for k in ("g_agree", "g_kappa", "agree", "kappa")}
     for _, sc in runs:
-        graders = [tuple(s["grader_grades"]) for s in sc if s.get("grader_grades")]       # before they talked
+        # before they talked; a grade an ablation shares with its reference run counts once, under the reference
+        graders = [tuple(s["grader_grades"]) for s in sc if s.get("grader_grades") and not s.get("shared_grade")]
         judged = [(s["human_grade"], s["judge_score"]) for s in sc
                   if s["answer_type"] == "summary" and s.get("human_grade") is not None
                   and s.get("judge_score") is not None]

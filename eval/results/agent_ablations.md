@@ -6,8 +6,8 @@
 | Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A2_qwen3-8b_agent_think-off_a-v1-no-calculator | A3_qwen3-8b_agent_think-off_a-v1-no-critic | A4_qwen3-8b_agent_think-off_a-v1-no-statements-first |
 |---|---|---|---|---|
 | Short: numeric | 42/48 = 88% [75%–94%] | 19/48 = 40% [27%–54%] | 42/48 = 88% [75%–94%] | 42/48 = 88% [75%–94%] |
-| Short: entity | 10/10 = 100% [72%–100%] | 6/6 = 100% [61%–100%], 4 pending | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
-| Summary | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 3/6 = 50% [19%–81%], 6 pending |
+| Short: entity | 10/10 = 100% [72%–100%] | 9/10 = 90% [60%–98%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
+| Summary | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 8/12 = 67% [39%–86%] |
 | Refusal & not reported | 29/32 = 91% [76%–97%] | 29/32 = 91% [76%–97%] | 29/32 = 91% [76%–97%] | 29/32 = 91% [76%–97%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
@@ -18,8 +18,8 @@
 | ratio | 11/15 = 73% [48%–89%] | 0/15 = 0% [0%–20%] | 11/15 = 73% [48%–89%] | 11/15 = 73% [48%–89%] |
 | period_comparison | 11/12 = 92% [65%–99%] | 0/12 = 0% [0%–24%] | 11/12 = 92% [65%–99%] | 11/12 = 92% [65%–99%] |
 | multi_turn | 6/6 = 100% [61%–100%] | 5/6 = 83% [44%–97%] | 6/6 = 100% [61%–100%] | 6/6 = 100% [61%–100%] |
-| multi_company | 10/10 = 100% [72%–100%] | 6/6 = 100% [61%–100%], 4 pending | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
-| qualitative | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 3/6 = 50% [19%–81%], 6 pending |
+| multi_company | 10/10 = 100% [72%–100%] | 9/10 = 90% [60%–98%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
+| qualitative | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 5/12 = 42% [19%–68%] | 8/12 = 67% [39%–86%] |
 | refuse | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
 | refusal tests: refusal | 11/13 = 85% [58%–96%] | 11/13 = 85% [58%–96%] | 11/13 = 85% [58%–96%] | 11/13 = 85% [58%–96%] |
 | refusal tests: partial | 1/2 = 50% [9%–91%] | 1/2 = 50% [9%–91%] | 1/2 = 50% [9%–91%] | 1/2 = 50% [9%–91%] |
@@ -65,17 +65,18 @@
 |---|---|---|---|---|
 | arithmetic_slip | 1 | 0 | 1 | 1 |
 | wrong_line_item | 4 | 2 | 4 | 4 |
+| wrong_company | 0 | 1 | 0 | 0 |
 | over_refusal | 2 | 2 | 2 | 2 |
 | malformed_output | 0 | 26 | 0 | 0 |
-| incomplete_summary | 7 | 7 | 7 | 3 |
+| incomplete_summary | 7 | 7 | 7 | 4 |
 | wrong_refusal_rule | 2 | 2 | 2 | 2 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A2_qwen3-8b_agent_think-off_a-v1-no-calculator | A3_qwen3-8b_agent_think-off_a-v1-no-critic | A4_qwen3-8b_agent_think-off_a-v1-no-statements-first |
 |---|---|---|---|---|
-| graders' exact agreement (independent grades) | 21/22 | 17/18 | 21/22 | 15/16 |
-| graders' Cohen's kappa | 0.91 | 0.90 | 0.91 | 0.81 |
+| graders' exact agreement (independent grades) | 21/22 | 4/4 | – | 6/6 |
+| graders' Cohen's kappa | 0.91 | 1.00 | – | 1.00 |
 | final grade vs judge: exact agreement | 6/12 | – | – | – |
 | final grade vs judge: Cohen's kappa | 0.29 | – | – | – |
 
@@ -104,18 +105,18 @@
 | Answers | A2_qwen3-8b_agent_think-off_a-v1-no-calculator | A3_qwen3-8b_agent_think-off_a-v1-no-critic | A4_qwen3-8b_agent_think-off_a-v1-no-statements-first |
 |---|---|---|---|
 | Short: numeric | 0 / 23 (p < 0.01, n = 48) | 0 / 0 (p = 1.00, n = 48) | 0 / 0 (p = 1.00, n = 48) |
-| Short: entity | 0 / 0 (p = 1.00, n = 6) | 0 / 0 (p = 1.00, n = 10) | 0 / 0 (p = 1.00, n = 10) |
-| Summary | 0 / 0 (p = 1.00, n = 12) | 0 / 0 (p = 1.00, n = 12) | 0 / 0 (p = 1.00, n = 6) |
+| Short: entity | 0 / 1 (p = 1.00, n = 10) | 0 / 0 (p = 1.00, n = 10) | 0 / 0 (p = 1.00, n = 10) |
+| Summary | 0 / 0 (p = 1.00, n = 12) | 0 / 0 (p = 1.00, n = 12) | 3 / 0 (p = 0.25, n = 12) |
 | Refusal & not reported | 0 / 0 (p = 1.00, n = 32) | 0 / 0 (p = 1.00, n = 32) | 0 / 0 (p = 1.00, n = 32) |
-| All decided answers | 0 / 23 (p < 0.01, n = 98) | 0 / 0 (p = 1.00, n = 102) | 0 / 0 (p = 1.00, n = 96) |
+| All decided answers | 0 / 24 (p < 0.01, n = 102) | 0 / 0 (p = 1.00, n = 102) | 3 / 0 (p = 0.25, n = 102) |
 
 ### 11. The agent's own checks and cost
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A2_qwen3-8b_agent_think-off_a-v1-no-calculator | A3_qwen3-8b_agent_think-off_a-v1-no-critic | A4_qwen3-8b_agent_think-off_a-v1-no-statements-first |
 |---|---|---|---|---|
 | verified by its critic | 102/102 | 77/102 | 0/102 | 101/102 |
-| correct among the verified (decided) | 86/102 | 59/73 | – | 84/96 |
-| correct among the not verified (decided) | – | 0/25 | 86/102 | – |
+| correct among the verified (decided) | 86/102 | 62/77 | – | 89/101 |
+| correct among the not verified (decided) | – | 0/25 | 86/102 | 0/1 |
 | tool calls per question (mean); questions with none | 1.6; 21 | 1.3; 21 | 1.6; 21 | 1.6; 21 |
 | tool calls that returned an error | 4/166 | 4/132 | 4/166 | 4/166 |
 | stopped by a limit (time, steps, tokens) | 0 | 0 | 0 | 0 |
@@ -128,7 +129,7 @@
 |---|---|---|---|
 | component switched off | no-calculator | no-critic | no-statements-first |
 | answers that differ from the reference's (text) | 31/102 | 0/102 | 7/102 |
-| of those: right both times / right only now / right only before / wrong both times / undecided | 0 / 0 / 23 / 4 / 4 | 0 / 0 / 0 / 0 / 0 | 1 / 0 / 0 / 0 / 6 |
+| of those: right both times / right only now / right only before / wrong both times / undecided | 3 / 0 / 24 / 4 / 0 | 0 / 0 / 0 / 0 / 0 | 3 / 3 / 0 / 1 / 0 |
 | changed answers by type (numeric, entity, summary, refusal and not reported) | 27, 4, 0, 0 | 0, 0, 0, 0 | 1, 0, 6, 0 |
 <!-- GENERATED:END -->
 
@@ -140,12 +141,15 @@ executor never runs the plan's calculation), A3 no critic (the composer's draft 
 statements first (search on plain hybrid retrieval). Run on 22 Nov 2026, one at a time on the shared key through the
 reply cache, so only the calls a switch changed went live: A3 0, A4 18, A2 85 (103 in all). Before them, A1 was
 replayed from the cache on this branch's code: 0 live requests and every record byte for byte the committed one, so
-the switches leave A1 unchanged. Nothing here was tuned on these results.
+the switches leave A1 unchanged. Nothing here was tuned on these results. The answers an ablation changed were
+graded by Chandra Shekhar and Amresh (10 grades, both agreeing on all 10; 27 labels); every unchanged answer keeps
+A1's grade.
 
 **A2, the calculator, is the component that matters most.** Short numeric answers fall from 42/48 to 19/48: ratios
 from 11/15 to 0/15, period comparisons from 11/12 to 0/12 and one follow-up (F02, an operating margin), while facts
-stay at 14/15. Question by question A2 is right on none where A1 is wrong and wrong on 23 where A1 is right (sign
-test p ≈ 2×10⁻⁷). The composer does not compute: in 27 answers it states the fetched figures without the asked
+stay at 14/15. One two-company answer is lost too: D05 states both companies' R&D spending without saying which is
+larger (graded 1). Question by question A2 is right on none where A1 is wrong and wrong on 24 where A1 is right (sign
+test p ≈ 1×10⁻⁷). The composer does not compute: in 27 answers it states the fetched figures without the asked
 ratio or growth ("Alphabet's rd expense was $49,326 million ... revenue was $350,018 million" for an R&D share), and
 the scorer finds no single value to score. It invents nothing either: unsupported numbers are 0/81 under both rules,
 and the 4 that A1 has under B0's rule (where no calculation result counts as evidence) are its calculated values.
@@ -163,18 +167,28 @@ wrong: a substituted line item and the refusal rules. The two A2 drafts it passe
 NVIDIA's gross profit as its "gross margin" ($97,858 million) and F02 answers a follow-up on Microsoft's operating
 margin with its operating income, both verified.
 
-**A4, statements first, changes little in the answers.** Seven answers differ from A1's: one numeric (B12, still
-right) and six summaries, which wait for the graders; no refusal changed. Numeric answers do not move because the
-agent takes figures from the facts tool, not from search, so the statements-first ordering (ADR-017's recall gain
-for figure questions) only acts on the 30 questions that searched, mostly summaries and traps. One summary (E01)
-lost its citation and was left unverified.
+**A4, statements first: no help to numeric answers, and in the way of summaries.** Seven answers differ from A1's:
+one numeric (B12, still right) and six summaries; no refusal changed. Numeric answers do not move because the agent
+takes figures from the facts tool, not from search, so the statements-first ordering (ADR-017's recall gain for
+figure questions) only acts on the 30 questions that searched. Summaries rise from 5/12 to 8/12 (B0's level): E02,
+E05 and E07 go from wrong to right and none the other way (sign test p = 0.25 on 12 questions, so not significant on
+its own). The mechanism is visible in what each run retrieved: a "what drove X" query names a figure ("revenue",
+"net interest income"), so the statements-first layer puts three financial-statement passages (Item 8) into the top
+five and leaves two from the MD&A (Item 7), the section that explains the drivers; without it, the top five are
+mostly MD&A. E01 (Google Cloud) is wrong both times: A4's search found nothing usable and the critic flagged its
+draft for having no citation. This matters for W3-05 (summaries), with a caution: it was found on the gold set, so a
+fix there must be a class-level rule (e.g. no statements-first ordering for a "what drove" question), developed and
+checked on the development set v2 only, and the report must say where the idea came from.
 
-**Not comparable, and pending.**
+**Limits.**
 - Latency: A2-A4 replayed most calls from the cache, which takes no time (A3's median 0.1 s), so their seconds are not
   a cost; compare model calls and tokens.
-- Pending human grades: A4's six changed summaries and A2's four two-company answers (D01, D02, D05, D08), which now
-  state both companies' figures and no winner the scorer can read, plus labels for A2's 27 wrong answers (the
-  suggested `malformed_output` on 26 of them only means "no single value"; the graders give the real label). The
-  round is prepared for Chandra Shekhar and Amresh; the scorer fills the cells when their grades are merged.
+- Failure labels (table 6): the graders labelled 26 of A2's 27 wrong answers `malformed_output` ("the asked answer is
+  missing"): not broken output, but the figures without the calculation the calculator would have made. Four of them (B04, B14, B15, C08) also fetched a different line item than the one asked, which the same
+  graders labelled `wrong_line_item` (`arithmetic_slip` for C08) in A1's answers; the labels are theirs and do not
+  affect accuracy.
+- Grader agreement (table 7) counts only each run's own grades: a grade an ablation shares with A1 is counted once,
+  under A1. On the ten new grades (A2 4, A4 6; A3 has none) the two graders agreed on all ten. Their 27 labels are
+  also identical, note included, so the labels may not have been given independently.
 - One run each at temperature 0. A2 measures the calculator under the composer's guard (it may not state a figure
   no evidence prints); letting the composer compute would be a second change and its own run.
