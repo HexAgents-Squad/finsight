@@ -344,7 +344,7 @@ re-run was made by Claude Code on 2026-11-22. Claude Code also helped with the f
 the Results summary ("the 15 table rows checked match…") was seen in a search result, along with the subject of
 commit 04a4a43 ("8 of 10 sections OK, index rows at section starts").
 
-**Checked by:** Chandra Shekhar · **Date:** · **Signed:** (yes, once the table is full)
+**Checked by:** Chandra Shekhar · **Date:** 2026-11-22 · **Signed:** yes (Chandra Shekhar's reply to Alok, 22 Nov 2026: "sign it, dated 22 Nov"; entered by Alok)
 
 **Then compare** with the Results section below and note each section where your result differs, and why. A
 difference is not an error to hide: say which reading the SEC page supports.
