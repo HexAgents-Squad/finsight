@@ -318,7 +318,8 @@ def check_summary(question: str, history: Sequence[str], draft: AnswerContract,
     need = len(want) if len(want) <= 2 else max(2, -(-len(want) * 2 // 3))      # all of 1-2, else 2 in 3
     stating = [s for p in cited for s in SENTENCE.split(" ".join(p.split()))
                if CHANGE.search(s) and len(want & set(WORD.findall(POSSESSIVE.sub("", s.lower())))) >= need]
-    subject = " ".join(sorted(want))
+    question_order = WORD.findall(POSSESSIVE.sub("", question.lower()))
+    subject = " ".join(dict.fromkeys(w for w in question_order if w in want))     # "data center revenue", as asked
     if not stating:
         return [Violation("summary", f"no cited passage states the change in {subject} the question asks about; "
                                      f"answer from the passage of the asked year's MD&A that states it and its "
