@@ -51,22 +51,30 @@ LINE_ITEMS: dict[str, re.Pattern] = {
     "current ratio": re.compile(r"\bcurrent ratio\b", re.IGNORECASE),
     "current assets": re.compile(r"\b(?:total )?current assets\b", re.IGNORECASE),
     "current liabilities": re.compile(r"\b(?:total )?current liabilities\b", re.IGNORECASE),
-    "medical care ratio": re.compile(r"\bmedical (?:care|cost|loss) ratio\b|\bMCR\b|\bmedical costs? (?:as a "
-                                     r"(?:percentage|share) of|divided by|to) premium", re.IGNORECASE),
+    "medical care ratio": re.compile(r"\bmedical (?:care|cost|loss) ratio\b|\bMCR\b", re.IGNORECASE),
 }
 # "operating expenses" inside a longer name that is another line item
 LINE_ITEM_MASKS = (re.compile(r"\bnon-?interest expenses?\b", re.IGNORECASE),)
 # Segments of the indexed companies, as their 10-Ks name them (the facts tool returns company totals only)
-SEGMENT = re.compile(r"\bsegments?\b|\bAWS\b|\bAmazon Web Services\b|\bIntelligent Cloud\b|\bProductivity and Business "
+SEGMENT = re.compile(r"\bAWS\b|\bAmazon Web Services\b|\bIntelligent Cloud\b|\bProductivity and Business "
                      r"Processes\b|\bMore Personal Computing\b|\bGoogle Cloud\b|\bGoogle Services\b|\bFamily of Apps\b|"
                      r"\bReality Labs\b|\bOptum\b|\bUnitedHealthcare\b|\bInnovative Medicine\b|\bMedTech\b|"
                      r"\bCompute (?:&|and) Networking\b|\bGlobal Banking (?:&|and) Markets\b|\bAsset (?:&|and) Wealth "
                      r"Management\b|\bPlatform Solutions\b", re.IGNORECASE)
 NET_SALES = re.compile(r"\bnet sales\b", re.IGNORECASE)
 TOTAL_REVENUE_CONCEPT = "us-gaap:Revenues"
+# Companies whose income statement reports net sales apart from membership and other income, so that their total
+# revenues fact is not net sales (Costco: net sales + membership fees; Walmart: net sales + membership and other income)
+SEPARATE_NET_SALES = frozenset({"COST", "WMT"})
 NOT_AVAILABLE = re.compile(r"\bnot (?:\w+ ){0,2}(?:reported|disclosed|available|provided|found|returned)\b|\bno "
-                           r"(?:separate |such )?(?:figure|line|value|fact)\b|\bdid not find\b|\bcould not find\b",
-                           re.IGNORECASE)
+                           r"(?:separate |such )?(?:figure|line|value|fact)\b|\b(?:did|could|does|do) not (?:find|"
+                           r"report|disclose|provide|present|include)\b|\bunavailable\b|\bnot (?:separately )?"
+                           r"(?:broken out|stated)\b", re.IGNORECASE)
+# How a passage names an item as its own line (for not_found): "time deposits" or "deposits with banks" are not a
+# bank's total deposits
+LINE_ITEM_IN_PASSAGE: dict[str, re.Pattern] = {"deposits": re.compile(r"\btotal deposits\b", re.IGNORECASE)}
+# A reference, not a value: "Note 3", "Item 7", "Table 9", "page 42"
+REFERENCE = re.compile(r"\b(?:note|notes|item|items|table|page|pages|part|exhibit)\s*$", re.IGNORECASE)
 # Operations whose denominator is revenue unless the question names another
 REVENUE_SHARE = re.compile(r"\bmargin\b|\b(?:percentage|percent|share|proportion|fraction) of\b|% of\b",
                            re.IGNORECASE)
@@ -81,13 +89,17 @@ NET_INCOME_NAMED = re.compile(r"\bnet (?:income|earnings)\b", re.IGNORECASE)
 CHANGE = re.compile(r"\b(?:increas\w*|decreas\w*|declin\w*|grew|grow\w*|rose|rise|fell|fall\w*|drop\w*|lower|higher|"
                     r"was (?:up|down)|were (?:up|down)|improv\w*|reduc\w*)\b", re.IGNORECASE)
 WORD = re.compile(r"[a-z][a-z&'\-]+")
-POSSESSIVE = re.compile(r"['’]s\b")                  # "Costco's" -> "Costco" before reading words
+POSSESSIVE = re.compile(r"['’]s?(?=\s|$|[,.?;:])")  # "Costco's", "Sachs'" -> the name, before reading words
 QUESTION_WORDS = frozenset(
     "what why how did does do was were is are the a an in of for to and or its their his her drove drive driving "
     "driver drivers explains explain explained caused cause causes contributed contribute reasons reason say says "
     "said attribute attributes fiscal year quarter so sharply strongly much more less behind change changes "
     "changed increase increased decrease decreased decline declined growth grow grew rise rose fall fell drop "
-    "dropped higher lower up down during from with that this which company company's".split())
+    "dropped higher lower up down during from with that this which company company's expansion expand expanded "
+    "improvement improve improved contraction compared comparison versus prior previous year-over-year "
+    "year-on-year main primary key major record first second third fourth third-quarter second-quarter "
+    "first-quarter fourth-quarter full-year annual quarterly".split())
+# A drivers question's subject words a passage sentence must carry: all of one or two, else two in three (rounded up)
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
 YEAR = re.compile(r"^(?:19|20)\d{2}$")
 # Refusal-rule cues (docs/spec.md §6)
@@ -96,8 +108,9 @@ RULE_BREAKING = re.compile(r"\b(?:ignore|disregard|forget|bypass|override)\b.{0,
                            r"\bno restrictions\b|\bdeveloper mode\b", re.IGNORECASE)
 TAX_LEGAL = re.compile(r"\btax(?:es|ed|ation)?\b|\blegal(?:ly)?\b|\blawyer\b|\battorney\b|\binheri\w+\b",
                        re.IGNORECASE)
-FORECAST = re.compile(r"\bwill\b|\bexpect\w*\b|\bforecast\w*\b|\bpredict\w*\b|\bproject(?:ed|ion)s?\b|\bnext year\b|"
-                      r"\bgoing forward\b|\bin the future\b", re.IGNORECASE)
+FORECAST = re.compile(r"\bwill\b|\b(?:do|does|did) (?:you|\w+(?: \w+)?) expect\b|\bexpects? (?:to|that)\b|"
+                      r"\bexpected to\b|\bforecast(?:s|ed|ing)?\b(?! (?:accuracy|error))|\bpredict\w*\b|"
+                      r"\bnext (?:fiscal )?year\b|\bgoing forward\b|\bin the future\b", re.IGNORECASE)
 FACT_ASK = re.compile(r"\b(?:what|how much)\b[^?]*?\b(?:was|were)\b|\bgiven\b", re.IGNORECASE)
 # ----------------------------------------------------------------------------------------------- helpers
 def asked_line_items(text: str) -> list[str]:
@@ -126,7 +139,7 @@ def _names_a_company(text: str) -> bool:
 def subject_text(question: str, history: Sequence[str], has: Any) -> str:
     """The question, or, for a follow-up that names no company and nothing `has` finds, its latest earlier turn
     that does (W2-06 memory: "What was its operating margin that year?" asks about the turn before)."""
-    if has(question) or _names_a_company(question):
+    if has(question) or _names_a_company(question) or question_metrics(question) or asked_line_items(question):
         return question
     for prior in reversed(list(history)):
         if has(prior):
@@ -231,8 +244,8 @@ def check_net_sales(question: str, history: Sequence[str], draft: AnswerContract
                                    f"{row.get('label')} ({row['value']}), which includes other revenue; search the "
                                    f"income statement for net sales")
             for row in used_fact_rows(draft, results)
-            if row["metric"] == "revenue" and row.get("concept") == TOTAL_REVENUE_CONCEPT
-            and "sales" not in str(row.get("label") or "").lower()]
+            if row["metric"] == "revenue" and row.get("ticker") in SEPARATE_NET_SALES
+            and row.get("concept") == TOTAL_REVENUE_CONCEPT and "sales" not in str(row.get("label") or "").lower()]
 
 
 def check_segment(question: str, history: Sequence[str], draft: AnswerContract,
@@ -258,9 +271,11 @@ def check_not_found(question: str, history: Sequence[str], draft: AnswerContract
         return []
     for chunk_id, passage in _passages(results).items():
         for item in items:
-            for m in LINE_ITEMS[item].finditer(passage):
-                after = passage[m.end():m.end() + 80]
-                if _numbers(after):
+            for m in LINE_ITEM_IN_PASSAGE.get(item, LINE_ITEMS[item]).finditer(passage):
+                clause = re.split(r"[.;]\s", passage[m.end():m.end() + 80], maxsplit=1)[0]
+                values = [f for f in re.finditer(r"\(?\$?\d[\d,]*(?:\.\d+)?%?", clause)
+                          if not REFERENCE.search(clause[:f.start()])]
+                if values:
                     return [Violation("not_found", f"the answer says {item} was not found or is not reported, but "
                                                    f"a retrieved passage ({chunk_id}) gives it: answer from that "
                                                    f"passage and cite it")]
@@ -270,7 +285,7 @@ def check_not_found(question: str, history: Sequence[str], draft: AnswerContract
 def x_words(question: str) -> set[str]:
     """The content words of what a "what drove X" question asks about (X), without the company's name."""
     from retrieval.entities import extract
-    text = re.sub(r"['’]s\b", "", question.lower())        # "Costco's net sales" -> costco, net, sales
+    text = POSSESSIVE.sub("", question.lower())               # "Costco's", "Sachs'" -> costco, sachs
     words = set(WORD.findall(text)) - QUESTION_WORDS
     names = {w for t in extract(question).tickers for w in _ticker_words(t)}
     return {w for w in words if w not in names and not w.endswith("ly") and len(w) > 2}
@@ -300,8 +315,9 @@ def check_summary(question: str, history: Sequence[str], draft: AnswerContract,
     cited = [passages[c.chunk_id] for c in draft.citations if c.source_type == "filing" and c.chunk_id in passages]
     if not cited:
         return []                                   # no passage cited: the contract's citation check says so
+    need = len(want) if len(want) <= 2 else max(2, -(-len(want) * 2 // 3))      # all of 1-2, else 2 in 3
     stating = [s for p in cited for s in SENTENCE.split(" ".join(p.split()))
-               if CHANGE.search(s) and want <= set(WORD.findall(re.sub(r"['’]s\b", "", s.lower())))]
+               if CHANGE.search(s) and len(want & set(WORD.findall(POSSESSIVE.sub("", s.lower())))) >= need]
     subject = " ".join(sorted(want))
     if not stating:
         return [Violation("summary", f"no cited passage states the change in {subject} the question asks about; "

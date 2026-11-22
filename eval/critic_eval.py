@@ -7,8 +7,9 @@ ones (false flags), with no new model request.
 
 Each question goes through A1's graph again (eval/run_agent.py's real nodes: the same planner and composer prompts, the
 tools on data/) up to the composer's first draft. The planner's and composer's model calls are answered by the reply
-cache, so the drafts are A1's own, at no request: the LLM budget is 1 and a cache miss stops the run with nothing
-written (a changed prompt or tool output would show as one). Search queries embed through EMBED_BACKEND: set the local
+cache, so the drafts are A1's own, at no request: the client is cache-only (a miss raises before anything is sent,
+and nothing is written to the cache), so a cache miss stops the run with nothing written (a changed prompt or tool
+output would show as one). Search queries embed through EMBED_BACKEND: set the local
 copy of the embedding model (as above) and no request leaves the machine; it gives the same vectors as the endpoint
 (ADR-038). The critic of this checkout then judges that first draft, and the run stops there: no send-back, so nothing
 is re-composed. Each verdict is joined with the run's graded score (eval/results/.../scores/<run>.jsonl, the graders'
@@ -42,6 +43,10 @@ SCORE_DIRS = {"gold": RESULTS_DIR / "scores", "dev2": RESULTS_DIR / "dev_v2" / "
 # Refusal tests scored on the refusal decision only (eval/score_answers.py): "right" says nothing about a figure, so a
 # flag on one may be a catch the score cannot see; the report names them apart
 DECISION_ONLY = frozenset({"control", "partial"})
+
+
+class CacheMiss(Exception):
+    """A model call the reply cache cannot answer: the replay is not A1's run, and nothing is sent."""
 
 
 class FirstDraftJudged(Exception):
@@ -161,11 +166,20 @@ def report(name: str, judged: dict[str, Judged], scores: dict[str, dict], meta: 
     return "\n".join(out) + "\n"
 
 
+def cache_only(client: Any) -> Any:
+    """`client` answering from the reply cache only: core.llm.LLMClient calls `_fetch` on a cache miss (its only path to
+    the endpoint), which now raises CacheMiss before anything is sent or cached."""
+    async def refuse(request: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        raise CacheMiss(f"no cached reply for a {request.get('model')} request")
+
+    client._fetch = refuse
+    return client
+
+
 async def run_live(items: list[Item], settings: Any, limits: Any) -> tuple[dict[str, Judged], Any]:
     from core.llm import LLMClient
-    from eval.run_demo import BudgetedLLM
     async with LLMClient(settings) as client:
-        judged = await replay(items, real_recording_nodes(BudgetedLLM(client, 1)), limits)
+        judged = await replay(items, real_recording_nodes(cache_only(client)), limits)
         return judged, client.usage
 
 
@@ -190,18 +204,22 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
         print(f"setup incomplete: {str(err).splitlines()[0]}", file=sys.stderr)
         return 2
     limits = limits or Limits.from_settings(settings)
-    from eval.run_demo import BudgetExceeded
     try:
         if nodes is None:
             judged, usage = asyncio.run(run_live(items, settings, limits))
             live = usage.calls
         else:                                              # given nodes (a test): no client
             judged, live = asyncio.run(replay(items, nodes, limits)), 0
-    except BudgetExceeded as err:
-        print(f"a model call was not in the reply cache ({err}); not A1's replay, nothing written", file=sys.stderr)
+    except CacheMiss as err:
+        print(f"a model call was not in the reply cache ({err}); not A1's replay, nothing sent or written",
+              file=sys.stderr)
         return 2
     if live:
         print(f"{live} live request(s): not A1's replay, nothing written", file=sys.stderr)
+        return 2
+    unscored = sorted(set(judged) ^ set(scores))
+    if unscored:
+        print(f"the replay and the scores cover different questions: {', '.join(unscored)}", file=sys.stderr)
         return 2
     differ = same_as_recorded(judged, runs)
     if differ:

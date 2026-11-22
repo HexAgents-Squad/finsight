@@ -284,3 +284,80 @@ def test_a_what_does_it_say_question_is_not_a_drivers_question_unless_it_asks_wh
     assert cs.check_summary("What does Apple say about its supply chain in fiscal 2024?", [], about, []) == []
     assert cs.DRIVERS.search("What does Amazon say drove AWS sales growth in fiscal 2023?")
     assert cs.DRIVERS.search("To what does Pfizer attribute the drop in its revenues to?")
+
+
+# ----------------------------------------------------------------------------------------------- review follow-ups
+def test_a_follow_up_that_names_its_own_metric_keeps_its_own_subject():
+    draft = contract("Wells Fargo's net income was $19,142 million in fiscal 2023.",
+                     [value("net_income", 19142.0, ticker="WFC")], [xbrl("WFC")])
+    rows = [fact("net_income", 19142.0, ticker="WFC")]
+    assert cs.check_line_item("What was its net income that year?",
+                              ["What were Wells Fargo's total deposits at the end of fiscal 2023?"], draft, rows) == []
+    assert cs.check_segment("And what was the net income that year?", ["What was AWS operating income in fiscal 2024?"],
+                            draft, rows) == []
+    assert cs.check_net_sales("And its net income?", ["What were Costco's net sales in fiscal 2025?"], draft, rows) == []
+
+
+def test_comparison_and_period_words_and_a_trailing_possessive_are_not_the_subject():
+    assert cs.x_words("What drove Goldman Sachs' third-quarter net revenues?") == {"net", "revenues"}
+    q = "What drove NVIDIA's gross margin expansion in fiscal 2024?"
+    assert cs.x_words(q) == {"gross", "margin"}
+    passage = (chunk(20, "NVDA", 2024, "Item 7"), "Gross margin increased to 72.7% from 56.9% a year ago, driven by "
+                                                  "Data Center sales.")
+    draft = contract("Gross margin rose to 72.7% from 56.9% on higher Data Center sales.",
+                     [value("gm", 72.7, unit="%", ticker="NVDA", year=2024), value("gm0", 56.9, unit="%", ticker="NVDA",
+                                                                                year=2024)],
+                     [filing(20, ticker="NVDA", year=2024, item="Item 7")])
+    assert cs.check_summary(q, [], draft, [search(passage)]) == []
+
+
+def test_net_sales_is_checked_only_where_the_filing_reports_it_apart_from_other_revenue():
+    q = "What were Coca-Cola's net sales in fiscal 2024?"
+    draft = contract("Coca-Cola's net operating revenues were $47,061 million.",
+                     [value("revenue", 47061.0, ticker="KO", year=2024)], [xbrl("KO", 2024, "us-gaap:Revenues")])
+    ko = fact("revenue", 47061.0, ticker="KO", year=2024, label="net operating revenues", concept="us-gaap:Revenues")
+    assert cs.check_net_sales(q, [], draft, [ko]) == []
+
+
+def test_a_mention_of_all_segments_is_not_a_segment_question():
+    draft = contract("Microsoft's total revenue was $245,122 million.", [value("revenue", 245122.0, ticker="MSFT",
+                                                                                 year=2024)], [xbrl("MSFT", 2024)])
+    assert cs.check_segment("What was Microsoft's total revenue across all segments in fiscal 2024?", [], draft,
+                            [fact("revenue", 245122.0, ticker="MSFT", year=2024)]) == []
+
+
+def test_not_found_ignores_references_and_other_kinds_of_the_item():
+    draft = contract("Goldman Sachs does not report current assets and current liabilities.")
+    note = search((chunk(1, "GS"), "We do not present current assets and current liabilities (see Note 3)."))
+    assert cs.check_not_found("What were Goldman Sachs's current assets at the end of fiscal 2023?", [], draft,
+                              [note]) == []
+    apple = contract("Apple's total deposits are not reported.")
+    time = search((chunk(1, "AAPL"), "Cash equivalents include time deposits of $1,234 million."))
+    assert cs.check_not_found("What were Apple's total deposits at the end of fiscal 2023?", [], apple, [time]) == []
+
+
+def test_an_admission_worded_does_not_report_lets_a_named_substitute_pass():
+    draft = contract("The facts tool does not report total deposits. Bank of America's total assets were "
+                     "$3,180,151 million.", [value("total_assets", 3180151.0)], [xbrl()])
+    assert cs.check_line_item(DEPOSITS_Q, [], draft, [fact("total_assets", 3180151.0)]) == []
+
+
+def test_accounting_terms_are_not_forecasts():
+    assert cs.check_refusal_rule("What were Apple's expected credit losses in fiscal 2015?", refused("R3")) == []
+    assert cs.check_refusal_rule("What was Pfizer's projected benefit obligation in fiscal 2015?", refused("R3")) == []
+
+
+def test_the_replay_client_is_cache_only():
+    import asyncio
+
+    import pytest
+
+    from eval import critic_eval as ce
+
+    class Client:
+        async def _fetch(self, request, *args):                       # would go to the endpoint
+            raise AssertionError("sent")
+
+    client = ce.cache_only(Client())
+    with pytest.raises(ce.CacheMiss):
+        asyncio.run(client._fetch({"model": "Qwen/Qwen3-8B"}, "Qwen/Qwen3-8B", None))
