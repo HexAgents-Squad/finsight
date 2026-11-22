@@ -26,11 +26,11 @@ traces back to a committed run file.
 | Answer type | Qwen3-8B, passages (B0) | S1 few-shot | S2 reasoning + 5-sample vote | S3 decomposition |
 |---|---|---|---|---|
 | Short: numeric | 16/48 (33%) | 17/48 (35%) | 20/48 (42%) | 21/48 (44%) |
-| Short: entity | 5/10 (50%) | 5/10 (50%) | 6/8 (75%), 2 pending | 8/10 (80%) |
-| Summary | 8/12 (67%) | pending (12) | pending (12) | pending (12) |
-| Refusal & not reported | 21/32 (66%) | 27/32 (84%) | 22/32 (69%) | 18/32 (56%) |
+| Short: entity | 5/10 (50%) | 5/10 (50%) | 6/10 (60%) | 8/10 (80%) |
+| Summary | 8/12 (67%) | 4/12 (33%) | 3/12 (25%) | 3/12 (25%) |
+| Refusal & not reported | 21/32 (66%) | 31/32 (97%) | 22/32 (69%) | 19/32 (59%) |
 | Answers with a number not in the passages | 20/74 | 15/72 | 4/85 | 19/88 |
-| Right only with the strategy / only with B0 (sign test) | – | 10 / 3 (p = 0.09, n = 90) | 12 / 5 (p = 0.14, n = 88) | 11 / 6 (p = 0.33, n = 90) |
+| Right only with the strategy / only with B0 (sign test) | – | 14 / 7 (p = 0.19, n = 102) | 12 / 11 (p = 1.00, n = 102) | 12 / 11 (p = 1.00, n = 102) |
 | Seconds per question, median / 95th percentile | 2.4 / 3.6 | 2.1 / 3.1 | 22.9 / 31.7 | 8.2 / 16.1 |
 
 **Retrieval** (73 gold questions with sources; recall@k checks the right filing section, the answer figure the exact passage; `eval/results/retrieval_summary.md`)
@@ -52,7 +52,8 @@ traces back to a committed run file.
 - **Qwen3-8B with passages is the model to build on:** best or tied on every answer type; closed book it gives a
   number it cannot support in 45 of 70 answers, so the agent never answers figures without retrieval or the XBRL tool.
 - **No prompting strategy wins everywhere** (paired sign test against B0): few-shot fixes refusals (the only
-  significant gain, 6 better / 0 worse, p = 0.03) but copied an example's figure into three answers;
+  significant gain, 10 better / 0 worse, p = 0.002 with the W2-12 human grades) but copied an example's figure
+  into three answers;
   self-consistency cuts ungrounded numbers from 20 of 74 answers to 4 of 85 at 5 calls and ~23 s per question;
   decomposition is best on numbers and multi-company questions but under-refuses (ADR-018).
 - **Cleaner text and a better embedding model** (W1-04, W1-16): bge-small-en-v1.5 raised dense recall@5 with

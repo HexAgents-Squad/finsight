@@ -44,11 +44,11 @@ from the committed results by `scripts/week1_notes.py`; the full reports they co
 | Answer type | Qwen3-8B, passages (B0) | S1 few-shot | S2 reasoning + 5-sample vote | S3 decomposition |
 |---|---|---|---|---|
 | Short: numeric | 16/48 (33%) | 17/48 (35%) | 20/48 (42%) | 21/48 (44%) |
-| Short: entity | 5/10 (50%) | 5/10 (50%) | 6/8 (75%), 2 pending | 8/10 (80%) |
-| Summary | 8/12 (67%) | pending (12) | pending (12) | pending (12) |
-| Refusal & not reported | 21/32 (66%) | 27/32 (84%) | 22/32 (69%) | 18/32 (56%) |
+| Short: entity | 5/10 (50%) | 5/10 (50%) | 6/10 (60%) | 8/10 (80%) |
+| Summary | 8/12 (67%) | 4/12 (33%) | 3/12 (25%) | 3/12 (25%) |
+| Refusal & not reported | 21/32 (66%) | 31/32 (97%) | 22/32 (69%) | 19/32 (59%) |
 | Answers with a number not in the passages | 20/74 | 15/72 | 4/85 | 19/88 |
-| Right only with the strategy / only with B0 (sign test) | – | 10 / 3 (p = 0.09, n = 90) | 12 / 5 (p = 0.14, n = 88) | 11 / 6 (p = 0.33, n = 90) |
+| Right only with the strategy / only with B0 (sign test) | – | 14 / 7 (p = 0.19, n = 102) | 12 / 11 (p = 1.00, n = 102) | 12 / 11 (p = 1.00, n = 102) |
 | Seconds per question, median / 95th percentile | 2.4 / 3.6 | 2.1 / 3.1 | 22.9 / 31.7 | 8.2 / 16.1 |
 
 ### Retrieval settings
@@ -109,7 +109,8 @@ from the committed results by `scripts/week1_notes.py`; the full reports they co
   and wrong line items (7); closed book, invented numbers lead (28 of its wrong answers).
 - **Arithmetic slips** are the main loss when the evidence is present (B0 4 of its 6 misses on such questions);
   reasoning (S2) and decomposition (S3) remove them.
-- **Over-refusal** (B0 10) and **under-refusal** (S2 7, S3 8): refusal must be decided before any extraction step.
+- **Over-refusal** (B0 10) and **under-refusal** (S2 3, S3 4; each also declined 3-4 questions it should refuse
+  with "not reported" instead, the graders' labels in W2-12): refusal must be decided before any extraction step.
 - **Format:** Llama-3.2-3B returned valid JSON for 72 of 102 questions; every Qwen3-8B B0 answer was valid JSON,
   and with guided decoding every strategy answer was valid too.
 - **Copying from examples:** few-shot examples taken from real filings leaked a figure into three answers.

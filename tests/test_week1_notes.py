@@ -65,7 +65,7 @@ RESULTS = "eval/results/"
 CITED = [
     ("17 of 18", RESULTS + "prompting_baselines.md", "| all in the passages | 12/18 = 67%"),
     ("17 of 18", RESULTS + "prompting_baselines.md", "| 17/18 = 94%"),
-    ("6 better / 0 worse, p = 0.03", RESULTS + "prompting_baselines.md", "| Refusal & not reported | 6 / 0 (p = 0.03, n = 32)"),
+    ("10 better / 0 worse, p = 0.002", RESULTS + "prompting_baselines.md", "| Refusal & not reported | 10 / 0 (p < 0.01, n = 32)"),
     ("20 of 74", RESULTS + "prompting_baselines.md", "| unsupported numbers | 20/74 | 15/72 | 4/85 | 19/88 |"),
     ("~23 s per question", RESULTS + "prompting_baselines.md", "| 22.9 / 31.7 |"),
     ("45 of 70", RESULTS + "model_comparison.md", "| unsupported numbers | 20/74 | 15/66 | 45/70 |"),
@@ -90,7 +90,7 @@ DETAILED_CITED = [
      "| arithmetic_slip | 10 |"),
     ("closed book, invented numbers lead (28", RESULTS + "model_comparison.md", "| invented_number | 8 | 14 | 28 |"),
     ("valid JSON for 72 of 102", RESULTS + "model_comparison.md", "| valid B0 JSON | 102/102 | 72/102 | 102/102 |"),
-    ("under-refusal** (S2 7, S3 8)", RESULTS + "prompting_baselines.md", "| under-refusals | 3 | 0 | 7 | 8 |"),
+    ("under-refusal** (S2 3, S3 4", RESULTS + "prompting_baselines.md", "| under-refusals | 3 | 0 | 3 | 4 |"),
     ("B0 4 of its 6 misses", RESULTS + "prompting_baselines.md", "(4 of its 6 misses)"),
 ]
 
