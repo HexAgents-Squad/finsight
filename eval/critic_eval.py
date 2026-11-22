@@ -39,6 +39,9 @@ from eval.run_retrieval import RESULTS_DIR  # noqa: E402
 
 OUT_DIR = RESULTS_DIR / "critic"
 SCORE_DIRS = {"gold": RESULTS_DIR / "scores", "dev2": RESULTS_DIR / "dev_v2" / "scores"}
+# Refusal tests scored on the refusal decision only (eval/score_answers.py): "right" says nothing about a figure, so a
+# flag on one may be a catch the score cannot see; the report names them apart
+DECISION_ONLY = frozenset({"control", "partial"})
 
 
 class FirstDraftJudged(Exception):
@@ -141,6 +144,9 @@ def report(name: str, judged: dict[str, Judged], scores: dict[str, dict], meta: 
            f"- Catch rate (wrong answers flagged): {rate(len(s['caught']), s['wrong'])}",
            f"- False flags (right answers flagged): {rate(len(s['false_flags']), s['right'])}"
            + (f": {', '.join(s['false_flags'])}" if s["false_flags"] else ""),
+           *([f"  - of which refusal tests scored on the refusal decision only (their figures are not scored, so "
+              f"the flag may be right): {', '.join(decided)}"]
+             if (decided := [q for q in s["false_flags"] if scores[q]["answer_type"] in DECISION_ONLY]) else []),
            f"- Undecided by the scorer: {len(s['undecided'])}" + (f", flagged {', '.join(s['undecided_flagged'])}"
                                                                    if s["undecided_flagged"] else ""),
            "- Checks behind the catches (a draft can fail several): "

@@ -146,6 +146,15 @@ python eval/score_answers.py --questions dev2                     # -> results/d
 partial refusals, rule edge cases, traps, eight "what drove" summaries), on company-years gold does not ask about and
 apart from v1 (ids from 21). The A5 fixes (W3-03 to W3-07) are tuned and checked here, never on gold. ADR-038.
 
+## The critic on A1's drafts (W3-03)
+```bash
+EMBED_BACKEND=sentence-transformers EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5     python eval/critic_eval.py --questions dev2     # -> results/critic/critic_dev2.md (tune here)
+python eval/critic_eval.py --questions gold          # the regression check: no flag on a right answer
+```
+A1's recorded runs are replayed from the reply cache to each first draft (no request: a cache miss stops it), the
+critic of this checkout judges the draft, and the verdicts are joined with the graded scores: catch rate (wrong answers
+flagged) and false flags (right answers flagged). ADR-039.
+
 ## The ablations (W3-01)
 ```bash
 python eval/run_agent.py --ablation no-critic --max-requests 5              # A3: no critic (replays: ~0 requests)
