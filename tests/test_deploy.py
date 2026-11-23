@@ -159,15 +159,18 @@ def test_check_data_names_each_missing_file(tmp_path):
     (tmp_path / "config").mkdir()
     shutil.copy(ROOT / "config" / "companies.yaml", tmp_path / "config" / "companies.yaml")
     missing = check_data.problems(tmp_path)
-    assert len(missing) == 5 + len(companies) and missing[0].startswith(".env is missing")
-    for line in missing[1:]:
-        path = tmp_path / line.split(" is missing")[0]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-    (tmp_path / ".env").write_text("", encoding="utf-8")
+    assert len(missing) == 6 and missing[0].startswith(".env is missing")        # the 20 facts files on one line
+    assert missing[-1].startswith(f"data/xbrl/ is missing the XBRL facts of {len(companies)} of {len(companies)}")
+    files = [line.split(" is missing")[0] for line in missing[1:-1]]
+    files += [f"data/xbrl/{c['ticker']}.json" for c in companies] + [".env"]
+    for name in files:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("x", encoding="utf-8")
     assert check_data.problems(tmp_path) == []
     (tmp_path / "data" / "raw" / "manifest.jsonl").unlink()
-    assert [x.split(" (")[0] for x in check_data.problems(tmp_path)] == ["data/raw/manifest.jsonl is missing"]
+    (tmp_path / "data" / "xbrl" / "KO.json").unlink()
+    assert [x.split(" (")[0] for x in check_data.problems(tmp_path)] == [
+        "data/raw/manifest.jsonl is missing", f"data/xbrl/ is missing the XBRL facts of 1 of {len(companies)} companies"]
 
 
 @pytest.mark.parametrize("text", ["make up", "cp .env.example .env", "make ingest index", "make down", "WSL"])

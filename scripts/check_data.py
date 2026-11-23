@@ -20,7 +20,7 @@ from ingest import COMPANIES_FILE, MANIFEST_FILE, XBRL_DIR  # noqa: E402  (both 
 from retrieval import CHROMA_DIR, CHUNKS_DIR, INDEX_DIR  # noqa: E402
 
 VARIANT = "C3"              # tools/search_filings.DEFAULT_VARIANT (tests/test_deploy.py checks they agree)
-BUILD = "make ingest index (about 1.5 h; or copy data/ from a teammate who built it)"
+BUILD = "make ingest index (over an hour on a CPU), or copy it from a teammate who built it (README.md)"
 
 
 def tickers(companies_file: Path = COMPANIES_FILE) -> list[str]:
@@ -40,9 +40,13 @@ def problems(root: Path = ROOT) -> list[str]:
               (rel(CHROMA_DIR) / "chroma.sqlite3", "the dense (Chroma) index", BUILD),
               (rel(CHUNKS_DIR) / f"chunks_{VARIANT}.jsonl", f"the {VARIANT} chunks", BUILD),
               (rel(MANIFEST_FILE), "the filing manifest", BUILD)]
-    needed += [(rel(XBRL_DIR) / f"{t}.json", f"the XBRL facts of {t}", BUILD) for t in tickers(rel(COMPANIES_FILE))]
     out += [f"{path.relative_to(root).as_posix()} is missing ({what}): {fix}" for path, what, fix in needed
             if not path.is_file()]
+    companies = tickers(rel(COMPANIES_FILE))
+    facts = [t for t in companies if not (rel(XBRL_DIR) / f"{t}.json").is_file()]
+    if facts:
+        out.append(f"{rel(XBRL_DIR).relative_to(root).as_posix()}/ is missing the XBRL facts of {len(facts)} of "
+                   f"{len(companies)} companies ({', '.join(facts)}): {BUILD}")
     return out
 
 
