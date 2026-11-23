@@ -5,21 +5,21 @@
 
 | Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| Short: numeric | 2/14 = 14% [4%–40%] | 9/14 = 64% [39%–84%] |
-| Short: entity | 0/1 = 0% [0%–79%] | pending (1) |
-| Summary | 3/8 = 38% [14%–69%] | pending (8) |
+| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] |
+| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] |
+| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] |
 | Refusal & not reported | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
 | Category | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| fact | 2/8 = 25% [7%–59%] | 4/8 = 50% [22%–78%] |
+| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] |
 | ratio | 0/3 = 0% [0%–56%] | 3/3 = 100% [44%–100%] |
 | period_comparison | 0/2 = 0% [0%–66%] | 2/2 = 100% [34%–100%] |
 | multi_turn | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] |
-| multi_company | 0/1 = 0% [0%–79%] | pending (1) |
-| qualitative | 3/8 = 38% [14%–69%] | pending (8) |
+| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] |
+| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] |
 | refuse | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
 | refusal tests: refusal | – | – |
 | refusal tests: partial | – | – |
@@ -57,25 +57,25 @@
 | completion tokens (mean) | 278 | 269 |
 | latency p50 / p95 (s, answered calls) | 6.4 / 16.4 | 3.9 / 9.1 |
 | cached replies | 0/30 | 0/30 |
-| automatic verdicts overturned by graders | 2 | 0 |
+| automatic verdicts overturned by graders | 2 | 1 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
 
 | Label | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| wrong_line_item | 9 | 1 |
+| wrong_line_item | 9 | 0 |
 | wrong_company | 1 | 0 |
 | over_refusal | 2 | 2 |
 | malformed_output | 1 | 2 |
-| incomplete_summary | 5 | 0 |
+| incomplete_summary | 5 | 4 |
 | wrong_refusal_rule | 3 | 3 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| graders' exact agreement (independent grades) | 9/9 | – |
-| graders' Cohen's kappa | 1.00 | – |
+| graders' exact agreement (independent grades) | 9/9 | 9/9 |
+| graders' Cohen's kappa | 1.00 | 1.00 |
 | final grade vs judge: exact agreement | – | – |
 | final grade vs judge: Cohen's kappa | – | – |
 
@@ -84,7 +84,7 @@
 
 | Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| all in the passages | 2/3 = 67% [21%–94%] | 9/10 = 90% [60%–98%] |
+| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] |
 | not all in the passages | 0/10 = 0% [0%–28%] | 0/3 = 0% [0%–56%] |
 
 ### 9. Cost per question and self-consistency
@@ -103,19 +103,19 @@
 
 | Answers | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|
-| Short: numeric | 8 / 1 (p = 0.04, n = 14) |
-| Short: entity | – |
-| Summary | – |
+| Short: numeric | 8 / 0 (p = 0.01, n = 14) |
+| Short: entity | 1 / 0 (p = 1.00, n = 1) |
+| Summary | 1 / 0 (p = 1.00, n = 8) |
 | Refusal & not reported | 0 / 0 (p = 1.00, n = 7) |
-| All decided answers | 8 / 1 (p = 0.04, n = 21) |
+| All decided answers | 10 / 0 (p < 0.01, n = 30) |
 
 ### 11. The agent's own checks and cost
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
 | verified by its critic | 27/30 | 20/30 |
-| correct among the verified (decided) | 9/27 | 13/14 |
-| correct among the not verified (decided) | 0/3 | 0/7 |
+| correct among the verified (decided) | 9/27 | 18/20 |
+| correct among the not verified (decided) | 0/3 | 1/10 |
 | tool calls per question (mean); questions with none | 1.5; 7 | 1.3; 7 |
 | tool calls that returned an error | 4/44 | 2/40 |
 | stopped by a limit (time, steps, tokens) | 0 | 0 |
@@ -178,14 +178,16 @@ planner prompt `planner-v2`), on 23 Nov 2026 on the shared key: 38 live requests
 development checkpoint toward A5, not A5 (ADR-037); the first W3-04 prompt's run (49 live requests) was replaced by
 this one and is described in ADR-040.
 
-**Numeric 9/14, from A1's 2/14, and no numeric or refusal answer worse.** Now right: Bank of America's total deposits (A21), Wells Fargo's
+**Graded (Chandra Shekhar and Amresh, 9 of 9 grades agreeing, kappa 1.00): numeric 10/14 from A1's 2/14, entity
+1/1 from 0/1, summaries 4/8 from 3/8, refusals unchanged at 4/7.** Now right: Bank of America's total deposits (A21), Wells Fargo's
 noninterest expense (A22), Citigroup's deposits in the partial refusal (A26), Pfizer's current ratio 0.91 (B22),
 Citigroup's operating expenses as a share of revenue, 66.4% (B23), and the change in Bank of America's deposits (C21);
 each now comes from the facts tool's own metric instead of a substitute. A23 (Costco's net sales) and A24 (AWS
 operating income) give the same text as A1's, which the graders overturned to right; A23 now carries its figure as a
-value and scores right automatically, A24 does not and reads "no value" until it is graded.
+value and scores right automatically; A24 does not, and both graders marked it right again, so it is overturned as
+in the W3-02 round. D21 now compares the two banks' total deposits (graded 2; A1 compared total assets, 0).
 
-**One summary is likely worse.** E25 (Pfizer's revenue decline, a summary) is likely worse: the first draft was A1's own answer (graded 1 by both graders), W3-03's critic sent it back, and the rewrite failed its checks twice and fell back to "did not find"; a send-back can leave a partly right answer worse, which is W3-03's and A5's to fix, not a facts question.
+**Summaries: one better, one worse.** E23 (NVIDIA Gaming) is graded 2 where A1's answer had 1. E25 (Pfizer's revenue decline, a summary) is worse, graded 0 by both graders where A1's answer had 1: the first draft was A1's own answer, W3-03's critic sent it back, and the rewrite failed its checks twice and fell back to "did not find"; a send-back can leave a partly right answer worse, which is W3-03's and A5's to fix, not a facts question.
 
 **Two items now expect the latest filed values (option B, agreed by Giridharan on 23 Nov 2026).** B21 (Bank of
 America) and C22 (Citigroup) were written from the first reported figures, while the facts tool returns the latest filed
@@ -196,5 +198,6 @@ answers and notes), and both answers are right; nothing in the agent was changed
 not listed as the items' sources, since gold-v1 cites those filing periods and the set stays apart from them (ADR-038).
 
 **Not W3-04's.** The refusal cases (G23-G25, A27, A28), UnitedHealth's medical care ratio (A25), the AWS margin
-follow-up (F21) and the summaries are W3-05 and W3-06; the summaries and D21 wait for the graders (rows added to
-`grading/grading_sheet.csv`).
+follow-up (F21) and the other summaries are W3-05 and W3-06. Both graders labelled F21 ("not reported separately"
+for a margin the filing's segment figures give) `malformed_output` where the scorer suggested `wrong_line_item`; their
+label stands.
