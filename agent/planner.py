@@ -49,8 +49,8 @@ from retrieval.entities import Entities, extract, from_turns, indexed
 from tools.registry import TOOLS
 
 PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "planner.txt"
-PROMPT_VERSION = "planner-v1"
-PROMPT_SHA256 = "8b792fa82ea7f88399aecb226390f457f8393380fb2c999f43933c1caf601925"   # model inputs of P7 (live) and P8 (replayed, final rules)
+PROMPT_VERSION = "planner-v2"                 # W3-04: the four new metrics (ADR-040)
+PROMPT_SHA256 = "c4e5c45a25ae71b6a4834b1b5c82c8aef3d83825d1a1c450492b9eca82ddaebe"   # planner-v2: model inputs of P11 (live) and P12 (replayed, final rules)
 SEARCH = "search_filings"
 
 
@@ -96,7 +96,8 @@ def prompt_sha256() -> str:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RULE_SOURCES = ("agent/planner.py", "agent/guided.py", "agent/critic_checks.py", "retrieval/entities.py")
+RULE_SOURCES = ("agent/planner.py", "agent/guided.py", "agent/critic_checks.py", "retrieval/entities.py",
+                "agent/critic.py")              # W3-04: search_only_steps reads the critic's SEARCH_ONLY and named_metrics
 
 
 SKIPPED_TOKENS = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.ENCODING, tokenize.ENDMARKER})
@@ -251,6 +252,54 @@ def scope_check(plan: Plan, entities: Entities, question: str) -> tuple[Plan, st
     rule = "R2" if FORECAST.search(question) else "R3"
     return (_refusal(f"{', '.join(missing)} is not indexed", rule),
             f"planner: scope check refused the plan ({rule}: {', '.join(missing)} not indexed)")
+
+
+def company_scope(plan: Plan, entities: Entities, question: str) -> tuple[Plan, str | None]:
+    """docs/spec.md §6 R3 from the corpus scope, for companies as scope_check is for periods: a plan whose every step
+    asks for a ticker outside config/companies.yaml, for a conversation that names no indexed company, is refused
+    (R2 when the question asks about the future). Measured (W3-04, P9): "Did Starbucks report higher free cash flow
+    ...?" was planned as two SBUX facts. A conversation that names an indexed company is left to the plan (a
+    mistyped ticker for it is the tool's out_of_corpus and the replan's)."""
+    if plan.refuse or entities.tickers or not plan.steps:
+        return plan, None
+    indexed = {c.ticker for c in load_scope().companies}
+    tickers = [str(s.arguments.get("ticker") or "").strip().upper() for s in plan.steps]
+    if any(not t or t in indexed for t in tickers):
+        return plan, None
+    rule = "R2" if FORECAST.search(question) else "R3"
+    names = ", ".join(dict.fromkeys(tickers))
+    return (_refusal(f"{names} is not an indexed company", rule),
+            f"planner: company scope check refused the plan ({rule}: {names} not indexed)")
+
+
+def search_only_steps(plan: Plan, question: str) -> tuple[Plan, str | None]:
+    """The critic's rule for a search-only line item (agent.critic.SEARCH_ONLY, e.g. stock-based compensation) applied
+    to the plan: a fact step for a metric the question does not name is the substitute the critic rejects, so it
+    becomes a search for the line item in that company's filing for that period (a named metric, e.g. the revenue a
+    share of revenue divides by, stays). Measured (W3-04, P11): "What stock-based compensation expense did Meta
+    report ...?" was planned as Meta's stockholders_equity."""
+    from agent.critic import named_metrics, search_only_line_item
+    item = search_only_line_item(question)
+    if plan.refuse or not item:
+        return plan, None
+    named = named_metrics(question)
+    steps, replaced = [], []
+    for step in plan.steps:
+        args = step.arguments
+        if step.tool in ("get_financial_fact", "compare_periods") and args.get("metric") not in named:
+            replaced.append(str(args.get("metric")))
+            year = args.get("fiscal_year", max(args.get("years") or [0]) or None)
+            period = str(args.get("fiscal_period") or "").strip().upper()
+            step = PlanStep.model_validate({"tool": "search_filings", "purpose": item, "arguments": {
+                "query": item, "ticker": args.get("ticker"), "fiscal_year": year,
+                "fiscal_period": period if period in FORM_OF_PERIOD else None,   # a search has no Q4 filter
+                "form": None, "item": None, "k": SEARCH_K}})
+        steps.append(step)
+    if not replaced:
+        return plan, None
+    calculation = plan.calculation if any(s.tool != "search_filings" for s in steps) else None
+    return (plan.model_copy(update={"steps": steps, "calculation": calculation}),
+            f"planner: {', '.join(dict.fromkeys(replaced))} replaced by a search for {item} (a search-only line item)")
 
 
 def step_scope(plan: Plan, question: str) -> tuple[Plan, str | None]:
@@ -426,12 +475,17 @@ def apply_entities(plan: Plan, entities: Entities) -> Plan:
 
 
 def finalize(plan: Plan, entities: Entities, question: str, history: Sequence[str] = ()) -> tuple[Plan, list[str]]:
-    """The model's plan after the deterministic rules, in order: the question-level scope check, the question's
+    """The model's plan after the deterministic rules, in order: the question-level scope checks (periods, then
+    companies), a search-only line item's substitutes replaced by a search, the question's
     companies in every search, the arguments the question and the tools decide, the step-level scope check, the
     expected calculation; then duplicate steps removed, the step cap applied, and the plan validated again (an
     emptied partial refusal becomes a refusal). `entities` are the planning entities (planning_entities)."""
     plan, note = scope_check(plan, entities, question)
     notes = [note] if note else []
+    plan, note = company_scope(plan, entities, question)
+    notes += [note] if note else []
+    plan, note = search_only_steps(plan, question)
+    notes += [note] if note else []
     plan = normalize_arguments(apply_entities(plan, entities), cue_text(question, history))
     plan, note = step_scope(plan, question)
     notes += [note] if note else []

@@ -476,6 +476,11 @@ STATEMENT_LINE_WORDS = {name: re.compile(words, re.IGNORECASE) for name, words i
     "stockholders_equity": r"equity",
     "cash": r"cash",
     "long_term_debt": r"debt|borrowings",
+    # W3-04: Citigroup and Goldman Sachs name their noninterest expense "total operating expenses"
+    "deposits": r"deposits",
+    "noninterest_expense": r"noninterest expense|non-interest expense|operating expenses",
+    "current_assets": r"current assets",
+    "current_liabilities": r"current liabilities",
 }.items()}
 
 

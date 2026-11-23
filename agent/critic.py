@@ -37,7 +37,7 @@ from agent.state import AgentState, ToolResult, Verdict
 from ingest.xbrl import load_concept_map
 
 FACT_TOOLS = frozenset({"get_financial_fact", "compare_periods"})
-# Line items that are not among the 13 metrics: any XBRL fact used in the draft is a forbidden substitute.
+# Line items that are not among the mapped metrics: any XBRL fact used in the draft is a forbidden substitute.
 SEARCH_ONLY = (
     re.compile(r"\bstock[ -]?based compensation\b", re.IGNORECASE),
     re.compile(r"\bshare[ -]?based compensation\b", re.IGNORECASE),

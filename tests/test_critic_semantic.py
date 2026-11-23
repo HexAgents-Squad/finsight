@@ -113,6 +113,46 @@ def test_a_refusal_is_not_judged_for_a_line_item():
     assert cs.check_line_item(DEPOSITS_Q, [], refusal, []) == []
 
 
+# W3-04 (ADR-040): the facts tool's own metrics for these items are the item, not a substitute
+def test_the_facts_tools_own_metric_for_the_item_passes():
+    draft = contract("Bank of America's total deposits were $1,923,827 million at the end of fiscal 2023.",
+                     [value("deposits", 1923827.0)], [xbrl(concept="us-gaap:Deposits")])
+    row = fact("deposits", 1923827.0, label="total deposits", concept="us-gaap:Deposits")
+    assert cs.check_line_item(DEPOSITS_Q, [], draft, [row]) == []
+    q = "What were Citigroup's total operating expenses in fiscal 2024?"
+    draft = contract("Citigroup's total operating expenses were $53,567 million in fiscal 2024.",
+                     [value("noninterest_expense", 53567.0, ticker="C", year=2024)],
+                     [xbrl("C", 2024, "us-gaap:NoninterestExpense")])
+    row = fact("noninterest_expense", 53567.0, ticker="C", year=2024, label="total operating expenses",
+               concept="us-gaap:NoninterestExpense", duration="FY")
+    assert cs.check_line_item(q, [], draft, [row]) == []
+
+
+def test_a_current_ratio_from_the_current_assets_and_liabilities_facts_passes_the_critic():
+    q = "What was Pfizer's current ratio at the end of fiscal 2023?"
+    draft = contract("Pfizer's current ratio at the end of fiscal 2023 was 0.91: total current assets of $43,333 "
+                     "million divided by total current liabilities of $47,794 million.",
+                     [value("current_assets", 43333.0, ticker="PFE"), value("current_liabilities", 47794.0, ticker="PFE"),
+                      value("ratio", 0.91, unit="ratio", ticker="PFE")],
+                     [xbrl("PFE", concept="us-gaap:AssetsCurrent"), xbrl("PFE", concept="us-gaap:LiabilitiesCurrent")],
+                     [Calculation(operation="ratio", inputs=[43333.0, 47794.0], result=0.91, unit="ratio",
+                                  expression="43333 / 47794")])
+    rows = [fact("current_assets", 43333.0, ticker="PFE", label="total current assets", concept="us-gaap:AssetsCurrent"),
+            fact("current_liabilities", 47794.0, ticker="PFE", label="total current liabilities",
+                 concept="us-gaap:LiabilitiesCurrent")]
+    assert cs.check_line_item(q, [], draft, rows) == []
+    st = {"question": q, "history": [], "draft": draft, "tool_results": rows,
+          "entities": Entities(tickers=("PFE",), years=(2023,), periods=("FY",))}
+    assert cr.critique(st).as_violations() == []
+
+
+def test_a_line_item_message_never_says_the_facts_tool_lacks_a_metric_it_has():
+    draft = contract("Bank of America's total assets at the end of fiscal 2023 were $3,180,151 million.",
+                     [value("total_assets", 3180151.0)], [xbrl()])
+    found = cs.check_line_item(DEPOSITS_Q, [], draft, [fact("total_assets", 3180151.0)])
+    assert found and not any("no such metric" in v.message for v in found)
+
+
 # ----------------------------------------------------------------------------------------------- operation inputs
 MARGIN_Q = "What was Citigroup's operating income as a percentage of total revenues in fiscal 2024?"
 

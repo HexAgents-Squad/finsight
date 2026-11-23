@@ -1,0 +1,38 @@
+{
+  "run_id": "A5_qwen3-8b_agent_think-off_dev-w304",
+  "model": "Qwen/Qwen3-8B",
+  "endpoint": "hosted",
+  "context": "agent",
+  "thinking": false,
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "prompt_version": "planner-v2 + composer cb0c35b7bcf2",
+  "context_pack": "context_pack_dev_v2.jsonl (questions and earlier turns only)",
+  "context_pack_sha256": {
+    "context_pack_dev_v2.jsonl": "ab26de87c39553c328e5c3d1019392a5a6bfc01606f6f0c47ffb7379e13cfe73"
+  },
+  "planner_prompt_sha256": "c4e5c45a25ae71b6a4834b1b5c82c8aef3d83825d1a1c450492b9eca82ddaebe",
+  "composer_prompt_sha256": "cb0c35b7bcf25ad54bf0d9947f370e3a723fbf375e691a2bd997cc5ea38a2579",
+  "limits": {
+    "max_steps": 10,
+    "max_tokens": 12000,
+    "timeout_s": 60.0
+  },
+  "retrieval": {
+    "embed_model": "bge-small-en-v1.5",
+    "rerank": false,
+    "chunks": "C3",
+    "fusion": "hybrid RRF",
+    "statements_first": true
+  },
+  "reply_cache": true,
+  "questions": "dev2",
+  "requests": {
+    "live": 38,
+    "cache_hits": 27,
+    "http_retries": 0
+  },
+  "git_commit": "f25144f3f72b2ea04778d5eb5c969ac6c861df20",
+  "started": "2026-11-23T04:55:34+00:00",
+  "finished": "2026-11-23T04:57:41+00:00"
+}

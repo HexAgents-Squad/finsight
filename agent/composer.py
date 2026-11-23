@@ -10,7 +10,7 @@ Who writes what (ADR-030):
   LLM call (it is a fixed text, and the critic checks it word for word).
 - values, citations and calculations are built from the tool outputs with the contract's own builders
   (Value.from_fact, Citation.from_fact, Citation.from_search, Calculation.from_tool), so no number the model types
-  reaches them. The one exception is a figure the model reads from a passage (a line item outside the 13 XBRL
+  reaches them. The one exception is a figure the model reads from a passage (a line item outside the XBRL
   metrics, spec §7 rule 5): it is kept only when that number is printed in that passage for the passage's
   own fiscal year (belongs_to_year); a dollar or percent figure the prose takes from a passage it names,
   without listing it, is backed the same way (passage_printing), never a count or a bare number.
@@ -115,6 +115,8 @@ DEFAULT_SUGGESTION_METRIC = "total revenue"
 # ----------------------------------------------------------------------------------------------- the reply
 class PassageFigure(BaseModel):
     """A figure the answer takes from a passage (a line item outside the 13 XBRL metrics, spec §7 rule 5)."""
+    # Model-facing (the reply schema carries this docstring and PROMPT_SHA256 pins it): "13" predates W3-04's 17
+    # metrics and stays as measured until the composer's next re-measurement (ADR-040)
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     passage: str = Field(pattern=r"^P\d{1,2}$")
