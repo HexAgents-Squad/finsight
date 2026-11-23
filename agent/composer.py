@@ -162,6 +162,12 @@ def system_prompt() -> str:
     return PROMPT_FILE.read_text(encoding="utf-8").strip()
 
 
+def prompt_sha256() -> str:
+    """The composer's pin (PROMPT_SHA256): the system prompt and the reply schema, everything fixed the model sees."""
+    import hashlib
+    return hashlib.sha256((system_prompt() + json.dumps(reply_schema(), sort_keys=True)).encode("utf-8")).hexdigest()
+
+
 # ----------------------------------------------------------------------------------------------- figures
 def _plain(magnitude: float) -> str:
     """A number as printed: thousands separators, the digits it has and no trailing ".0"."""

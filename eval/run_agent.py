@@ -17,7 +17,10 @@ tools on data/. Each question is a RunRecord (eval/runs_schema.py) with:
   returned), which the scorer uses as the run's evidence and its valid citations;
 - `agent`: the whole answer contract, plan, critic verdict, node visits and cost (agent/transcript.run_record).
 The meta file pins the prompts (planner and composer sha256, tests/test_planner.py and tests/test_composer.py),
-the limits, the retrieval settings, the requests sent and the packs read. Nothing is written until every question
+the limits, the retrieval settings, the requests sent and the packs read; a run other than A1 also records the
+planner's rules (rules_sha256). A gold run starts only when its configuration is pinned (W3-08, pin_problems): both
+prompts are their pinned PROMPT_SHA256 and the code (CODE_PATHS) is committed, so the meta's git_commit is the code
+that ran. Nothing is written until every question
 has a record; a run stopped by the budget is re-run with a larger one and replays the answered questions from
 the reply cache for free. After a fix to how a run is recorded or mapped (not to the agent), `--replay-of <the
 earlier runs file>` re-derives the file from the cache and keeps the earlier run's timings, requests and dates,
@@ -317,6 +320,35 @@ async def run_items(items: list[Item], nodes: Any, limits: Any, run_id: str,
 
 
 # --------------------------------------------------------------------------------------------- the run
+# What a gold run's git_commit must describe (W3-08): the agent, its tools and data code, the config and this runner
+CODE_PATHS = ("agent", "core", "tools", "retrieval", "ingest", "config", "eval/run_agent.py", "eval/runs_schema.py")
+
+
+def uncommitted(paths: tuple[str, ...] = CODE_PATHS) -> list[str]:
+    """Files under `paths` that differ from HEAD (changed, staged or new), so a run's git_commit would not be the
+    code it ran; ["(git unavailable)"] when git cannot tell."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain", "--", *paths], cwd=ROOT, capture_output=True,
+                             text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return ["(git unavailable)"]
+    return sorted(line[3:].strip() for line in out.splitlines() if line.strip())
+
+
+def pin_problems() -> list[str]:
+    """Why a gold run's configuration is not pinned (W3-08, docs/week3_plan.txt §2: A5 runs on gold once, with its
+    configuration pinned before the run), or []: the planner's and composer's prompts must be the pinned ones
+    (PROMPT_SHA256, which the meta records), and the code must be committed (the meta's git_commit)."""
+    from agent import composer, planner
+    problems = [f"the {name} prompt is not its pinned PROMPT_SHA256 (re-measure on the development set, then re-pin)"
+                for name, module in (("planner", planner), ("composer", composer))
+                if module.prompt_sha256() != module.PROMPT_SHA256]
+    if dirty := uncommitted():
+        problems.append(f"uncommitted changes in {', '.join(dirty[:5])}{' ...' if len(dirty) > 5 else ''}: commit "
+                        "them first, so the run's git_commit is the code it ran")
+    return problems
+
+
 def git_commit() -> str | None:
     try:
         return subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
@@ -340,6 +372,8 @@ def run_meta(run_id: str, pack_files: list[Path], settings: Any, limits: Any, st
         retrieval={"embed_model": settings.EMBED_MODEL, "rerank": settings.RETRIEVAL_RERANK, "chunks": "C3",
                    "fusion": "hybrid RRF", "statements_first": ablation != "no-statements-first"},
         **({"ablation": ablation, "ablation_of": RUN_ID} if ablation else {}),     # A1's meta keeps its exact keys
+        # W3-08: the planner's deterministic rules, which the prompt's pin does not cover (A1's meta keeps its keys)
+        **({"rules_sha256": planner.rules_sha256()} if run_id != RUN_ID else {}),
         reply_cache=settings.LLM_CACHE_DIR is not None, questions=questions, requests=totals,
         git_commit=git_commit(), started=started, finished=datetime.now(UTC).isoformat(timespec="seconds"))
 
@@ -450,6 +484,9 @@ def main(argv: list[str] | None = None, *, nodes: Any = None, settings: Any = No
         print(f"setup incomplete: {str(err).splitlines()[0]}", file=sys.stderr)
         return 2
     limits = limits or Limits.from_settings(settings)
+    if args.questions == "gold" and nodes is None and (problems := pin_problems()):
+        print("not pinned, nothing run:\n" + "\n".join(f"- {p}" for p in problems), file=sys.stderr)
+        return 2
     started = datetime.now(UTC).isoformat(timespec="seconds")
     # A replay must come from the reply cache: one live request at most (the first miss), and then nothing is written
     budget = 1 if args.replay_of else args.max_requests

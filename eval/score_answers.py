@@ -996,6 +996,53 @@ def ablation_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     return "\n".join(out) + "\n"
 
 
+A1_PREFIX = "A1_"                                     # the reported baseline's run ids (W2-11)
+
+
+def against_a1_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """W3-08 (ADR-037): each later agent run against A1 on the same questions, per answer type: its correct answers
+    and A1's, right only with it / only with A1 (two-sided sign test), and whether it is worse. A version is final
+    only if no answer type is worse than A1 (docs/week3_plan.txt §2): fewer correct answers of the same questions is
+    worse; an answer still waiting for a grade (either run's) decides nothing, so the type reads "pending"."""
+    from eval.retrieval_eval import sign_test
+    a1 = [r for r in runs if r[0].run_id.startswith(A1_PREFIX) and not ablation_of(r[0])]
+    later = [r for r in runs if r[0].context == "agent" and not r[0].run_id.startswith(A1_PREFIX)
+             and not ablation_of(r[0])]
+    if not a1 or not later:
+        return ""
+    ref_meta, ref = a1[0]
+    by_id = {s["id"]: s for s in ref}
+    out = table(f"### 13. Against {ref_meta.run_id} (A1): correct answers (run vs A1), right only with the run / only "
+                "with A1 (sign test), and whether the type is worse; a version is final only if no type is worse",
+                "Answer type", [m.run_id for m, _ in later])
+    states: dict[str, list[str]] = {m.run_id: [] for m, _ in later}
+    for label, types in REPORT_TYPES.items():
+        cells = []
+        for meta, sc in later:
+            if {s["id"] for s in sc} != set(by_id):
+                raise ValueError(f"{meta.run_id} and {ref_meta.run_id} answered different questions")
+            mine = [s for s in sc if s["answer_type"] in types]
+            theirs = [by_id[s["id"]] for s in mine]
+            pending = sum(s["correct"] is None for s in mine) + sum(s["correct"] is None for s in theirs)
+            right, a1_right = sum(s["correct"] is True for s in mine), sum(s["correct"] is True for s in theirs)
+            pairs = [(s["correct"], r["correct"]) for s, r in zip(mine, theirs, strict=True)
+                     if s["correct"] is not None and r["correct"] is not None]
+            win, loss = sum(a and not b for a, b in pairs), sum(b and not a for a, b in pairs)
+            p = sign_test(win, loss)
+            state = f"pending ({pending})" if pending else "worse" if right < a1_right else "not worse"
+            states[meta.run_id].append(state)
+            shown = f"p = {p:.2f}" if p >= 0.005 else "p < 0.01"
+            cells.append(f"{right} vs {a1_right} of {len(mine)}; {win} / {loss} ({shown}); {state}" if mine else "–")
+        out.append(f"| {label} | " + " | ".join(cells) + " |")
+    finals = []
+    for meta, _ in later:
+        got = states[meta.run_id]
+        finals.append("no: " + ", ".join(lb for lb, s in zip(REPORT_TYPES, got, strict=True) if s == "worse")
+                      if "worse" in got else "pending" if any(s.startswith("pending") for s in got) else "yes")
+    out.append("| No answer type worse than A1 | " + " | ".join(finals) + " |")
+    return "\n".join(out) + "\n"
+
+
 def write_report(text: str, path: Path) -> None:
     block = f"{START}\n{text}{END}"
     title = REPORT_TITLES.get(path.name, REPORT_TITLES[REPORT_NAME])
@@ -1019,7 +1066,7 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]], dev_report: str =
     agent_runs = [r for r in runs if r[0].run_id.startswith("A") and not ablation_of(r[0])]
     ablation_runs = [r for r in runs if ablation_of(r[0])]
     if dev:
-        return {dev_report: report(runs) + strategy_table(runs) + agent_table(runs)}
+        return {dev_report: report(runs) + strategy_table(runs) + agent_table(runs) + against_a1_table(runs)}
     out = {}
     model_runs = [r for r in runs if r[0].run_id.startswith("M")]
     if model_runs:
@@ -1032,7 +1079,8 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]], dev_report: str =
         out[BASELINE_REPORT] = report(baseline) + strategy_table(baseline)
     if agent_runs:                              # W2-11: B0 first (the paired table's reference), S1-S3, the agent
         compared = reference + strategy_runs + agent_runs
-        out[AGENT_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared)
+        out[AGENT_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared) + \
+            against_a1_table(compared)
     if ablation_runs:                           # W3-01: the reference (A1) first, then A2-A4 in run-id order
         references = {ablation_of(m) for m, _ in ablation_runs}
         reference = [r for r in runs if r[0].run_id in references]
