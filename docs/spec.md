@@ -243,7 +243,7 @@ Found in WP2 (ADR-010):
 Found in WP3 (ADR-011):
 9. **Declared gaps** ("not reported", never derived): operating income (banks, JNJ, PFE, MRK), gross profit (15 companies), R&D (10 companies; P&G quarterly), capex (JPM, BAC, WFC), total liabilities (AMZN, MRK, ABBV, WMT, KO), equity (UNH, PG), long-term debt (GS).
 10. **Restatements**: 34 facts carry a later filing's value (spec §7 rule 7). Within one year the latest-filed values can mix restated and original figures: BAC FY2023 net income, revenue, EPS and equity are restated while its total assets and liabilities are not, so a ratio across them mixes bases.
-11. **Line-item scope**: Merck's "research and development" includes acquired in-process R&D (e.g. the Prometheus charge in FY2023), unlike J&J, Pfizer and AbbVie, so cross-company R&D comparisons are not like for like (noted on every MRK R&D value). Figures outside the 13 mapped metrics (e.g. Costco "net sales") come from cited filing text.
+11. **Line-item scope**: Merck's "research and development" includes acquired in-process R&D (e.g. the Prometheus charge in FY2023), unlike J&J, Pfizer and AbbVie, so cross-company R&D comparisons are not like for like (noted on every MRK R&D value). Figures outside the mapped metrics (17 since W3-04, ADR-040; e.g. Costco "net sales") come from cited filing text.
 
 ## 12. Open questions for review (comment on the PR)
 1. Is the 10-Q scope (fiscal 2025 Q1–Q3) enough, or do we add fiscal-2026 quarters? Note that NVIDIA's and Walmart's fiscal-2025 quarters end in 2024, so their "latest quarter" is old. *(Pending the mentor: a larger scope means more documents and embedding time.)*

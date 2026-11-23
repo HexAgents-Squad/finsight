@@ -2,6 +2,8 @@
 drafts and tool results in the shapes the real tools return; each check has failing and passing cases."""
 from __future__ import annotations
 
+import pytest
+
 from agent import critic as cr
 from agent import critic_semantic as cs
 from agent.contract import AnswerContract, Calculation, Citation, Value
@@ -126,6 +128,25 @@ def test_the_facts_tools_own_metric_for_the_item_passes():
     row = fact("noninterest_expense", 53567.0, ticker="C", year=2024, label="total operating expenses",
                concept="us-gaap:NoninterestExpense", duration="FY")
     assert cs.check_line_item(q, [], draft, [row]) == []
+
+
+@pytest.mark.parametrize("question", [
+    "What were Wells Fargo's noninterest expenses in fiscal 2024?",          # plural
+    "What was Wells Fargo's non-interest expense in fiscal 2024?",            # hyphen
+    "What were Wells Fargo's operating expenses in fiscal 2024?",             # no "total"
+    "What was Wells Fargo's total noninterest expense in fiscal 2024?",
+])
+def test_the_noninterest_expense_fact_is_the_item_however_the_question_words_it(question):
+    draft = contract("Wells Fargo's noninterest expense was $54,598 million in fiscal 2024.",
+                     [value("noninterest_expense", 54598.0, ticker="WFC", year=2024)],
+                     [xbrl("WFC", 2024, "us-gaap:NoninterestExpense")])
+    row = fact("noninterest_expense", 54598.0, ticker="WFC", year=2024, label="total noninterest expense",
+               concept="us-gaap:NoninterestExpense", duration="12M")
+    assert cs.check_line_item(question, [], draft, [row]) == []
+    sub = contract("Wells Fargo's noninterest expense was $1,700,000 million in fiscal 2024.",   # still flagged
+                   [value("total_liabilities", 1700000.0, ticker="WFC", year=2024)], [xbrl("WFC", 2024)])
+    other = fact("total_liabilities", 1700000.0, ticker="WFC", year=2024)
+    assert "line_item" in rules(cs.check_line_item(question, [], sub, [other]))
 
 
 def test_a_current_ratio_from_the_current_assets_and_liabilities_facts_passes_the_critic():

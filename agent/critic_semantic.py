@@ -62,8 +62,14 @@ LINE_ITEMS: dict[str, re.Pattern] = {
     "current liabilities": re.compile(r"\b(?:total )?current liabilities\b", re.IGNORECASE),
     "medical care ratio": re.compile(r"\bmedical (?:care|cost|loss) ratio\b|\bMCR\b", re.IGNORECASE),
 }
-# The facts tool's metrics an item is made of, where the question names the item but not them
-IMPLIED_METRICS: dict[str, frozenset[str]] = {"current ratio": frozenset({"current_assets", "current_liabilities"})}
+# The facts tool's metrics that are the item, or that it is made of, however the question words it (named_metrics
+# reads only the concept map's labels: "noninterest expenses", "non-interest expense" or bare "operating expenses"
+# are the same line; a company without it gets not_reported, never another metric)
+IMPLIED_METRICS: dict[str, frozenset[str]] = {
+    "noninterest expense": frozenset({"noninterest_expense"}),
+    "operating expenses": frozenset({"noninterest_expense"}),
+    "current ratio": frozenset({"current_assets", "current_liabilities"}),
+}
 # "operating expenses" inside a longer name that is another line item
 LINE_ITEM_MASKS = (re.compile(r"\bnon-?interest expenses?\b", re.IGNORECASE),)
 # Segments of the indexed companies, as their 10-Ks name them (the facts tool returns company totals only)
@@ -223,16 +229,18 @@ def check_line_item(question: str, history: Sequence[str], draft: AnswerContract
     if not items or draft.refused:
         return []
     out = []
+    rows = used_fact_rows(draft, results)
     for item in items:
         pattern = LINE_ITEMS[item]
+        own = IMPLIED_METRICS.get(item, frozenset())        # the tool's own fact for it, stated under its label
         if not pattern.search(draft.answer) and not (item == "current ratio" and re.search(
-                r"\bcurrent\b", draft.answer, re.IGNORECASE)):
+                r"\bcurrent\b", draft.answer, re.IGNORECASE)) and not any(r["metric"] in own for r in rows):
             out.append(Violation("line_item", f"the question asks for {item}, but the answer does not state it: state "
                                               f"{item} from the figures or passages if they give it, otherwise say that "
                                               f"{item} is not available"))
     admitted = any(_answer_admits(draft.answer, LINE_ITEMS[i]) for i in items)
     allowed = question_metrics(text).union(*(IMPLIED_METRICS.get(i, frozenset()) for i in items))
-    for row in used_fact_rows(draft, results):
+    for row in rows:
         if row["metric"] not in allowed and not admitted:
             out.append(Violation("line_item", f"the question asks for {', '.join(items)}, but the answer gives "
                                               f"{_label(row)} instead; never present another figure as {items[0]}: state "

@@ -338,6 +338,37 @@ def test_a_substitute_for_a_search_only_line_item_becomes_a_search():
     assert [s.tool for s in final.steps] == ["search_filings"] and any("search-only" in n for n in notes)
 
 
+def test_a_compare_periods_substitute_becomes_one_search_per_year_and_a_follow_up_is_read_from_its_turn():
+    q = "How did Microsoft's stock-based compensation change from fiscal 2023 to fiscal 2024?"
+    cmp = {**ANSWER, "calculation": "growth", "steps": [{"tool": "compare_periods", "purpose": "the change",
+                                                          "arguments": {"ticker": "MSFT", "metric": "stockholders_equity",
+                                                                        "years": [2023, 2024]}}]}
+    plan, _ = pl.search_only_steps(Plan.model_validate(cmp), q)
+    assert [(s.tool, s.arguments["fiscal_year"]) for s in plan.steps] == [("search_filings", 2023),
+                                                                         ("search_filings", 2024)]
+    assert plan.calculation is None
+    sub = {**ANSWER, "steps": [{**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"],
+                                                                   "ticker": "MSFT", "metric": "stockholders_equity"}}]}
+    plan, note = pl.search_only_steps(Plan.model_validate(sub), "And in fiscal 2023?", [SBC_Q])
+    assert [s.tool for s in plan.steps] == ["search_filings"] and note
+
+
+def test_net_income_named_with_its_holders_stays_next_to_a_search_only_line_item():
+    q = "What was Microsoft's stock-based compensation relative to net income attributable to Microsoft in fiscal 2024?"
+    plan = Plan.model_validate({**ANSWER, "calculation": "ratio", "steps": [
+        {**SEARCH_ONLY["steps"][0], "arguments": {**SEARCH_ONLY["steps"][0]["arguments"], "ticker": "MSFT"}},
+        {**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"], "ticker": "MSFT",
+                                             "metric": "net_income"}}]})
+    assert pl.search_only_steps(plan, q) == (plan, None)
+
+
+def test_the_company_scope_check_keeps_a_ticker_that_names_an_indexed_company():
+    q = "What was the search giant's revenue in fiscal 2024?"
+    goog = Plan.model_validate({**ANSWER, "steps": [{**ANSWER["steps"][0], "arguments": {
+        **ANSWER["steps"][0]["arguments"], "ticker": "GOOG"}}]})
+    assert pl.company_scope(goog, from_turns([q]), q) == (goog, None)
+
+
 def test_a_named_metric_next_to_a_search_only_line_item_stays():
     q = "What was Microsoft's stock-based compensation as a percentage of revenue in fiscal 2024?"
     plan = Plan.model_validate({**ANSWER, "calculation": "percent", "steps": [

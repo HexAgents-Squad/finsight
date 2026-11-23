@@ -50,7 +50,7 @@ from tools.registry import TOOLS
 
 PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "planner.txt"
 PROMPT_VERSION = "planner-v2"                 # W3-04: the four new metrics (ADR-040)
-PROMPT_SHA256 = "c4e5c45a25ae71b6a4834b1b5c82c8aef3d83825d1a1c450492b9eca82ddaebe"   # planner-v2: model inputs of P11 (live) and P12 (replayed, final rules)
+PROMPT_SHA256 = "c4e5c45a25ae71b6a4834b1b5c82c8aef3d83825d1a1c450492b9eca82ddaebe"   # planner-v2: model inputs of P11 (live), P12 and P13 (replayed; P13 the final rules)
 SEARCH = "search_filings"
 
 
@@ -97,7 +97,7 @@ def prompt_sha256() -> str:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RULE_SOURCES = ("agent/planner.py", "agent/guided.py", "agent/critic_checks.py", "retrieval/entities.py",
-                "agent/critic.py")              # W3-04: search_only_steps reads the critic's SEARCH_ONLY and named_metrics
+                "agent/critic.py", "agent/critic_semantic.py")   # W3-04: search_only_steps reads the critic's rules
 
 
 SKIPPED_TOKENS = frozenset({tokenize.COMMENT, tokenize.NL, tokenize.ENCODING, tokenize.ENDMARKER})
@@ -259,12 +259,13 @@ def company_scope(plan: Plan, entities: Entities, question: str) -> tuple[Plan, 
     asks for a ticker outside config/companies.yaml, for a conversation that names no indexed company, is refused
     (R2 when the question asks about the future). Measured (W3-04, P9): "Did Starbucks report higher free cash flow
     ...?" was planned as two SBUX facts. A conversation that names an indexed company is left to the plan (a
-    mistyped ticker for it is the tool's out_of_corpus and the replan's)."""
+    mistyped ticker for it is the tool's out_of_corpus and the replan's), and so is a ticker that names an indexed
+    company another way (GOOG for GOOGL: retrieval.entities reads it as that company)."""
     if plan.refuse or entities.tickers or not plan.steps:
         return plan, None
     indexed = {c.ticker for c in load_scope().companies}
     tickers = [str(s.arguments.get("ticker") or "").strip().upper() for s in plan.steps]
-    if any(not t or t in indexed for t in tickers):
+    if any(not t or t in indexed or extract(t).tickers for t in tickers):
         return plan, None
     rule = "R2" if FORECAST.search(question) else "R3"
     names = ", ".join(dict.fromkeys(tickers))
@@ -272,29 +273,33 @@ def company_scope(plan: Plan, entities: Entities, question: str) -> tuple[Plan, 
             f"planner: company scope check refused the plan ({rule}: {names} not indexed)")
 
 
-def search_only_steps(plan: Plan, question: str) -> tuple[Plan, str | None]:
+def search_only_steps(plan: Plan, question: str, history: Sequence[str] = ()) -> tuple[Plan, str | None]:
     """The critic's rule for a search-only line item (agent.critic.SEARCH_ONLY, e.g. stock-based compensation) applied
     to the plan: a fact step for a metric the question does not name is the substitute the critic rejects, so it
-    becomes a search for the line item in that company's filing for that period (a named metric, e.g. the revenue a
-    share of revenue divides by, stays). Measured (W3-04, P11): "What stock-based compensation expense did Meta
-    report ...?" was planned as Meta's stockholders_equity."""
-    from agent.critic import named_metrics, search_only_line_item
-    item = search_only_line_item(question)
+    becomes a search for the line item in that company's filing for each period it asked for (a named metric, e.g.
+    the revenue a share of revenue divides by, or net income named with its holders, stays). The turn read is the
+    critic's (metric_question_text: a follow-up's earlier turn). Measured (W3-04, P11): "What stock-based compensation
+    expense did Meta report ...?" was planned as Meta's stockholders_equity."""
+    from agent.critic import metric_question_text, search_only_line_item
+    from agent.critic_semantic import question_metrics
+    text = metric_question_text(question, list(history))
+    item = search_only_line_item(text)
     if plan.refuse or not item:
         return plan, None
-    named = named_metrics(question)
+    named = question_metrics(text)
     steps, replaced = [], []
     for step in plan.steps:
         args = step.arguments
-        if step.tool in ("get_financial_fact", "compare_periods") and args.get("metric") not in named:
-            replaced.append(str(args.get("metric")))
-            year = args.get("fiscal_year", max(args.get("years") or [0]) or None)
-            period = str(args.get("fiscal_period") or "").strip().upper()
-            step = PlanStep.model_validate({"tool": "search_filings", "purpose": item, "arguments": {
+        if step.tool not in ("get_financial_fact", "compare_periods") or args.get("metric") in named:
+            steps.append(step)
+            continue
+        replaced.append(str(args.get("metric")))
+        period = str(args.get("fiscal_period") or "").strip().upper()
+        for year in args.get("years") or [args.get("fiscal_year")]:      # compare_periods: one search per year
+            steps.append(PlanStep.model_validate({"tool": "search_filings", "purpose": item, "arguments": {
                 "query": item, "ticker": args.get("ticker"), "fiscal_year": year,
                 "fiscal_period": period if period in FORM_OF_PERIOD else None,   # a search has no Q4 filter
-                "form": None, "item": None, "k": SEARCH_K}})
-        steps.append(step)
+                "form": None, "item": None, "k": SEARCH_K}}))
     if not replaced:
         return plan, None
     calculation = plan.calculation if any(s.tool != "search_filings" for s in steps) else None
@@ -484,7 +489,7 @@ def finalize(plan: Plan, entities: Entities, question: str, history: Sequence[st
     notes = [note] if note else []
     plan, note = company_scope(plan, entities, question)
     notes += [note] if note else []
-    plan, note = search_only_steps(plan, question)
+    plan, note = search_only_steps(plan, question, history)
     notes += [note] if note else []
     plan = normalize_arguments(apply_entities(plan, entities), cue_text(question, history))
     plan, note = step_scope(plan, question)
