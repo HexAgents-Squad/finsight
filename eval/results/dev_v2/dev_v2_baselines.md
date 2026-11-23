@@ -178,12 +178,14 @@ planner prompt `planner-v2`), on 23 Nov 2026 on the shared key: 38 live requests
 development checkpoint toward A5, not A5 (ADR-037); the first W3-04 prompt's run (49 live requests) was replaced by
 this one and is described in ADR-040.
 
-**Numeric 7/14, from A1's 2/14, and no answer worse.** Now right: Bank of America's total deposits (A21), Wells Fargo's
+**Numeric 7/14, from A1's 2/14, and no numeric or refusal answer worse.** Now right: Bank of America's total deposits (A21), Wells Fargo's
 noninterest expense (A22), Citigroup's deposits in the partial refusal (A26), Pfizer's current ratio 0.91 (B22),
 Citigroup's operating expenses as a share of revenue, 66.4% (B23), and the change in Bank of America's deposits (C21);
 each now comes from the facts tool's own metric instead of a substitute. A23 (Costco's net sales) and A24 (AWS
 operating income) give the same text as A1's, which the graders overturned to right; A23 now carries its figure as a
 value and scores right automatically, A24 does not and reads "no value" until it is graded.
+
+**One summary is likely worse.** E25 (Pfizer's revenue decline, a summary) is likely worse: the first draft was A1's own answer (graded 1 by both graders), W3-03's critic sent it back, and the rewrite failed its checks twice and fell back to "did not find"; a send-back can leave a partly right answer worse, which is W3-03's and A5's to fix, not a facts question.
 
 **Two misses are restatements, not the agent.** B21 (Bank of America, 63.1% for 65.6%) and C22 (Citigroup, -4.3% for
 -4.2%) use the right metrics, but the facts tool returns the latest filed value (spec §7.7: Bank of America's revenue
