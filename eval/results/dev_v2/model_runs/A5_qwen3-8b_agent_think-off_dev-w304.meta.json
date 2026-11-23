@@ -34,5 +34,14 @@
   },
   "git_commit": "f25144f3f72b2ea04778d5eb5c969ac6c861df20",
   "started": "2026-11-23T04:55:34+00:00",
-  "finished": "2026-11-23T04:57:41+00:00"
+  "finished": "2026-11-23T04:57:41+00:00",
+  "replay": {
+    "replayed": "2026-11-23T05:45:00+00:00",
+    "git_commit": "6289b9ea50d9779ca4dc4e4471c78d81d77fac80",
+    "requests": {
+      "live": 0,
+      "cache_hits": 65,
+      "http_retries": 0
+    }
+  }
 }
