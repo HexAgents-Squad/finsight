@@ -36,8 +36,8 @@
   "started": "2026-11-23T09:33:45+00:00",
   "finished": "2026-11-23T09:35:51+00:00",
   "replay": {
-    "replayed": "2026-11-23T09:42:34+00:00",
-    "git_commit": "37412f9320219487aa9f63c4ae2e290b1353b6e5",
+    "replayed": "2026-11-23T14:11:11+00:00",
+    "git_commit": "c422396ca7af23468f535db263f73e7c7845f32d",
     "requests": {
       "live": 0,
       "cache_hits": 59,
