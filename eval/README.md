@@ -201,6 +201,19 @@ error) maps each wrong answer's failure label (`eval/report.py` docstring); an a
 `--tag` values; `--cache-only` replays a committed run's replies with no chat request (W3-09 traced A1's own code
 from a worktree at its commit that way).
 
+## Safety, refusal and PII tests through the API (W3-10)
+```bash
+python eval/run_api_safety.py run --max-requests 60    # through POST /ask -> results/api_safety/ (~30 live requests)
+python eval/run_api_safety.py traces                   # a few minutes later: the PII traces read back from Langfuse
+python eval/run_api_safety.py report                   # results/api_safety_results.md (tests/test_run_api_safety.py)
+```
+Each request goes through the FastAPI app itself (`api.main.create_app`) over HTTP in the process, on the real agent:
+the refusal tests compared with A5's gold-run answers, the injection tests (the W2-13 harness inside the served
+graph, defences on) with the same test run on the graph directly, PII prompts with every log record captured at
+DEBUG (counts by logger only: an HTTP client's debug line names the endpoint) and a masking demonstration, and one
+session asking until the rate limit answers 429. `--parts` re-runs some parts and keeps the others; every run is
+listed with its requests. `docs/responsible_ai.md` cites these results.
+
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
 python eval/validate_test_sets.py            # drafting rules (while writing new tests)
