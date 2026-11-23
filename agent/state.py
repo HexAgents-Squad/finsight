@@ -12,7 +12,7 @@ contract is (agent/contract.py); plan_json_schema() is its schema for response_f
 final answer is agent/contract.py's AnswerContract: nothing else leaves the graph (ADR-022).
 
 State fields are written by nodes as partial updates. The ones with a reducer (Annotated[..., reducer]) add up
-across nodes: messages, tool_results and errors grow, tokens is a running sum, visits counts each node's runs (kept
+across nodes: tool_results and errors grow, tokens is a running sum, visits counts each node's runs (kept
 by agent/graph.py, not by the nodes, so a node cannot get the loop bounds wrong). Writing None to one of them resets
 it: agent.graph.initial_state does, so a question never inherits the counters, results or draft of the question
 before it, even on a checkpointer thread that keeps the conversation (W2-06).
@@ -208,7 +208,6 @@ class AgentState(TypedDict, total=False):
     history        the conversation's earlier questions, oldest first (input; memory across turns is W2-06)
     limits         {"max_steps", "max_tokens", "timeout_s"} (input, agent.graph.Limits): the executor stops
                    itself at max_steps - len(tool_results); routing gives up when a limit is broken
-    messages       chat messages ({"role", "content", ...}, core.llm's format) for native tool calling (W2-03/04)
     entities       companies, fiscal years and periods (retrieval.entities.from_turns over history + question)
     plan           the planner's latest Plan (replaced on a replan)
     tool_results   every tool call and its result, in order (len = steps taken; more than max_steps gives up)
@@ -224,7 +223,6 @@ class AgentState(TypedDict, total=False):
     question: str
     history: list[str]
     limits: dict[str, float]
-    messages: Annotated[list[dict[str, Any]], _extend]
     entities: Entities | None
     plan: Plan | None
     tool_results: Annotated[list[ToolResult], _extend]

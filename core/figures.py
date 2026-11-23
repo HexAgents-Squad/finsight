@@ -8,6 +8,7 @@ Moved here unchanged from eval/score_answers.py so the agent does not depend on 
 """
 from __future__ import annotations
 
+import functools
 import math
 import re
 from dataclasses import dataclass
@@ -44,9 +45,16 @@ class Figure:
 
 def figures(text: str) -> list[Figure]:
     """The figures in `text`, without dates, bare years, ordinals, footnote markers, Item/form/quarter names and
-    passage ids; a percentage range counts as two percentages."""
+    passage ids; a percentage range counts as two percentages. A new list each call (the Figures are frozen)."""
+    return list(_figures(text))
+
+
+@functools.lru_cache(maxsize=8192)
+def _figures(text: str) -> tuple[Figure, ...]:
+    """figures(text), kept per text (W3-07: the critic, the composer's checks and the scorer read the same answer
+    and passages many times, and NOT_A_FIGURE was most of their time)."""
     clean = PERCENT_RANGE.sub(r"\1% \2%", NOT_A_FIGURE.sub(" ", text))
-    return [f for m in FIGURE.finditer(clean) if (f := _figure(m)) is not None]
+    return tuple(f for m in FIGURE.finditer(clean) if (f := _figure(m)) is not None)
 
 
 def located_figures(text: str) -> list[tuple[Figure, int, int]]:

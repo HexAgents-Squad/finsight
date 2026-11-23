@@ -371,7 +371,7 @@ def test_limits_travel_in_the_state():
 
 def test_a_conversation_thread_never_carries_one_question_into_the_next(caplog):
     from langgraph.checkpoint.memory import InMemorySaver
-    first = Script(executor=[{"tool_results": [ok_result()], "messages": [{"role": "tool", "content": "x"}]}],
+    first = Script(executor=[{"tool_results": [ok_result()], "errors": ["executor: a note"]}],
                    composer=[{"draft": verified_draft(), "tokens": 60}])
     graph = g.build_graph(first.nodes(), checkpointer=InMemorySaver(serde=g.checkpoint_serde()))
     config = {"configurable": {"thread_id": "conversation-1"}}
@@ -382,7 +382,7 @@ def test_a_conversation_thread_never_carries_one_question_into_the_next(caplog):
     two = asyncio.run(g.run("And in fiscal 2023?", [QUESTION], graph=graph, limits=LIMITS, config=config))
     assert two.answer.answer == g.GIVE_UP_ANSWER and not two.answer.verified
     assert two.state["visits"] == {"planner": 1} and two.state["tokens"] == 0
-    assert two.state["tool_results"] == [] and two.state["messages"] == [] and two.state["draft"] is None
+    assert two.state["tool_results"] == [] and two.state["errors"] == [] and two.state["draft"] is None
     assert "unregistered type" not in caplog.text and "Blocked" not in caplog.text    # checkpoint_serde allows all
     assert two.state["entities"] is None or isinstance(two.state["entities"].tickers, tuple)
 
@@ -481,3 +481,12 @@ def test_without_a_critic_the_limits_still_end_the_run():
 def test_the_graph_without_a_critic_has_no_critic_node():
     assert "critic" not in g.build_graph(without_critic(Script())).get_graph().nodes
     assert "critic" in g.build_graph(Script().nodes()).get_graph().nodes
+
+
+def test_the_agents_warm_up_primes_its_one_time_loads():
+    """W3-07: the planner's and composer's prompts and schemas and the company names are loaded at start-up, so the
+    first question does not pay for them (offline: config files only)."""
+    from agent import composer, nodes, planner
+    nodes.warm_up()
+    assert planner.system_prompt.cache_info().currsize == 1 and composer.system_prompt.cache_info().currsize == 1
+    assert composer.reply_schema.cache_info().currsize == 1 and composer._company_names.cache_info().currsize == 1

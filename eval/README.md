@@ -101,9 +101,17 @@ The grading workflow (copies, handout, merge, examples) and the graders' instruc
 
 ## Planner (W2-02)
 ```bash
-python eval/run_planner.py --run P21       # 49 development questions; cached replies cost nothing
+python eval/run_planner.py --run P22       # 49 development questions; cached replies cost nothing
 ```
-Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs (`planner-v2`, W3-04) were measured live in P11 and replayed from the cache with the rules in P12 and with the final rules (after the PR review) in P13, the same plans; W3-05's rule (a drivers question searches the MD&A) replayed in P14 and with the final rules in P16, where only the two drivers questions' searches changed; W3-06's refusal rules replayed in P17 (no plan changed), and its prompt `planner-v3` (rule priority and partial-refusal examples) measured live in P18 and with the rules in P19, and replayed with the final rules (after the PR review: the partial refusal kept within the plan's limits and declined under the rule the question words) in P20, the same plans: refusal decisions 49/49 (P8, `planner-v1`: 48/49). P9 and P10 are W3-04's first prompt, kept as measured. A changed planner prompt also means the A1 runs no longer replay from the cache (`--replay-of`, `eval/critic_eval.py`): their planner requests differ.
+Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs (`planner-v2`, W3-04) were measured live in P11 and replayed from the cache with the rules in P12 and with the final rules (after the PR review) in P13, the same plans; W3-05's rule (a drivers question searches the MD&A) replayed in P14 and with the final rules in P16, where only the two drivers questions' searches changed; W3-06's refusal rules replayed in P17 (no plan changed), and its prompt `planner-v3` (rule priority and partial-refusal examples) measured live in P18 and with the rules in P19, and replayed with the final rules (after the PR review: the partial refusal kept within the plan's limits and declined under the rule the question words) in P20, the same plans, and W3-07's code in P21 (the critic's metric patterns compiled once), the same plans again: refusal decisions 49/49 (P8, `planner-v1`: 48/49). P9 and P10 are W3-04's first prompt, kept as measured. A changed planner prompt also means the A1 runs no longer replay from the cache (`--replay-of`, `eval/critic_eval.py`): their planner requests differ.
+
+## Profile: time and tokens per node and tool (W3-07)
+```bash
+EMBED_BACKEND=sentence-transformers EMBED_LOCAL_MODEL_NAME=BAAI/bge-small-en-v1.5 \
+  python eval/profile_agent.py eval/results/dev_v2/model_runs/<run>.jsonl --label after   # 0 requests
+python eval/profile_agent.py eval/results/model_runs/A1_qwen3-8b_agent_think-off_a-v1.jsonl --runs-only
+```
+The run's questions go through the real graph again after the API's warm-up, every reply from the reply cache (a miss raises; nothing is sent), and the report is written only if every answer is the run's. Each LLM call counts the seconds its request took when it was sent (the cache keeps them), everything else the replay's wall time on this machine (a search embeds locally). `eval/results/profile/README.md` has W3-07's before and after.
 
 ## Prompting baselines S1/S2/S3 (W1-09)
 ```bash

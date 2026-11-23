@@ -32,7 +32,7 @@ from typing import Any
 
 import yaml
 
-from ingest import COMPANIES_FILE, ROOT
+from ingest import COMPANIES_FILE, ROOT, file_version
 
 CONCEPT_MAP_FILE = ROOT / "config" / "concept_map.yaml"
 TAXONOMY = "us-gaap"
@@ -181,7 +181,15 @@ def _check_names(where: str, values: tuple[str, ...], known: frozenset[str], kin
 def load_concept_map(path: Path = CONCEPT_MAP_FILE, companies: Path = COMPANIES_FILE) -> dict[str, Metric]:
     """The metrics in config/concept_map.yaml. Unknown keys, missing keys, wrong types, and tickers or sectors
     not in config/companies.yaml are errors: a typo, or a comma inside an unquoted label in a {...} entry, would
-    otherwise be dropped silently."""
+    otherwise be dropped silently. Parsed once per version of the two files (file_version); the Metrics are
+    frozen, and each caller gets its own dict of them."""
+    return dict(_load_concept_map(file_version(path), file_version(companies)))
+
+
+@cache
+def _load_concept_map(path_version: tuple[str, int, int],
+                      companies_version: tuple[str, int, int]) -> dict[str, Metric]:
+    path, companies = Path(path_version[0]), Path(companies_version[0])
     tickers, sectors = _scope_names(companies)
     metrics = {}
     for name, spec in _raw_map(path)["metrics"].items():

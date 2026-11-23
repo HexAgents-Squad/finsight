@@ -82,7 +82,8 @@ def test_health_reports_the_model_and_counts():
     c, _ = client()
     with c:
         body = c.get("/health").json()
-    assert body == {"status": "ok", "warm_up": "ok", "model": "fake-model", "cache_entries": 0, "sessions": 0}
+    assert body == {"status": "ok", "warm_up": "ok", "model": "fake-model", "cache_entries": 0, "cache_hits": 0,
+                    "cache_misses": 0, "cache_hit_rate": None, "sessions": 0}
 
 
 def test_ask_returns_the_answer_contract_and_a_signed_session():
@@ -108,6 +109,8 @@ def test_the_same_question_is_answered_from_the_cache():
     assert first.json()["cached"] is False and again.json()["cached"] is True
     assert again.json()["answer"] == first.json()["answer"] and len(agent.calls) == 1
     assert again.json()["run"] == first.json()["run"] and health["cache_entries"] == 1
+    # W3-07: the hit rate since start-up (one question answered by the agent, one from the cache)
+    assert (health["cache_hits"], health["cache_misses"], health["cache_hit_rate"]) == (1, 1, 0.5)
 
 
 def test_the_history_is_part_of_the_key():
@@ -441,6 +444,7 @@ def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
     monkeypatch.setattr(core.llm, "LLMClient", Client)
     monkeypatch.setattr(agent.nodes, "real_nodes", lambda llm: events.append("nodes") or fake.nodes())
     monkeypatch.setattr(tools.registry, "warm_up", lambda: events.append("index") or {"ok": True})
+    monkeypatch.setattr(agent.nodes, "warm_up", lambda: events.append("agent"))       # W3-07: prompts, configs
     import core.tokens
     monkeypatch.setattr(core.tokens, "count_tokens", lambda text: events.append("tokenizer") or 1)
     with TestClient(api.create_app()) as c:
@@ -453,9 +457,10 @@ def test_the_real_app_builds_its_graph_from_settings(monkeypatch):
         body = c.get("/health").json()
     assert body["model"] == "Qwen/Qwen3-8B" and body["status"] == "ok"
     assert codes == [200, 200, 429]                                 # the settings' 2/minute is the one applied
-    # the warm-up loads the index, then the executor's tokenizer (off the event loop); the client closes last
+    # the warm-up loads the index, the agent's one-time loads, then the executor's tokenizer (off the event loop);
+    # the client closes last
     assert events[:2] == ["open", "nodes"] and events[-1] == "close"
-    assert [e for e in events if e in ("index", "tokenizer")] == ["index", "tokenizer"]
+    assert [e for e in events if e in ("index", "agent", "tokenizer")] == ["index", "agent", "tokenizer"]
 
 
 def test_a_shared_secret_makes_ids_valid_across_apps():
@@ -514,6 +519,8 @@ def test_the_cache_expires_and_drops_the_least_recently_used():
     assert cache.get("b") is None and cache.get("a") == 1 and len(cache) == 2
     now[0] = 10.0
     assert cache.get("a") is None and cache.get("c") is None
+    assert (cache.hits, cache.misses, cache.hit_rate) == (2, 3, 0.4)    # an expired entry is a miss (W3-07)
+    assert ReplyCache(5, 10).hit_rate is None                       # no lookup yet
     assert not ReplyCache(0, 10).enabled and not ReplyCache(5, 0).enabled
     no_lifetime = ReplyCache(5, 0)
     no_lifetime.put("a", 1)
@@ -584,3 +591,11 @@ def test_the_settings_refuse_a_short_session_secret():
     assert "short-secret" not in str(err.value)                     # the value never appears in the message
     assert settings(API_SESSION_SECRET="").API_SESSION_SECRET is None
     assert settings(API_SESSION_SECRET="x" * 16).API_SESSION_SECRET.get_secret_value() == "x" * 16
+
+
+def test_a_disabled_cache_counts_no_lookups():
+    """Review: a disabled cache reported "0 of 3 questions (0%)", which reads as a cold cache."""
+    cache = ReplyCache(0, 0)
+    for key in ("a", "b", "c"):
+        assert cache.get(key) is None
+    assert (cache.hits, cache.misses, cache.hit_rate) == (0, 0, None)

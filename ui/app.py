@@ -132,6 +132,8 @@ def sidebar(s: Any, busy: bool) -> str | None:
             st.error(f"API not reachable at {s.client.base_url}", icon=":material/cloud_off:")
         elif status.get("status") == "ok":
             st.success(f"API ready · {status.get('model') or 'model'}", icon=":material/check_circle:")
+            if caption := render.cache_caption(status):
+                st.caption(caption)
         elif status.get("status") == "starting":
             st.warning("API starting: the model is warming up", icon=":material/hourglass_top:")
         else:

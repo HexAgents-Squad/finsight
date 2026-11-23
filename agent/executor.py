@@ -334,98 +334,122 @@ def checked_section_call(result: ToolResult) -> ToolCall | None:
 
 
 # ----------------------------------------------------------------------------------------------- node
-async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None, *,
-                  calculator: bool = True) -> dict[str, Any]:
-    """One executor round (see the module docstring). Returns the new results, the round's tool error (None when
-    it had none), and a stop_reason / notes when a guard or the calculation needs saying. `calculator=False`: the
-    plan's calculation is not run (the A2 ablation)."""
-    plan: Plan | None = state.get("plan")
-    if plan is None or plan.refuse:
-        return {}
-    limits = state.get("limits") or {}
-    max_steps = int(limits.get("max_steps", DEFAULT_MAX_STEPS))
-    max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS))
-    earlier = list(state.get("tool_results") or [])
-    count = count_tokens or _default_count_tokens
-    llm_tokens = int(state.get("tokens") or 0)
-    # Earlier output is already inside the LLM tokens once the composer has run (its prompt carries it).
-    composed = bool((state.get("visits") or {}).get("composer"))
-    fetched = 0 if composed else output_tokens(earlier, count)    # grows with each new result
-    known = {call_key(r.call): r for r in earlier}                 # the latest result of each call
-    sends = Counter(call_key(r.call) for r in earlier)            # how often each call was sent
-    new: list[ToolResult] = []
-    used: list[ToolResult] = []                        # this plan's results, in step order (reused ones included)
-    failed_before: list[ToolCall] = []                 # this plan's calls that failed in an earlier round
-    notes: list[str] = []
+class _Round:
+    """One executor round's bookkeeping: what earlier rounds fetched, what this round sends, the guards' budget and
+    the notes. `attempt` runs one call under the module's rules (reuse, one retry of a transient failure, the step
+    and token guards)."""
 
-    async def attempt(call: ToolCall) -> tuple[ToolResult | None, str | None]:
+    def __init__(self, state: AgentState, call_tool: ToolCaller, count: TokenCounter) -> None:
+        limits = state.get("limits") or {}
+        self.max_steps = int(limits.get("max_steps", DEFAULT_MAX_STEPS))
+        self.max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS))
+        self.call_tool, self.count = call_tool, count
+        self.earlier = list(state.get("tool_results") or [])
+        self.llm_tokens = int(state.get("tokens") or 0)
+        # Earlier output is already inside the LLM tokens once the composer has run (its prompt carries it)
+        composed = bool((state.get("visits") or {}).get("composer"))
+        self.fetched = 0 if composed else output_tokens(self.earlier, count)    # grows with each new result
+        self.known = {call_key(r.call): r for r in self.earlier}               # the latest result of each call
+        self.sends = Counter(call_key(r.call) for r in self.earlier)          # how often each call was sent
+        self.new: list[ToolResult] = []
+        self.failed_before: list[ToolCall] = []       # this plan's calls that failed in an earlier round
+        self.notes: list[str] = []
+
+    def _skip(self, call: ToolCall, prior: ToolResult) -> tuple[None, None]:
+        args = json.dumps(call.arguments, sort_keys=True)
+        self.notes.append(f"executor: not sent again, failed before ({prior.error_type}): {call.name} {args}")
+        self.failed_before.append(call)
+        return None, None
+
+    def _guard(self) -> str | None:
+        """Why no new call may be sent (the step or the token limit), or None."""
+        if len(self.earlier) + len(self.new) >= self.max_steps:
+            return f"{STEP_LIMIT} ({self.max_steps} tool calls)"
+        if self.llm_tokens + self.fetched >= self.max_tokens:
+            log.info("executor: %d LLM tokens + %d tokens of tool output, at most %d", self.llm_tokens, self.fetched,
+                     self.max_tokens)
+            return (f"{TOKEN_LIMIT} ({self.llm_tokens} LLM tokens + {self.fetched} tokens of tool output, at most "
+                    f"{self.max_tokens})")
+        return None
+
+    async def attempt(self, call: ToolCall) -> tuple[ToolResult | None, str | None]:
         """The call's result (run, or reused from an earlier successful identical call); (None, None) for a call
         that failed in an earlier round and is not sent again (a service_unavailable one is retried once, unless a
         guard blocks the retry); (None, why) when a guard stopped a new call."""
-        nonlocal fetched
         key = call_key(call)
-        prior = known.get(key)
-
-        def skip() -> tuple[None, None]:
-            args = json.dumps(call.arguments, sort_keys=True)
-            notes.append(f"executor: not sent again, failed before ({prior.error_type}): {call.name} {args}")
-            failed_before.append(call)
-            return None, None
-
-        retry = prior is not None and prior.error_type in TRANSIENT and sends[key] < 2   # one more try, then not
-        if prior is not None and is_error(prior) and not retry:
-            return skip()
+        prior = self.known.get(key)
+        retry = prior is not None and prior.error_type in TRANSIENT and self.sends[key] < 2   # one more try, then not
         if prior is not None and not retry:
-            return prior, None
-        stop = None
-        if len(earlier) + len(new) >= max_steps:
-            stop = f"{STEP_LIMIT} ({max_steps} tool calls)"
-        elif llm_tokens + fetched >= max_tokens:
-            log.info("executor: %d LLM tokens + %d tokens of tool output, at most %d", llm_tokens, fetched, max_tokens)
-            stop = f"{TOKEN_LIMIT} ({llm_tokens} LLM tokens + {fetched} tokens of tool output, at most {max_tokens})"
-        if stop:
-            return skip() if retry else (None, stop)  # a guard blocking a retry: the call simply failed before
-        sends[key] += 1
-        result = await _run(call_tool, call)
-        fetched += output_tokens([result], count)
-        new.append(result)
-        known[call_key(call)] = result
+            return self._skip(call, prior) if is_error(prior) else (prior, None)
+        if stop := self._guard():
+            return self._skip(call, prior) if retry else (None, stop)    # a blocked retry: it simply failed before
+        self.sends[key] += 1
+        result = await _run(self.call_tool, call)
+        self.fetched += output_tokens([result], self.count)
+        self.new.append(result)
+        self.known[key] = result
         return result, None
 
-    for step in plan.steps:
-        result, stop = await attempt(ToolCall(name=step.tool, arguments=step.arguments))
+
+async def _calculate(rnd: _Round, plan: Plan, used: list[ToolResult], calculator: bool) -> str | None:
+    """The plan's calculation over this plan's figures, last of the plan's steps; returns its new tool error (the
+    graph replans), else None. A guard skips only the calculation: the figures stand."""
+    if not plan.calculation:
+        return None
+    if not calculator:
+        rnd.notes.append(f"executor: {plan.calculation} not calculated: {CALCULATOR_OFF}")
+        return None
+    calc_error: str | None = None
+    call, why = calculation_call(plan.calculation, used)
+    lost = [c for c in rnd.failed_before if c.name in FACT_TOOLS]
+    if lost:
+        call, why = None, f"no value for {lost[0].name} {json.dumps(lost[0].arguments, sort_keys=True)}"
+    if call is not None:
+        result, why = await rnd.attempt(call)
+        if result is not None and is_error(result):
+            calc_error, why = result.error_type, None      # a new error: the graph replans, after the check below
+        if why and why.startswith(TOKEN_LIMIT):
+            why = TOKEN_LIMIT                              # a stable note: the counts change between rounds
+    if why:
+        rnd.notes.append(f"executor: {plan.calculation} not calculated: {why}")
+    return calc_error
+
+
+async def _checked_statements(rnd: _Round, used: list[ToolResult]) -> None:
+    """The citation for a "not reported" fact: the statement it was checked on. Last, so it never takes the
+    calculation's step or tokens (review); its own failure is no tool error, the fact's answer stands."""
+    checks = {call_key(c): c for r in used if (c := checked_section_call(r)) is not None}
+    for call in checks.values():
+        _, stop = await rnd.attempt(call)
         if stop:
-            return _update(state, new, None, notes, stop)
+            rnd.notes.append("executor: the checked statement was not fetched: "
+                             + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
+            break
+
+
+async def execute(state: AgentState, call_tool: ToolCaller, count_tokens: TokenCounter | None = None, *,
+                  calculator: bool = True) -> dict[str, Any]:
+    """One executor round (see the module docstring): the plan's steps, then its calculation, then the statements
+    its "not reported" facts were checked on. Returns the new results, the round's tool error (None when it had
+    none), and a stop_reason / notes when a guard or the calculation needs saying. `calculator=False`: the plan's
+    calculation is not run (the A2 ablation)."""
+    plan: Plan | None = state.get("plan")
+    if plan is None or plan.refuse:
+        return {}
+    rnd = _Round(state, call_tool, count_tokens or _default_count_tokens)
+    used: list[ToolResult] = []                        # this plan's results, in step order (reused ones included)
+    for step in plan.steps:
+        result, stop = await rnd.attempt(ToolCall(name=step.tool, arguments=step.arguments))
+        if stop:
+            return _update(state, rnd.new, None, rnd.notes, stop)
         if result is None:                             # failed in an earlier round: the plan's other steps run
             continue
         used.append(result)
         if is_error(result):                           # a new error: the graph replans once, then "not found"
-            return _update(state, new, result.error_type, notes, None)
-    calc_error: str | None = None
-    if plan.calculation and not calculator:
-        notes.append(f"executor: {plan.calculation} not calculated: {CALCULATOR_OFF}")
-    elif plan.calculation:
-        call, why = calculation_call(plan.calculation, used)
-        lost = [c for c in failed_before if c.name in FACT_TOOLS]
-        if lost:
-            call, why = None, f"no value for {lost[0].name} {json.dumps(lost[0].arguments, sort_keys=True)}"
-        if call is not None:
-            result, why = await attempt(call)         # a guard skips only the calculation: the figures stand
-            if result is not None and is_error(result):
-                calc_error, why = result.error_type, None    # a new error: the graph replans, after the check below
-            if why and why.startswith(TOKEN_LIMIT):
-                why = TOKEN_LIMIT                      # a stable note: the counts change between rounds
-        if why:
-            notes.append(f"executor: {plan.calculation} not calculated: {why}")
-    # Last, so it never takes the calculation's step or tokens (review): the citation for a "not reported" fact
-    checks = {call_key(c): c for r in used if (c := checked_section_call(r)) is not None}
-    for call in checks.values():
-        _, stop = await attempt(call)                  # its own failure is no tool error: the fact's answer stands
-        if stop:
-            notes.append("executor: the checked statement was not fetched: "
-                         + (TOKEN_LIMIT if stop.startswith(TOKEN_LIMIT) else stop))
-            break
-    return _update(state, new, calc_error, notes, None)
+            return _update(state, rnd.new, result.error_type, rnd.notes, None)
+    calc_error = await _calculate(rnd, plan, used, calculator)
+    await _checked_statements(rnd, used)
+    return _update(state, rnd.new, calc_error, rnd.notes, None)
 
 
 def _update(state: AgentState, new: list[ToolResult], tool_error: str | None, notes: list[str],

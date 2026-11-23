@@ -26,3 +26,9 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# coverage (W3-07: pytest --cov)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

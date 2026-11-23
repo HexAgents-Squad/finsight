@@ -120,6 +120,7 @@ def test_the_held_out_set_is_scored_but_not_asserted():
     assert result["attacks"] == 60 and result["benign"] == 60
 
 
+@pytest.mark.corpus
 @pytest.mark.skipif(not (ROOT / "data" / "chunks" / "chunks_C3.jsonl").exists(), reason="needs data/ (the corpus)")
 @pytest.mark.parametrize("chunking", ["C1", "C2", "C3"])
 def test_no_sentence_of_the_corpus_is_flagged(chunking):

@@ -29,6 +29,26 @@ if TYPE_CHECKING:
     from agent.graph import Nodes
 
 
+def warm_up() -> None:
+    """The agent's one-time loads, so a server's first question does not pay for them (W3-07, measured on the
+    development set v2: the first question's planner took ~0.2 s longer): the planner's and composer's prompts and
+    reply schemas, the two config files (parsed once per version), the company names the entity reader, the
+    composer and the critic use. No data/ and no request; the index and the facts are tools.registry.warm_up's."""
+    from agent import composer, critic_semantic, planner
+    from ingest.edgar import load_scope
+    from ingest.xbrl import load_concept_map
+    from retrieval.entities import extract
+    planner.system_prompt()
+    planner.plan_json_schema()
+    composer.system_prompt()
+    composer.reply_schema()
+    load_concept_map()
+    for company in load_scope().companies:
+        composer.company(company.ticker)
+        critic_semantic._ticker_words(company.ticker)
+    extract("What was Apple's revenue in fiscal 2024?")
+
+
 def real_nodes(llm: Any = None, call_tool: Any = None, *, injection_guard: bool = True, calculator: bool = True,
                critic: bool = True, statements_first: bool = True) -> Nodes:
     """The planner, executor, composer and critic, sharing one LLM client (the switches: the module docstring)."""

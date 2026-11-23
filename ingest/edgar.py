@@ -16,12 +16,14 @@ import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from functools import cache
+from pathlib import Path
 from typing import Any
 
 import requests
 import yaml
 
-from ingest import COMPANIES_FILE
+from ingest import COMPANIES_FILE, file_version
 
 SEC_WWW = "https://www.sec.gov"
 SEC_DATA = "https://data.sec.gov"
@@ -74,7 +76,13 @@ def company_names(path=COMPANIES_FILE) -> dict[str, tuple[str, ...]]:
 
 
 def load_scope(path=COMPANIES_FILE) -> Scope:
-    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    """The corpus scope in config/companies.yaml, parsed once per version of the file (file_version)."""
+    return _load_scope(*file_version(path))
+
+
+@cache
+def _load_scope(path: str, mtime_ns: int, size: int) -> Scope:
+    cfg = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     forms = cfg["forms"]
     return Scope(
         companies=tuple(Company(c["ticker"], c["cik"], c["sector"]) for c in cfg["companies"]),
