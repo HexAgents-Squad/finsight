@@ -901,3 +901,75 @@ def test_check_applies_the_partial_refusal_rule_to_numeric_and_entity_answers():
     assert score(v2["dev-D21"], named)["correct"] is True             # an ordinary entity question: unchanged
     assert score(entity, named)["suggested_label"] == "under_refusal"
     assert score(entity, named.model_copy(update={"refusal_rule": "R1"}))["correct"] is True
+
+
+# --- W3-08: against A1 (the A5 go / no-go rule) ----------------------------------------------------------------
+
+def _agent(run_id, verdicts):
+    """A scored agent run: (answer type, correct) per question, ids q0, q1, ..."""
+    from types import SimpleNamespace
+    meta = SimpleNamespace(run_id=run_id, context="agent", model_extra={})
+    return meta, [{"id": f"q{i}", "answer_type": t, "correct": c} for i, (t, c) in enumerate(verdicts)]
+
+
+A1_VERDICTS = [("short_numeric", True), ("short_numeric", False), ("summary", True), ("refusal", True)]
+
+
+def test_a_run_no_worse_than_a1_on_every_type_is_final():
+    a1 = _agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS)
+    a5 = _agent("A5_qwen3-8b_agent_think-off_a5-v1", [("short_numeric", True), ("short_numeric", True),
+                                                       ("summary", True), ("refusal", True)])
+    text = sa.against_a1_table([a1, a5])
+    assert "| Short: numeric | 2 vs 1 of 2; 1 / 0 (p = 1.00); not worse |" in text
+    assert "| No answer type worse than A1 | yes |" in text and "| Short: entity | – |" in text
+
+
+def test_one_worse_type_makes_a_run_not_final_and_a_pending_grade_decides_nothing():
+    a1 = _agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS)
+    worse = _agent("A5_qwen3-8b_agent_think-off_a5-v1", [("short_numeric", True), ("short_numeric", True),
+                                                          ("summary", False), ("refusal", True)])
+    pending = _agent("A5_qwen3-8b_agent_think-off_a5-v2", [("short_numeric", True), ("short_numeric", True),
+                                                            ("summary", None), ("refusal", True)])
+    text = sa.against_a1_table([a1, worse, pending])
+    assert "| No answer type worse than A1 | no: Summary | pending |" in text
+    assert "0 vs 1 of 1; 0 / 1 (p = 1.00); worse" in text and "pending (1)" in text
+
+
+def test_the_comparison_needs_a1_and_the_same_questions():
+    a5 = _agent("A5_qwen3-8b_agent_think-off_a5-v1", A1_VERDICTS)
+    assert sa.against_a1_table([a5]) == ""                                   # no A1: no section
+    with pytest.raises(ValueError, match="different questions"):
+        sa.against_a1_table([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS[:3]), a5])
+    with pytest.raises(ValueError, match="different questions"):               # checked before writing anything
+        sa.check_against_a1([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS[:3]), a5])
+    sa.check_against_a1([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS), a5])
+
+
+def test_a_later_agent_gold_run_shares_a1s_grades_and_nothing_else_does():
+    """W3-08: A5's answers word for word A1's take A1's grade; A1 itself, a development run and a non-agent run do
+    not share, and an ablation keeps its own reference."""
+    from types import SimpleNamespace
+    runs = {"A1_qwen3-8b_agent_think-off_a-v1", "M1_qwen3-8b_rag_think-off_b0-v1"}
+
+    def meta(run_id, context="agent", questions="gold", extra=None):
+        return SimpleNamespace(run_id=run_id, context=context, questions=questions, model_extra=extra or {})
+    assert sa.grade_reference(meta("A5_qwen3-8b_agent_think-off_a-v1"), runs) == "A1_qwen3-8b_agent_think-off_a-v1"
+    assert sa.grade_reference(meta("A1_qwen3-8b_agent_think-off_a-v1"), runs) is None
+    assert sa.grade_reference(meta("A5_qwen3-8b_agent_think-off_dev-w306", questions="dev2"), runs) is None
+    assert sa.grade_reference(meta("M1_qwen3-8b_rag_think-off_b0-v1", context="rag"), runs) is None
+    assert sa.grade_reference(meta("A5_qwen3-8b_agent_think-off_a-v1"), {"M1_qwen3-8b_rag_think-off_b0-v1"}) is None
+    ablation = meta("A3_qwen3-8b_agent_think-off_a-v1-no-critic", extra={"ablation_of": "A1_x"})
+    assert sa.grade_reference(ablation, runs) == "A1_x"
+
+
+def test_shared_grades_cover_only_identical_answers():
+    from types import SimpleNamespace
+    a1 = SimpleNamespace(run_id="A1_qwen3-8b_agent_think-off_a-v1", context="agent", questions="gold", model_extra={})
+    a5 = SimpleNamespace(run_id="A5_qwen3-8b_agent_think-off_a-v1", context="agent", questions="gold", model_extra={})
+    row = {"answer_type": "summary", "correct": None, "suggested_label": None}
+    a1_scored = [{"id": "E01", "model_answer": "same", "sheet_key": "k1", **row},
+                 {"id": "E02", "model_answer": "old", "sheet_key": "k2", **row}]
+    a5_scored = [{"id": "E01", "model_answer": "same", "sheet_key": "k3", **row},
+                 {"id": "E02", "model_answer": "new", "sheet_key": "k4", **row}]
+    sa.share_grades([(a1, [], a1_scored), (a5, [], a5_scored)])
+    assert [(s["sheet_key"], s.get("shared_grade")) for s in a5_scored] == [("k1", True), ("k4", None)]

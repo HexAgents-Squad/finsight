@@ -143,6 +143,16 @@ fields by `run_agent.b0_answer` (value: the last calculation's result, else the 
 the pinned planner and composer prompts (`tests/test_planner.py`, `tests/test_composer.py`). The new rows of the
 grading sheet are graded in a `--pending` round (`GRADING.md`).
 
+A5 (W3-08, ADR-037) runs on gold once, after the go / no-go on the development set v2:
+```bash
+python eval/run_agent.py --run-id A5_qwen3-8b_agent_think-off_a-v1 --max-requests 350
+```
+A gold run starts only when its configuration is pinned: both prompts are their pinned PROMPT_SHA256 and the code
+(`run_agent.CODE_PATHS`) is committed, so the meta's `git_commit` is the code that ran (it also records the
+planner's `rules_sha256`). The agent report's section 13 sets each later agent run against A1 per answer type
+(correct answers, the paired sign test, worse / not worse / pending): A5 is final only if no type is worse; the
+development reports carry the same section (the go / no-go).
+
 ## The development set v2 (W3-02)
 ```bash
 python eval/validate_dev_set.py eval/dev_set_v2.jsonl --final    # every item verified (CI)

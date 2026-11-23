@@ -121,6 +121,16 @@
 | stopped by a limit (time, steps, tokens) | 0 | 0 | 0 | 0 |
 | live requests / cache hits (chat replies) | 64 / 0 | 38 / 27 | 0 / 57 | 36 / 23 |
 | short numeric answers with several values and no calculation (no single value to score) | 2 | 1 | 2 | 2 |
+
+### 13. Against A1_qwen3-8b_agent_think-off_a-v1 (A1): correct answers (run vs A1), right only with the run / only with A1 (sign test), and whether the type is worse; a version is final only if no type is worse
+
+| Answer type | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|
+| Short: numeric | 10 vs 2 of 14; 8 / 0 (p = 0.01); not worse | 10 vs 2 of 14; 8 / 0 (p = 0.01); not worse | 12 vs 2 of 14; 10 / 0 (p < 0.01); not worse |
+| Short: entity | 1 vs 0 of 1; 1 / 0 (p = 1.00); not worse | 1 vs 0 of 1; 1 / 0 (p = 1.00); not worse | 1 vs 0 of 1; 1 / 0 (p = 1.00); not worse |
+| Summary | 4 vs 3 of 8; 1 / 0 (p = 1.00); not worse | 4 vs 3 of 8; 3 / 2 (p = 1.00); not worse | 4 vs 3 of 8; 2 / 1 (p = 1.00); not worse |
+| Refusal & not reported | 4 vs 4 of 7; 0 / 0 (p = 1.00); not worse | 4 vs 4 of 7; 0 / 0 (p = 1.00); not worse | 7 vs 4 of 7; 3 / 0 (p = 0.25); not worse |
+| No answer type worse than A1 | yes | yes | yes |
 <!-- GENERATED:END -->
 
 ## Interpretation
@@ -246,3 +256,12 @@ billion currency impact ranks second, and the answer names the offsetting produc
 composer matter for A5, not a refusal rule. E28 (Wells Fargo) rose from 1 to 2 with the same text, graded by
 another pair; E26 changed and stays 2. Both graders labelled the A28 answer `wrong_line_item` before option B; the
 label row is kept as stale.
+
+## W3-08: the A5 go / no-go on the development set v2 (ADR-037)
+
+**Go (24 Nov 2026).** The A5 configuration is main after W3-03 to W3-07 with W3-08's harness (commit fac3f40). Its
+development set v2 run is W3-06's graded run, re-derived on that commit from the reply cache (`--replay-of`, 0
+requests, every answer and tool call the same; W3-07 skips dev-E24's re-ask, and a replay keeps the earlier run's
+cost). Section 13: no answer type is worse than A1 on the same questions: numeric 12 vs 2 of 14, entity 1 vs 0 of
+1, summaries 4 vs 3 of 8 (grade points 12 vs 9 of 16), refusal and not reported 7 vs 4 of 7. Summaries are the
+narrowest margin (E25 lost a point in W3-06). The gold run follows, once, with this configuration pinned.

@@ -24,6 +24,13 @@ from eval import run_agent as ra
 from eval.runs_schema import AgentInfo, B0Answer, Evidence, RunMeta, RunRecord, ToolCallRecord
 
 LIMITS = g.Limits(max_steps=10, max_tokens=12_000, timeout_s=10)
+UNCOMMITTED = ra.uncommitted                     # the real one, for its own test (the fixture below replaces it)
+
+
+@pytest.fixture(autouse=True)
+def _a_clean_checkout(monkeypatch):
+    """A gold run checks that the code is committed (W3-08); the tests must not depend on the checkout's git state."""
+    monkeypatch.setattr(ra, "uncommitted", lambda paths=ra.CODE_PATHS: [])
 PACKS = [ra.RESULTS_DIR / ra.GOLD_PACK, ra.RESULTS_DIR / ra.REFUSAL_PACK]
 B0 = sa.B0_REFERENCE
 CHUNK = "AAPL_10-K_2024_Item7_C3_0012"
@@ -311,7 +318,7 @@ def earlier_run(tmp_path, change=None):
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
         r = json.loads(line)
         r["latency_s"], r["cached"] = 4.5 + n, False
-        r["agent"].update(llm_calls=2, live_requests=2)
+        r["agent"].update(llm_calls=2, live_requests=2, tokens=900 + n)
         r["agent"].pop("cache_hits")                                   # an older runs file has no such field
         if change and n == 0:
             change(r)
@@ -331,6 +338,7 @@ def test_a_replay_keeps_the_earlier_runs_timings_cost_and_dates(tmp_path):
     recs = [RunRecord.model_validate_json(x) for x in (out / f"{ra.RUN_ID}.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r.latency_s for r in recs[:2]] == [4.5, 5.5] and not any(r.cached for r in recs)
     assert (recs[0].agent.llm_calls, recs[0].agent.live_requests, recs[0].agent.cache_hits) == (2, 2, 0)
+    assert [r.agent.tokens for r in recs[:2]] == [900, 901]                  # the whole cost is the earlier run's
     meta = json.loads((out / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
     assert (meta["started"], meta["git_commit"]) == ("2026-11-20T20:51:02+00:00", "abc")
     assert meta["requests"] == {"live": 204, "cache_hits": 0, "http_retries": 0}       # embed_calls dropped
@@ -855,3 +863,39 @@ def test_a_dev_v2_follow_up_gets_its_earlier_question_only():
 
 def test_an_ablation_is_refused_on_dev_v2_too(tmp_path, capsys):
     assert run_cli(tmp_path, "--questions", "dev2", "--ablation", "no-critic") == 2 and not list(tmp_path.iterdir())
+
+
+# ----------------------------------------------------------------------------------------------- W3-08 pinning
+def test_a_gold_run_starts_only_when_its_configuration_is_pinned(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ra, "pin_problems", lambda: ["the planner prompt is not its pinned PROMPT_SHA256"])
+    assert ra.main(["--out-dir", str(tmp_path)], settings=settings(), limits=LIMITS) == 2
+    assert not list(tmp_path.iterdir()) and "not pinned, nothing run" in capsys.readouterr().err
+
+
+def test_pin_problems_names_a_changed_prompt_and_uncommitted_code(monkeypatch):
+    from agent import composer, planner
+    monkeypatch.setattr(ra, "uncommitted", lambda paths=ra.CODE_PATHS: [])
+    assert ra.pin_problems() == []
+    monkeypatch.setattr(planner, "PROMPT_SHA256", "0" * 64)
+    monkeypatch.setattr(ra, "uncommitted", lambda paths=ra.CODE_PATHS: ["agent/composer.py"])
+    problems = ra.pin_problems()
+    assert len(problems) == 2 and "planner prompt" in problems[0] and "agent/composer.py" in problems[1]
+    assert composer.prompt_sha256() == composer.PROMPT_SHA256
+
+
+def test_uncommitted_lists_changed_and_new_files(monkeypatch):
+    out = ' M agent/composer.py\n?? agent/new_rule.py\nR  agent/old.py -> agent/renamed.py\n?? "eval/a b.py"\n'
+    monkeypatch.setattr(ra.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=out))
+    assert UNCOMMITTED() == ["agent/composer.py", "agent/new_rule.py", "agent/renamed.py", "eval/a b.py"]
+
+    def fail(*a, **k):
+        raise OSError("no git")
+    monkeypatch.setattr(ra.subprocess, "run", fail)
+    assert UNCOMMITTED() == ["(git unavailable)"]
+
+
+def test_a_run_other_than_a1_records_the_planners_rules(tmp_path):
+    from agent import planner
+    assert run_cli(tmp_path, "--run-id", "A5_qwen3-8b_agent_think-off_a5-v1") == 0
+    meta = json.loads((tmp_path / "A5_qwen3-8b_agent_think-off_a5-v1.meta.json").read_text(encoding="utf-8"))
+    assert meta["rules_sha256"] == planner.rules_sha256()

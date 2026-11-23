@@ -65,7 +65,8 @@ row whose answer changed or is no longer needed stays as task "stale".
 Shared grades (W3-01): an ablation's answer that is word for word its reference run's answer to the same question,
 with the same automatic verdict and suggested label, takes the reference row's sheet key (share_grades), so it is
 graded once and the graders see only the answers the switch changed. A changed answer gets its own row; the graders'
-agreement (table 7) counts a shared grade once, under the reference.
+agreement (table 7) counts a shared grade once, under the reference. W3-08: a later agent run on gold (A5) shares
+with A1 the same way, so the graders grade only what A5 answers differently.
 Exit codes: 0 = scored, 1 = invalid input files, 2 = no runs found.
 """
 from __future__ import annotations
@@ -586,14 +587,26 @@ def ablation_of(meta: RunMeta) -> str | None:
     return reference if isinstance(reference, str) and reference else None
 
 
+def grade_reference(meta: RunMeta, run_ids: set[str]) -> str | None:
+    """The run whose grades this run's identical answers take (share_grades): an ablation's reference (W3-01), or A1
+    for a later agent run on the gold questions (W3-08, A5); None for any other run (A1 itself, the B0 runs, the
+    strategies and the development-set runs, which are graded on their own)."""
+    if reference := ablation_of(meta):
+        return reference
+    a1 = sorted(r for r in run_ids if r.startswith(A1_PREFIX))
+    later_agent = getattr(meta, "context", None) == "agent" and not meta.run_id.startswith(A1_PREFIX)
+    return a1[0] if later_agent and getattr(meta, "questions", None) == "gold" and a1 else None
+
+
 def share_grades(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]]) -> None:
-    """An ablation's answer that is word for word its reference run's answer to the same question, with the same
-    answer type, automatic verdict and suggested label (which reads the run's own evidence), takes the reference
-    answer's sheet key: one row, graded once, the grade and label applied to both, and marked `shared_grade` (so the
-    graders' agreement counts it once, under the reference). Anything else keeps its own key."""
+    """An answer of an ablation or a later agent gold run (grade_reference) that is word for word its reference run's
+    answer to the same question, with the same answer type, automatic verdict and suggested label (which reads the
+    run's own evidence), takes the reference answer's sheet key: one row, graded once, the grade and label applied
+    to both, and marked `shared_grade` (so the graders' agreement counts it once, under the reference). Anything
+    else keeps its own key."""
     scored_by_run = {meta.run_id: scored for meta, _, scored in runs}
     for meta, _, scored in runs:
-        reference = ablation_of(meta)
+        reference = grade_reference(meta, set(scored_by_run))
         if reference is None:
             continue
         if reference not in scored_by_run:
@@ -996,6 +1009,67 @@ def ablation_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     return "\n".join(out) + "\n"
 
 
+A1_PREFIX = "A1_"                                     # the reported baseline's run ids (W2-11)
+
+
+def check_against_a1(runs: list[tuple[RunMeta, list[dict]]]) -> None:
+    """Section 13 compares question by question: a later agent run must have answered A1's questions (ValueError),
+    checked before the scorer writes anything, so a mismatch never leaves the sheet and scores newer than the
+    reports (W3-08 review)."""
+    a1 = [r for r in runs if r[0].run_id.startswith(A1_PREFIX) and not ablation_of(r[0])]
+    if not a1:
+        return
+    ids = {s["id"] for s in a1[0][1]}
+    for meta, sc in runs:
+        if getattr(meta, "context", None) == "agent" and not meta.run_id.startswith(A1_PREFIX) \
+                and not ablation_of(meta) and {s["id"] for s in sc} != ids:
+            raise ValueError(f"{meta.run_id} and {a1[0][0].run_id} answered different questions")
+
+
+def against_a1_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
+    """W3-08 (ADR-037): each later agent run against A1 on the same questions, per answer type: its correct answers
+    and A1's, right only with it / only with A1 (two-sided sign test), and whether it is worse. A version is final
+    only if no answer type is worse than A1 (docs/week3_plan.txt §2): fewer correct answers of the same questions is
+    worse; an answer still waiting for a grade (either run's) decides nothing, so the type reads "pending"."""
+    from eval.retrieval_eval import sign_test
+    a1 = [r for r in runs if r[0].run_id.startswith(A1_PREFIX) and not ablation_of(r[0])]
+    later = [r for r in runs if r[0].context == "agent" and not r[0].run_id.startswith(A1_PREFIX)
+             and not ablation_of(r[0])]
+    if not a1 or not later:
+        return ""
+    ref_meta, ref = a1[0]
+    by_id = {s["id"]: s for s in ref}
+    out = table(f"### 13. Against {ref_meta.run_id} (A1): correct answers (run vs A1), right only with the run / only "
+                "with A1 (sign test), and whether the type is worse; a version is final only if no type is worse",
+                "Answer type", [m.run_id for m, _ in later])
+    states: dict[str, list[str]] = {m.run_id: [] for m, _ in later}
+    for label, types in REPORT_TYPES.items():
+        cells = []
+        for meta, sc in later:
+            if {s["id"] for s in sc} != set(by_id):
+                raise ValueError(f"{meta.run_id} and {ref_meta.run_id} answered different questions")
+            mine = [s for s in sc if s["answer_type"] in types]
+            theirs = [by_id[s["id"]] for s in mine]
+            pending = sum(s["correct"] is None for s in mine) + sum(s["correct"] is None for s in theirs)
+            right, a1_right = sum(s["correct"] is True for s in mine), sum(s["correct"] is True for s in theirs)
+            pairs = [(s["correct"], r["correct"]) for s, r in zip(mine, theirs, strict=True)
+                     if s["correct"] is not None and r["correct"] is not None]
+            win, loss = sum(a and not b for a, b in pairs), sum(b and not a for a, b in pairs)
+            p = sign_test(win, loss)
+            state = f"pending ({pending})" if pending else "worse" if right < a1_right else "not worse"
+            states[meta.run_id].append(state)
+            shown = f"p = {p:.2f}" if p >= 0.005 else "p < 0.01"
+            cells.append(f"{right} vs {a1_right} of {len(mine)}; {win} / {loss} ({shown}); {state}" if mine else "–")
+        out.append(f"| {label} | " + " | ".join(cells) + " |")
+    finals = []
+    for meta, _ in later:
+        got = states[meta.run_id]
+        finals.append("no: " + ", ".join(lb for lb, s in zip(REPORT_TYPES, got, strict=True) if s == "worse")
+                      if "worse" in got else "pending" if any(s.startswith("pending") for s in got) else "yes")
+    out.append("| No answer type worse than A1 | " + " | ".join(finals) + " |")
+    return "\n".join(out) + "\n"
+
+
 def write_report(text: str, path: Path) -> None:
     block = f"{START}\n{text}{END}"
     title = REPORT_TITLES.get(path.name, REPORT_TITLES[REPORT_NAME])
@@ -1019,7 +1093,7 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]], dev_report: str =
     agent_runs = [r for r in runs if r[0].run_id.startswith("A") and not ablation_of(r[0])]
     ablation_runs = [r for r in runs if ablation_of(r[0])]
     if dev:
-        return {dev_report: report(runs) + strategy_table(runs) + agent_table(runs)}
+        return {dev_report: report(runs) + strategy_table(runs) + agent_table(runs) + against_a1_table(runs)}
     out = {}
     model_runs = [r for r in runs if r[0].run_id.startswith("M")]
     if model_runs:
@@ -1032,7 +1106,8 @@ def reports(dev: bool, runs: list[tuple[RunMeta, list[dict]]], dev_report: str =
         out[BASELINE_REPORT] = report(baseline) + strategy_table(baseline)
     if agent_runs:                              # W2-11: B0 first (the paired table's reference), S1-S3, the agent
         compared = reference + strategy_runs + agent_runs
-        out[AGENT_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared)
+        out[AGENT_REPORT] = report(compared) + strategy_table(compared) + agent_table(compared) + \
+            against_a1_table(compared)
     if ablation_runs:                           # W3-01: the reference (A1) first, then A2-A4 in run-id order
         references = {ablation_of(m) for m, _ in ablation_runs}
         reference = [r for r in runs if r[0].run_id in references]
@@ -1105,6 +1180,7 @@ def main(argv: list[str] | None = None) -> int:
             check_packs(meta, pack_files)
             runs.append((meta, records, score_run(meta, records, questions, packs, matchers)))
         share_grades(runs)                      # W3-01: an ablation's unchanged answer is graded once
+        check_against_a1([(m, sc) for m, _, sc in runs])      # before anything is written (W3-08)
         grading = args.out_dir / GRADING_DIR.name
         entered = write_sheet(sheet_rows(runs, questions), grading)
         scores_dir = args.out_dir / SCORES_DIR.name

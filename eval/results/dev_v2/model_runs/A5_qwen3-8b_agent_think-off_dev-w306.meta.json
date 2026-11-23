@@ -25,6 +25,7 @@
     "fusion": "hybrid RRF",
     "statements_first": true
   },
+  "rules_sha256": "47370f392c03b6e824f45df233c47d36b1ce7b51f953b09156d9c892073dcc70",
   "reply_cache": true,
   "questions": "dev2",
   "requests": {
@@ -36,11 +37,11 @@
   "started": "2026-11-23T09:33:45+00:00",
   "finished": "2026-11-23T09:35:51+00:00",
   "replay": {
-    "replayed": "2026-11-23T14:11:11+00:00",
-    "git_commit": "c422396ca7af23468f535db263f73e7c7845f32d",
+    "replayed": "2026-11-23T16:51:49+00:00",
+    "git_commit": "fac3f40b0a150d12967ab615fcd2f6807bd16221",
     "requests": {
       "live": 0,
-      "cache_hits": 59,
+      "cache_hits": 58,
       "http_retries": 0
     }
   }

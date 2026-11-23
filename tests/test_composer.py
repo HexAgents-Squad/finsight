@@ -828,7 +828,7 @@ def test_located_figures_are_the_figures_with_their_place():
 def test_the_prompt_is_pinned():
     """A change to what the model sees must be deliberate: re-measure, then update the pin."""
     seen = cm.system_prompt() + json.dumps(cm.reply_schema(), sort_keys=True)
-    assert hashlib.sha256(seen.encode("utf-8")).hexdigest() == cm.PROMPT_SHA256
+    assert hashlib.sha256(seen.encode("utf-8")).hexdigest() == cm.PROMPT_SHA256 == cm.prompt_sha256()
 
 
 # ----------------------------------------------------------------------------------------------- W3-05
