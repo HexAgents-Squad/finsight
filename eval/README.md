@@ -185,6 +185,22 @@ kept out of `agent_baselines.md`). Unchanged model calls replay from the reply c
 its switch changes. An ablation's answer that is word for word A1's shares A1's grading row; the changed ones get
 new rows for a `--pending` round. ADR-036.
 
+## The evaluation report and the trace dashboard (W3-09)
+```bash
+python eval/report.py            # results/evaluation_report.md (generated tables), results/report/*.svg and the PDF
+python eval/report.py --check    # exit 1 if any is stale (tests/test_report.py)
+python scripts/trace_runs.py --run-id W3-09-demo-a5 --demo --tag version:A5 --max-requests 40
+python scripts/trace_runs.py --run-id W3-09-a1-failures-a5 --gold A06 B04 ... --tag version:A5 --cache-only
+python scripts/trace_dashboard.py --run W3-09-demo-a5 --out eval/results/traces/W3-09-demo-a5.md
+```
+The report reads only committed files (the scorer's `results/scores/`, the runs' metas, `results/traces/*.jsonl`), so
+a fresh clone regenerates every byte. Its versions are B0, the best of S1-S3, A1, A2-A4 and A5, and every answer
+must be decided. The failure taxonomy (retrieval miss, reasoning error, tool-call error, hallucination, refusal
+error) maps each wrong answer's failure label (`eval/report.py` docstring); an agent run replayed from the cache
+(A2-A4) has no comparable latency and shows none. A traced run tags every question `run:<id>`, `q:<id>` and the
+`--tag` values; `--cache-only` replays a committed run's replies with no chat request (W3-09 traced A1's own code
+from a worktree at its commit that way).
+
 ## Refusal and prompt-injection tests (WP8b)
 ```bash
 python eval/validate_test_sets.py            # drafting rules (while writing new tests)

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="320" viewBox="0 0 640 320" font-family="Helvetica, Arial, sans-serif" font-size="11">
+<rect width="640" height="320" fill="#ffffff"/>
+<text x="320" y="18" text-anchor="middle" font-size="13" font-weight="bold">Wrong answers by failure class</text>
+<line x1="44" y1="262" x2="628" y2="262" stroke="#dddddd"/>
+<text x="38" y="266" text-anchor="end">0</text>
+<line x1="44" y1="204" x2="628" y2="204" stroke="#dddddd"/>
+<text x="38" y="208" text-anchor="end">15</text>
+<line x1="44" y1="146" x2="628" y2="146" stroke="#dddddd"/>
+<text x="38" y="150" text-anchor="end">30</text>
+<line x1="44" y1="88" x2="628" y2="88" stroke="#dddddd"/>
+<text x="38" y="92" text-anchor="end">45</text>
+<line x1="44" y1="30" x2="628" y2="30" stroke="#dddddd"/>
+<text x="38" y="34" text-anchor="end">60</text>
+<rect x="56.5" y="234.9" width="58.4" height="27.1" fill="#2f6db5"/>
+<rect x="56.5" y="161.5" width="58.4" height="73.5" fill="#e07b39"/>
+<rect x="56.5" y="157.6" width="58.4" height="3.9" fill="#4b9a5a"/>
+<rect x="56.5" y="122.8" width="58.4" height="34.8" fill="#c44e52"/>
+<rect x="56.5" y="60.9" width="58.4" height="61.9" fill="#8172b2"/>
+<rect x="139.9" y="234.9" width="58.4" height="27.1" fill="#2f6db5"/>
+<rect x="139.9" y="138.3" width="58.4" height="96.7" fill="#e07b39"/>
+<rect x="139.9" y="107.3" width="58.4" height="30.9" fill="#c44e52"/>
+<rect x="139.9" y="88" width="58.4" height="19.3" fill="#8172b2"/>
+<rect x="223.4" y="246.5" width="58.4" height="15.5" fill="#2f6db5"/>
+<rect x="223.4" y="215.6" width="58.4" height="30.9" fill="#e07b39"/>
+<rect x="223.4" y="200.1" width="58.4" height="15.5" fill="#8172b2"/>
+<rect x="306.8" y="242.7" width="58.4" height="19.3" fill="#2f6db5"/>
+<rect x="306.8" y="207.9" width="58.4" height="34.8" fill="#e07b39"/>
+<rect x="306.8" y="122.8" width="58.4" height="85.1" fill="#4b9a5a"/>
+<rect x="306.8" y="107.3" width="58.4" height="15.5" fill="#8172b2"/>
+<rect x="390.2" y="246.5" width="58.4" height="15.5" fill="#2f6db5"/>
+<rect x="390.2" y="215.6" width="58.4" height="30.9" fill="#e07b39"/>
+<rect x="390.2" y="200.1" width="58.4" height="15.5" fill="#8172b2"/>
+<rect x="473.7" y="246.5" width="58.4" height="15.5" fill="#2f6db5"/>
+<rect x="473.7" y="227.2" width="58.4" height="19.3" fill="#e07b39"/>
+<rect x="473.7" y="211.7" width="58.4" height="15.5" fill="#8172b2"/>
+<rect x="557.1" y="254.3" width="58.4" height="7.7" fill="#2f6db5"/>
+<rect x="557.1" y="238.8" width="58.4" height="15.5" fill="#e07b39"/>
+<rect x="557.1" y="234.9" width="58.4" height="3.9" fill="#4b9a5a"/>
+<line x1="44" y1="262" x2="628" y2="262" stroke="#333333"/>
+<text x="85.7" y="276" text-anchor="middle">B0</text>
+<text x="169.1" y="276" text-anchor="middle">S1</text>
+<text x="252.6" y="276" text-anchor="middle">A1</text>
+<text x="336" y="276" text-anchor="middle">A2</text>
+<text x="419.4" y="276" text-anchor="middle">A3</text>
+<text x="502.9" y="276" text-anchor="middle">A4</text>
+<text x="586.3" y="276" text-anchor="middle">A5</text>
+<rect x="44" y="297" width="10" height="10" fill="#2f6db5"/>
+<text x="58" y="306">retrieval miss</text>
+<rect x="160.8" y="297" width="10" height="10" fill="#e07b39"/>
+<text x="174.8" y="306">reasoning error</text>
+<rect x="277.6" y="297" width="10" height="10" fill="#4b9a5a"/>
+<text x="291.6" y="306">tool-call error</text>
+<rect x="394.4" y="297" width="10" height="10" fill="#c44e52"/>
+<text x="408.4" y="306">hallucination</text>
+<rect x="511.2" y="297" width="10" height="10" fill="#8172b2"/>
+<text x="525.2" y="306">refusal error</text>
+</svg>
