@@ -101,9 +101,9 @@ The grading workflow (copies, handout, merge, examples) and the graders' instruc
 
 ## Planner (W2-02)
 ```bash
-python eval/run_planner.py --run P17       # 49 development questions; cached replies cost nothing
+python eval/run_planner.py --run P21       # 49 development questions; cached replies cost nothing
 ```
-Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs (`planner-v2`, W3-04) were measured live in P11 and replayed from the cache with the rules in P12 and with the final rules (after the PR review) in P13, the same plans; W3-05's rule (a drivers question searches the MD&A) replayed in P14 and with the final rules in P16, where only the two drivers questions' searches changed: refusal decisions 49/49 (P8, `planner-v1`: 48/49). P9 and P10 are W3-04's first prompt, kept as measured. A changed planner prompt also means the A1 runs no longer replay from the cache (`--replay-of`, `eval/critic_eval.py`): their planner requests differ.
+Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs (`planner-v2`, W3-04) were measured live in P11 and replayed from the cache with the rules in P12 and with the final rules (after the PR review) in P13, the same plans; W3-05's rule (a drivers question searches the MD&A) replayed in P14 and with the final rules in P16, where only the two drivers questions' searches changed; W3-06's refusal rules replayed in P17 (no plan changed), and its prompt `planner-v3` (rule priority and partial-refusal examples) measured live in P18 and with the rules in P19, and replayed with the final rules (after the PR review: the partial refusal kept within the plan's limits and declined under the rule the question words) in P20, the same plans: refusal decisions 49/49 (P8, `planner-v1`: 48/49). P9 and P10 are W3-04's first prompt, kept as measured. A changed planner prompt also means the A1 runs no longer replay from the cache (`--replay-of`, `eval/critic_eval.py`): their planner requests differ.
 
 ## Prompting baselines S1/S2/S3 (W1-09)
 ```bash

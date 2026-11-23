@@ -3,124 +3,124 @@
 <!-- GENERATED:START (eval/score_answers.py) -->
 ### 1. Accuracy by answer type (correct/n, Wilson 95% interval)
 
-| Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] | 10/14 = 71% [45%–88%] |
-| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
-| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
-| Refusal & not reported | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
+| Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] | 10/14 = 71% [45%–88%] | 12/14 = 86% [60%–96%] |
+| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
+| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
+| Refusal & not reported | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 7/7 = 100% [65%–100%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
-| Category | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] | 5/8 = 62% [31%–86%] |
-| ratio | 0/3 = 0% [0%–56%] | 3/3 = 100% [44%–100%] | 3/3 = 100% [44%–100%] |
-| period_comparison | 0/2 = 0% [0%–66%] | 2/2 = 100% [34%–100%] | 2/2 = 100% [34%–100%] |
-| multi_turn | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] |
-| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
-| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
-| refuse | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
-| refusal tests: refusal | – | – | – |
-| refusal tests: partial | – | – | – |
-| refusal tests: control | – | – | – |
+| Category | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] | 5/8 = 62% [31%–86%] | 7/8 = 88% [53%–98%] |
+| ratio | 0/3 = 0% [0%–56%] | 3/3 = 100% [44%–100%] | 3/3 = 100% [44%–100%] | 3/3 = 100% [44%–100%] |
+| period_comparison | 0/2 = 0% [0%–66%] | 2/2 = 100% [34%–100%] | 2/2 = 100% [34%–100%] | 2/2 = 100% [34%–100%] |
+| multi_turn | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] |
+| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
+| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
+| refuse | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 7/7 = 100% [65%–100%] |
+| refusal tests: refusal | – | – | – | – |
+| refusal tests: partial | – | – | – | – |
+| refusal tests: control | – | – | – | – |
 
 ### 3. Hallucination and grounding checks (answers with a reply, not refused)
 
-| Check | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| unsupported numbers | 0/23 | 0/23 | 0/23 |
-| unsupported numbers, no calculation result counted as evidence (B0's rule; the same count for a pack run) | 5/23 | 1/23 | 2/23 |
-| wrong fiscal year | 0/23 | 0/23 | 0/23 |
-| wrong company | 0/23 | 0/23 | 0/23 |
-| cited a passage it was not given (closed-book: any citation) | 0/23 | 0/23 | 0/23 |
-| value given for a 'not reported' trap | 0/2 | 0/2 | 0/2 |
+| Check | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| unsupported numbers | 0/23 | 0/23 | 0/23 | 0/25 |
+| unsupported numbers, no calculation result counted as evidence (B0's rule; the same count for a pack run) | 5/23 | 1/23 | 2/23 | 2/25 |
+| wrong fiscal year | 0/23 | 0/23 | 0/23 | 0/25 |
+| wrong company | 0/23 | 0/23 | 0/23 | 0/25 |
+| cited a passage it was not given (closed-book: any citation) | 0/23 | 0/23 | 0/23 | 0/25 |
+| value given for a 'not reported' trap | 0/2 | 0/2 | 0/2 | 0/2 |
 
 ### 4. Refusals (G01-G10 + 22 refusal tests)
 
-| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| precision (refused and should) | 5/7 | 5/7 | 5/7 |
-| recall (should refuse and did) | 5/5 | 5/5 | 5/5 |
-| right rule among correct refusals | 2/5 | 2/5 | 2/5 |
-| over-refusals | 2 | 2 | 2 |
-| under-refusals | 0 | 0 | 0 |
+| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| precision (refused and should) | 5/7 | 5/7 | 5/7 | 5/5 |
+| recall (should refuse and did) | 5/5 | 5/5 | 5/5 | 5/5 |
+| right rule among correct refusals | 2/5 | 2/5 | 2/5 | 5/5 |
+| over-refusals | 2 | 2 | 2 | 0 |
+| under-refusals | 0 | 0 | 0 | 0 |
 
 ### 5. Output validity, tokens, latency and human corrections
 
-| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| valid B0 JSON | 30/30 | 30/30 | 30/30 |
-| JSON retries | 0 | 0 | 0 |
-| no reply (errors) | 0 | 0 | 0 |
-| prompt tokens (mean) | 3744 | 3837 | 3254 |
-| completion tokens (mean) | 278 | 269 | 225 |
-| latency p50 / p95 (s, answered calls) | 6.4 / 16.4 | 3.9 / 9.1 | 0.5 / 1.8 |
-| cached replies | 0/30 | 0/30 | 30/30 |
-| automatic verdicts overturned by graders | 2 | 1 | 2 |
+| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| valid B0 JSON | 30/30 | 30/30 | 30/30 | 30/30 |
+| JSON retries | 0 | 0 | 0 | 0 |
+| no reply (errors) | 0 | 0 | 0 | 0 |
+| prompt tokens (mean) | 3744 | 3837 | 3254 | 3551 |
+| completion tokens (mean) | 278 | 269 | 225 | 226 |
+| latency p50 / p95 (s, answered calls) | 6.4 / 16.4 | 3.9 / 9.1 | 0.5 / 1.8 | 3.8 / 8.1 |
+| cached replies | 0/30 | 0/30 | 30/30 | 0/30 |
+| automatic verdicts overturned by graders | 2 | 1 | 2 | 2 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
 
-| Label | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| wrong_line_item | 9 | 0 | 1 |
-| wrong_company | 1 | 0 | 0 |
-| over_refusal | 2 | 2 | 2 |
-| malformed_output | 1 | 2 | 1 |
-| incomplete_summary | 5 | 4 | 4 |
-| wrong_refusal_rule | 3 | 3 | 3 |
+| Label | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| wrong_line_item | 9 | 0 | 1 | 1 |
+| wrong_company | 1 | 0 | 0 | 0 |
+| over_refusal | 2 | 2 | 2 | 0 |
+| malformed_output | 1 | 2 | 1 | 1 |
+| incomplete_summary | 5 | 4 | 4 | 4 |
+| wrong_refusal_rule | 3 | 3 | 3 | 0 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
-| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| graders' exact agreement (independent grades) | 9/9 | 9/9 | 9/9 |
-| graders' Cohen's kappa | 1.00 | 1.00 | 1.00 |
-| final grade vs judge: exact agreement | – | – | – |
-| final grade vs judge: Cohen's kappa | – | – | – |
+| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| graders' exact agreement (independent grades) | 9/9 | 9/9 | 9/9 | 9/9 |
+| graders' Cohen's kappa | 1.00 | 1.00 | 1.00 | 1.00 |
+| final grade vs judge: exact agreement | – | – | – | – |
+| final grade vs judge: Cohen's kappa | – | – | – | – |
 
 
 ### 8. Short numeric answers by whether the gold figures were in the passages (digit for digit) (an agent run: in what its own tools returned)
 
-| Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
-| not all in the passages | 0/10 = 0% [0%–28%] | 0/3 = 0% [0%–56%] | 0/3 = 0% [0%–56%] |
+| Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] | 12/12 = 100% [76%–100%] |
+| not all in the passages | 0/10 = 0% [0%–28%] | 0/3 = 0% [0%–56%] | 0/3 = 0% [0%–56%] | 0/1 = 0% [0%–79%] |
 
 ### 9. Cost per question and self-consistency
 
-| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| model calls per question (mean, JSON retries included) | 2.1 | 2.2 | 1.9 |
-| tokens per question (mean, prompt + completion) | 4022 | 4106 | 3479 |
-| seconds per question p50 / p95 | 6.4 / 16.4 | 3.9 / 9.1 | 0.5 / 1.8 |
-| S2: all valid samples agreed | – | – | – |
-| S2: a majority short of all (e.g. 3/5, 4/5) | – | – | – |
-| S2: no majority, the most common decision won (e.g. 2/5; ties to the first) | – | – | – |
-| LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide) | – | – | – |
+| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| model calls per question (mean, JSON retries included) | 2.1 | 2.2 | 1.9 | 2.0 |
+| tokens per question (mean, prompt + completion) | 4022 | 4106 | 3479 | 3776 |
+| seconds per question p50 / p95 | 6.4 / 16.4 | 3.9 / 9.1 | 0.5 / 1.8 | 3.8 / 8.1 |
+| S2: all valid samples agreed | – | – | – | – |
+| S2: a majority short of all (e.g. 3/5, 4/5) | – | – | – | – |
+| S2: no majority, the most common decision won (e.g. 2/5; ties to the first) | – | – | – | – |
+| LLM judge on summaries, grades 2 / 1 / 0 (second opinion; humans decide) | – | – | – | – |
 
 ### 10. Paired with A1_qwen3-8b_agent_think-off_a-v1 (A1): questions right only with the run / only with A1, two-sided sign test
 
-| Answers | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|
-| Short: numeric | 8 / 0 (p = 0.01, n = 14) | 8 / 0 (p = 0.01, n = 14) |
-| Short: entity | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) |
-| Summary | 1 / 0 (p = 1.00, n = 8) | 3 / 2 (p = 1.00, n = 8) |
-| Refusal & not reported | 0 / 0 (p = 1.00, n = 7) | 0 / 0 (p = 1.00, n = 7) |
-| All decided answers | 10 / 0 (p < 0.01, n = 30) | 12 / 2 (p = 0.01, n = 30) |
+| Answers | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|
+| Short: numeric | 8 / 0 (p = 0.01, n = 14) | 8 / 0 (p = 0.01, n = 14) | 10 / 0 (p < 0.01, n = 14) |
+| Short: entity | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) |
+| Summary | 1 / 0 (p = 1.00, n = 8) | 3 / 2 (p = 1.00, n = 8) | 2 / 1 (p = 1.00, n = 8) |
+| Refusal & not reported | 0 / 0 (p = 1.00, n = 7) | 0 / 0 (p = 1.00, n = 7) | 3 / 0 (p = 0.25, n = 7) |
+| All decided answers | 10 / 0 (p < 0.01, n = 30) | 12 / 2 (p = 0.01, n = 30) | 16 / 1 (p < 0.01, n = 30) |
 
 ### 11. The agent's own checks and cost
 
-| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
-|---|---|---|---|
-| verified by its critic | 27/30 | 20/30 | 23/30 |
-| correct among the verified (decided) | 9/27 | 18/20 | 19/23 |
-| correct among the not verified (decided) | 0/3 | 1/10 | 0/7 |
-| tool calls per question (mean); questions with none | 1.5; 7 | 1.3; 7 | 1.3; 7 |
-| tool calls that returned an error | 4/44 | 2/40 | 2/40 |
-| stopped by a limit (time, steps, tokens) | 0 | 0 | 0 |
-| live requests / cache hits (chat replies) | 64 / 0 | 38 / 27 | 0 / 57 |
-| short numeric answers with several values and no calculation (no single value to score) | 2 | 1 | 2 |
+| Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
+|---|---|---|---|---|
+| verified by its critic | 27/30 | 20/30 | 23/30 | 28/30 |
+| correct among the verified (decided) | 9/27 | 18/20 | 19/23 | 24/28 |
+| correct among the not verified (decided) | 0/3 | 1/10 | 0/7 | 0/2 |
+| tool calls per question (mean); questions with none | 1.5; 7 | 1.3; 7 | 1.3; 7 | 1.4; 5 |
+| tool calls that returned an error | 4/44 | 2/40 | 2/40 | 2/42 |
+| stopped by a limit (time, steps, tokens) | 0 | 0 | 0 | 0 |
+| live requests / cache hits (chat replies) | 64 / 0 | 38 / 27 | 0 / 57 | 36 / 23 |
+| short numeric answers with several values and no calculation (no single value to score) | 2 | 1 | 2 | 2 |
 <!-- GENERATED:END -->
 
 ## Interpretation
@@ -221,3 +221,28 @@ now returns MD&A passages only.
 **Numeric 8/14 automatically, against W3-04's 10/14 after grading.** A23 (Costco net sales) and A24 (AWS operating
 income) state the right figure without a value (A24 as in W3-04's run; A23 also adds a wrong explanation of how the
 figure is derived), and D21 needs a grade again: their rows are in the grading round. Refusals unchanged at 4/7.
+
+## W3-06: refusal edge cases (ADR-042)
+
+**Run.** `A5_qwen3-8b_agent_think-off_dev-w306`: W3-05's agent with the planner's refusal rules (spec §6 priority,
+partial refusals) and prompt `planner-v3`. Run on 24 Nov 2026 on the shared key: 36 live requests, 23 cache hits.
+
+**Refusal and not reported 7/7 (W3-05's run 4/7).** G23 and G25 (an instruction to ignore the rules, or a new role) are
+R6, G24 (tax on inherited shares) is R7, and A27 and A28 are now partial refusals: A27 gives Goldman Sachs's fiscal
+2023 net revenues ($46,254 million) and declines the forecast. A28 gives Pfizer's latest filed fiscal 2023 revenue
+($59,553 million), which the item now expects.
+
+**A28 expects the latest filed value (option B, agreed by Giridharan on 23 Nov 2026).** The fiscal 2024 10-K restates
+Pfizer's fiscal 2023 total revenues to $59,553 million (from $58,496 million first reported), as for B21 and C22; the
+first reported figure stays in the answer and notes, and the fiscal 2024 10-K is not listed as a source (ADR-038).
+Rescored: W3-04's and W3-05's runs are unchanged (they refused A28 whole).
+
+**Graded (Amresh and Chandra Shekhar, 9 of 9 grades agreeing, kappa 1.00): numeric 12/14 from W3-05's 10/14, entity
+1/1, summaries 4/8 graded 2 and 12 of 16 points, as W3-05's run.** 22 of 30 answers are word for word the same as
+W3-05's run. A23 (Costco's net sales, now without the wrong explanation) and A24 (AWS operating income) state the
+right figure without a value; both graders marked them right, so they are overturned as before. E25 (Pfizer's
+revenue decline) fell from 2 to 1: under `planner-v3` its search is worded differently, the passage with the $1.0
+billion currency impact ranks second, and the answer names the offsetting product revenues instead of it; a summary
+composer matter for A5, not a refusal rule. E28 (Wells Fargo) rose from 1 to 2 with the same text, graded by
+another pair; E26 changed and stays 2. Both graders labelled the A28 answer `wrong_line_item` before option B; the
+label row is kept as stale.
