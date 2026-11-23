@@ -320,8 +320,11 @@ async def run_items(items: list[Item], nodes: Any, limits: Any, run_id: str,
 
 
 # --------------------------------------------------------------------------------------------- the run
-# What a gold run's git_commit must describe (W3-08): the agent, its tools and data code, the config and this runner
-CODE_PATHS = ("agent", "core", "tools", "retrieval", "ingest", "config", "eval/run_agent.py", "eval/runs_schema.py")
+# What a gold run's git_commit must describe (W3-08): the agent, its tools and data code, the config, the evaluation
+# code the runner imports (the answer mapping reads eval/score_answers.py) and the dependencies (git pathspecs; the
+# results under eval/ are data, not code)
+CODE_PATHS = ("agent", "core", "tools", "retrieval", "ingest", "config", "eval/*.py", "requirements.txt",
+              "requirements-dev.txt", "pyproject.toml")
 
 
 def uncommitted(paths: tuple[str, ...] = CODE_PATHS) -> list[str]:
@@ -332,7 +335,8 @@ def uncommitted(paths: tuple[str, ...] = CODE_PATHS) -> list[str]:
                              text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return ["(git unavailable)"]
-    return sorted(line[3:].strip() for line in out.splitlines() if line.strip())
+    # "XY path", a rename "R  old -> new" (the new path), a quoted path with spaces ("a b.py")
+    return sorted(line[3:].split(" -> ")[-1].strip().strip('"') for line in out.splitlines() if line.strip())
 
 
 def pin_problems() -> list[str]:

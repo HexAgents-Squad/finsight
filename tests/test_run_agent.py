@@ -884,9 +884,9 @@ def test_pin_problems_names_a_changed_prompt_and_uncommitted_code(monkeypatch):
 
 
 def test_uncommitted_lists_changed_and_new_files(monkeypatch):
-    out = " M agent/composer.py\n?? agent/new_rule.py\n"
+    out = ' M agent/composer.py\n?? agent/new_rule.py\nR  agent/old.py -> agent/renamed.py\n?? "eval/a b.py"\n'
     monkeypatch.setattr(ra.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=out))
-    assert UNCOMMITTED() == ["agent/composer.py", "agent/new_rule.py"]
+    assert UNCOMMITTED() == ["agent/composer.py", "agent/new_rule.py", "agent/renamed.py", "eval/a b.py"]
 
     def fail(*a, **k):
         raise OSError("no git")

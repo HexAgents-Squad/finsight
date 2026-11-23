@@ -940,6 +940,9 @@ def test_the_comparison_needs_a1_and_the_same_questions():
     assert sa.against_a1_table([a5]) == ""                                   # no A1: no section
     with pytest.raises(ValueError, match="different questions"):
         sa.against_a1_table([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS[:3]), a5])
+    with pytest.raises(ValueError, match="different questions"):               # checked before writing anything
+        sa.check_against_a1([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS[:3]), a5])
+    sa.check_against_a1([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS), a5])
 
 
 def test_a_later_agent_gold_run_shares_a1s_grades_and_nothing_else_does():

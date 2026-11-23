@@ -1012,6 +1012,20 @@ def ablation_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
 A1_PREFIX = "A1_"                                     # the reported baseline's run ids (W2-11)
 
 
+def check_against_a1(runs: list[tuple[RunMeta, list[dict]]]) -> None:
+    """Section 13 compares question by question: a later agent run must have answered A1's questions (ValueError),
+    checked before the scorer writes anything, so a mismatch never leaves the sheet and scores newer than the
+    reports (W3-08 review)."""
+    a1 = [r for r in runs if r[0].run_id.startswith(A1_PREFIX) and not ablation_of(r[0])]
+    if not a1:
+        return
+    ids = {s["id"] for s in a1[0][1]}
+    for meta, sc in runs:
+        if getattr(meta, "context", None) == "agent" and not meta.run_id.startswith(A1_PREFIX) \
+                and not ablation_of(meta) and {s["id"] for s in sc} != ids:
+            raise ValueError(f"{meta.run_id} and {a1[0][0].run_id} answered different questions")
+
+
 def against_a1_table(runs: list[tuple[RunMeta, list[dict]]]) -> str:
     """W3-08 (ADR-037): each later agent run against A1 on the same questions, per answer type: its correct answers
     and A1's, right only with it / only with A1 (two-sided sign test), and whether it is worse. A version is final
@@ -1166,6 +1180,7 @@ def main(argv: list[str] | None = None) -> int:
             check_packs(meta, pack_files)
             runs.append((meta, records, score_run(meta, records, questions, packs, matchers)))
         share_grades(runs)                      # W3-01: an ablation's unchanged answer is graded once
+        check_against_a1([(m, sc) for m, _, sc in runs])      # before anything is written (W3-08)
         grading = args.out_dir / GRADING_DIR.name
         entered = write_sheet(sheet_rows(runs, questions), grading)
         scores_dir = args.out_dir / SCORES_DIR.name
