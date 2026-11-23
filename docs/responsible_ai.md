@@ -9,7 +9,7 @@ version A5 on gold-v1 (102 questions) unless stated; every one is in a committed
 |---|---|---|
 | Refusals | Rules R1-R7 (spec §6) decided by the planner, with code rules for the priority and partial refusals; the composer writes the fixed sentence | Gold category G and the 22 refusal tests: 32/32 (A5); through the API 22/22, identical to the agent's answers |
 | Prompt injection against documents | Passages framed as data; a passage that addresses an AI system left out whole; the critic's payload check; the give-up answer as backstop | 12 injection tests: 0/12 successful, before and after the defences (agent) and through the API; detector on unseen phrasings: 29/60 caught |
-| PII | E-mail addresses and phone numbers masked in every log record and everything sent to Langfuse; R5 refuses requests for personal data | PII prompts through the API: no log record carries the question, a log call that does is masked, the traces store the masked question |
+| PII | E-mail addresses and phone numbers masked in every log record and everything sent to Langfuse; R5 refuses requests for personal data | PII prompts through the API: no log record carries the question (measured on a replay from the cache), a log call that does is masked, the traces store the masked question |
 | Hallucination control | Figures only from the tools or a cited passage; the critic's checks; "verified" or a "could not verify" note | Hallucinations (numbers in no source) 9 for B0, 0 for every agent version; A5's critic left 4 answers unverified, all 4 wrong |
 | Human-in-the-loop | A research assistant only; the UI's disclaimer; human graders decide every summary and wrong answer | UI screenshot `docs/screenshots/w2-10/00-start.png`; two graders, kappa 1.00 on A5's round |
 | Transparency | Citations on every answer, the trace expander in the UI, Langfuse traces of every node, tool and model call | `docs/screenshots/w2-10/03-trace-expander.png`, `docs/screenshots/w3/`, `eval/results/traces/` |
@@ -74,7 +74,11 @@ companies, years or documents outside that corpus and says so (R3).
 - **Evidence** (W3-10, `eval/results/api_safety_results.md`), three PII prompts through `POST /ask`:
   - A question with an e-mail address and one with a phone number are answered normally (the figures, verified);
     a request for a CEO's home address and phone number is refused under R5.
-  - Every log record of the process at DEBUG while they ran: none carries the question, so none carries an address.
+  - Every log record of the process at DEBUG while they ran, measured on a re-run replayed from the reply cache (not traced,
+    0 model calls): none carries the question, so none carries an address. That covers the API's and the agent's own
+    log calls, none of which logs a question or request body; it does not cover the HTTP client's records during
+    live model calls (the OpenAI client of this version logs no request body). The traced live run's counts were
+    not kept.
   - A log call that does carry the question (the demonstration in the same process) comes out as
     "My e-mail is [email] ..." and "Call me back on [phone] ...".
   - The traces, read back from Langfuse: the two prompts with an address are stored as "My e-mail is [email], please reply there: ..." and "Call me back on [phone] if needed. ...", no raw address in either (`eval/results/api_safety/pii_traces.json`).
@@ -102,8 +106,10 @@ companies, years or documents outside that corpus and says so (R3).
   wrong, and gives no investment advice, forecasts or valuation opinions (`docs/screenshots/w2-10/00-start.png`).
   A human reviews the cited filing before using a figure in client work or an investment decision.
 - In the evaluation, humans decide what a script cannot: two graders grade every summary and label every wrong
-  answer (`eval/GRADING.md`; A5's round 13 of 13 grades agreeing, kappa 1.00), and a second team member verified
-  every gold question and test.
+  answer (`eval/GRADING.md`; A5's round 13 of 13 grades agreeing, kappa 1.00). A human verified every gold question
+  and test before it was used: the 80 gold questions were drafted by Claude for Alok and verified by Alok (ADR-012),
+  the refusal and injection tests written by Alok and verified by Amresh Kumar, the development set v2 drafted by
+  Claude and verified by Giridharan (the `written_by` and `verified_by` fields).
 
 ## Transparency
 
@@ -134,7 +140,8 @@ gold are 2 retrieval misses, 4 reasoning errors and 1 tool-call error.
   Restated figures: the latest filed value (spec §7 rule 7).
 - **One small model** (Qwen3-8B, thinking off) on a shared endpoint: answers can vary with the retrieved passages
   (W3-06 lost a summary point that way).
-- **The evaluation:** 102 gold questions written by the team from the same filings (verified by a second member);
+- **The evaluation:** 102 gold questions from the same filings (80 drafted by Claude and verified by Alok, 22 refusal
+  tests written by Alok and verified by Amresh Kumar);
   about 1 percentage point per question; A1's failures shaped A5's fixes, which were tuned on a separate
   development set and run on gold once (ADR-037).
 - **Defences are measured, not proven:** the injection detector catches about half of unanticipated phrasings; PII

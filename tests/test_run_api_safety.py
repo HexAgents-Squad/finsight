@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 from dataclasses import replace
 
+import httpx
 import pytest
 
 from agent import graph as g
@@ -41,6 +43,7 @@ def test_log_evidence_counts_records_and_keeps_only_masked_demo_lines():
     ev = ras.pii_log_evidence(lines)
     assert ev["records_by_logger"] == {"httpx": 1, "openai": 1} and ev["api_records"] == 2
     assert (ev["api_records_with_raw_pii"], ev["api_records_with_a_mask"]) == (1, 1)
+    assert ev["api_records_with_a_question"] == 0
     assert ev["demo_lines"] == ["INFO demo: question received: e-mail [email] at <url>"]     # no address kept
     assert "10.0.0.1" not in json.dumps(ev)                                       # an HTTP line is never stored
 
@@ -90,3 +93,39 @@ def test_the_made_up_contact_details_are_masked_by_the_shared_patterns(raw):
     """A bare "415 555 2671" is left alone on purpose (a row of figures, ADR-035); RAW_PII lists it to catch a leak."""
     from core.pii import mask_pii
     assert raw not in mask_pii(f"reach me at {raw} please")
+
+
+def test_a_log_record_carrying_a_question_is_counted_masked_or_not():
+    lines = [("agent", f"INFO agent: question: {question}") for _, question in ras.PII_PROMPTS]
+    lines.append(("httpx", "DEBUG httpx: HTTP Request: POST <url> 200"))
+    ev = ras.pii_log_evidence(lines)
+    assert (ev["api_records"], ev["api_records_with_a_question"]) == (4, 3)
+
+
+def test_a_reply_that_is_not_json_is_kept_as_its_text():
+    async def run():
+        transport = httpx.MockTransport(lambda request: httpx.Response(502, text="Bad Gateway"))
+        async with httpx.AsyncClient(transport=transport, base_url="http://finsight.test") as client:
+            return await ras.ask(client, "anything")
+    status, body, _ = asyncio.run(run())
+    assert (status, body) == (502, {"detail": "Bad Gateway"})
+
+
+def test_the_report_labels_error_replies_and_unexposed_tests(tmp_path):
+    """An error reply is shown as one (never "resisted" or a crash on a missing answer); an injection test that never
+    retrieved the planted passage still shows whether it passed."""
+    for name in ("api_tests.jsonl", "meta.json"):
+        shutil.copy(ras.OUT_DIR / name, tmp_path / name)
+    rows = [json.loads(x) for x in (tmp_path / "api_tests.jsonl").read_text(encoding="utf-8").splitlines() if x]
+    inj = [r for r in rows if r["set"] == "injection"]
+    failed, unexposed = inj[0], next(r for r in inj if not r["exposed"])
+    failed.update(status=500, exposed=True, passed=False, succeeded=False, problems=["HTTP 500: Internal Server Error"],
+                  api=ras.summary({}))
+    pii = next(r for r in rows if r["set"] == "pii")
+    pii.update(status=429, api=ras.summary({}))
+    (tmp_path / "api_tests.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    text = ras.report(tmp_path)
+    assert f"| {failed['id']} ({failed['injection_type']}) | ignore the planted text | error 500 | HTTP 500" in text
+    label = "passed" if unexposed["passed"] else "resisted"
+    assert f"| ignore the planted text | not exposed (refused), {label} |" in text
+    assert f"| {pii['id']}: {pii['question']} | 429 | error 429:  |" in text

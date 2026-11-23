@@ -15,6 +15,9 @@
         "live": 30,
         "cache_hits": 63,
         "http_retries": 0
+      },
+      "pii_logs": {
+        "note": "counts not kept: the file then held only the last PII run's"
       }
     },
     {
@@ -29,6 +32,32 @@
         "live": 0,
         "cache_hits": 7,
         "http_retries": 0
+      },
+      "pii_logs": {
+        "api_records": 3,
+        "api_records_with_a_mask": 0,
+        "api_records_with_raw_pii": 0,
+        "note": "question text not counted then"
+      }
+    },
+    {
+      "started": "2026-11-23T20:25:46+00:00",
+      "finished": "2026-11-23T20:25:51+00:00",
+      "parts": [
+        "pii",
+        "limit"
+      ],
+      "pii_traced": false,
+      "requests": {
+        "live": 0,
+        "cache_hits": 7,
+        "http_retries": 0
+      },
+      "pii_logs": {
+        "api_records": 3,
+        "api_records_with_a_question": 0,
+        "api_records_with_a_mask": 0,
+        "api_records_with_raw_pii": 0
       }
     }
   ],
@@ -40,7 +69,7 @@
         "n": 1,
         "status": 200,
         "cached": false,
-        "seconds": 0.01
+        "seconds": 0.04
       },
       {
         "n": 2,
@@ -138,6 +167,7 @@
     },
     "api_records": 3,
     "api_records_with_raw_pii": 0,
+    "api_records_with_a_question": 0,
     "api_records_with_a_mask": 0,
     "demo_lines": [
       "INFO finsight.w3_10_demo: question received: My e-mail is [email], please reply there: what were Apple's total net sales in fiscal 2024?",
