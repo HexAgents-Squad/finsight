@@ -121,7 +121,8 @@ CITED = [
      "| correct among the verified (decided) | 86/102 |"),
 ]
 DETAILED_CITED = [
-    ("refusal decisions 48 of 49", R + "planner_dev.md", "| refusal decision correct (refused or not, and the rule) | 48/49"),
+    ("refusal decisions 48 of 49", R + "planner_runs/P8.md",              # P8's own summary (W3-04 ran P9-P12)
+     "| refusal decision correct (refused or not, and the rule) | 48/49"),
     ("21 of 22, kappa 0.91", AGENT, "| 14/14 | 10/12 | 21/22 |"),
     ("21 of 22, kappa 0.91", AGENT, "| 1.00 | 0.67 | 0.91 |"),
     ("10 of 10 met their expectation", R + "demo/W2-07_demo.md", "# W2-07 demo: 10/10 met their expectation"),

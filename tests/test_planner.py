@@ -259,6 +259,7 @@ def test_the_runner_scores_and_summarises(tmp_path):
     text = summary.read_text(encoding="utf-8")
     assert "| refusal decision correct (refused or not, and the rule) | 2/2 = 100% |" in text
     assert "Wrong decisions" not in text
+    assert (tmp_path / "T1.md").read_text(encoding="utf-8") == text       # the run's own summary is kept (W3-04)
 
 
 def test_a_wrong_decision_is_listed():
@@ -289,6 +290,93 @@ def test_the_scope_check_refuses_a_plan_for_unindexed_periods(question, rule):
 def test_the_scope_check_leaves_answerable_plans_alone(question):
     answer = Plan.model_validate(ANSWER)
     assert pl.scope_check(answer, from_turns([question]), question) == (answer, None)
+
+
+# W3-04 (P9): a plan for a company outside the corpus is refused by the scope, not left to the model
+UNINDEXED = {**ANSWER, "steps": [{**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"],
+                                                                     "ticker": "NFLX"}}]}
+
+
+@pytest.mark.parametrize(("question", "rule"), [
+    ("Did Netflix report higher operating cash flow in fiscal 2024 than in fiscal 2023?", "R3"),
+    ("Will Netflix's revenue grow in fiscal 2025?", "R2"),
+])
+def test_the_company_scope_check_refuses_a_plan_only_for_unindexed_companies(question, rule):
+    plan, note = pl.company_scope(Plan.model_validate(UNINDEXED), from_turns([question]), question)
+    assert plan.refuse and plan.refusal_rule == rule and plan.steps == [] and "NFLX" in note
+
+
+@pytest.mark.parametrize(("question", "plan"), [
+    ("What was Apple's revenue in fiscal 2024?", ANSWER),                      # an indexed ticker
+    ("What were Apple's and Netflix's revenues in fiscal 2024?", UNINDEXED),   # names an indexed company
+    ("What drove the results?", SEARCH_ONLY),                                  # a search with no ticker
+])
+def test_the_company_scope_check_leaves_other_plans_alone(question, plan):
+    plan = Plan.model_validate(plan)
+    assert pl.company_scope(plan, from_turns([question]), question) == (plan, None)
+
+
+def test_finalize_runs_the_company_scope_check():
+    question = "Did Netflix report higher operating cash flow in fiscal 2024 than in fiscal 2023?"
+    plan, notes = pl.finalize(Plan.model_validate(UNINDEXED), from_turns([question]), question)
+    assert plan.refuse and plan.refusal_rule == "R3" and any("company scope" in n for n in notes)
+
+
+# W3-04 (P11): a fact step that stands in for a search-only line item becomes a search for it
+SBC_Q = "What stock-based compensation expense did Microsoft report in fiscal 2024?"
+
+
+def test_a_substitute_for_a_search_only_line_item_becomes_a_search():
+    sub = {**ANSWER, "steps": [{**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"],
+                                                                   "ticker": "MSFT", "metric": "stockholders_equity"}}]}
+    plan, note = pl.search_only_steps(Plan.model_validate(sub), SBC_Q)
+    assert [s.tool for s in plan.steps] == ["search_filings"] and plan.calculation is None
+    assert plan.steps[0].arguments["query"] == "stock-based compensation"
+    assert (plan.steps[0].arguments["ticker"], plan.steps[0].arguments["fiscal_year"]) == ("MSFT", 2024)
+    assert "stockholders_equity" in note
+    final, notes = pl.finalize(Plan.model_validate(sub), from_turns([SBC_Q]), SBC_Q)
+    assert [s.tool for s in final.steps] == ["search_filings"] and any("search-only" in n for n in notes)
+
+
+def test_a_compare_periods_substitute_becomes_one_search_per_year_and_a_follow_up_is_read_from_its_turn():
+    q = "How did Microsoft's stock-based compensation change from fiscal 2023 to fiscal 2024?"
+    cmp = {**ANSWER, "calculation": "growth", "steps": [{"tool": "compare_periods", "purpose": "the change",
+                                                          "arguments": {"ticker": "MSFT", "metric": "stockholders_equity",
+                                                                        "years": [2023, 2024]}}]}
+    plan, _ = pl.search_only_steps(Plan.model_validate(cmp), q)
+    assert [(s.tool, s.arguments["fiscal_year"]) for s in plan.steps] == [("search_filings", 2023),
+                                                                         ("search_filings", 2024)]
+    assert plan.calculation is None
+    sub = {**ANSWER, "steps": [{**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"],
+                                                                   "ticker": "MSFT", "metric": "stockholders_equity"}}]}
+    plan, note = pl.search_only_steps(Plan.model_validate(sub), "And in fiscal 2023?", [SBC_Q])
+    assert [s.tool for s in plan.steps] == ["search_filings"] and note
+
+
+def test_net_income_named_with_its_holders_stays_next_to_a_search_only_line_item():
+    q = "What was Microsoft's stock-based compensation relative to net income attributable to Microsoft in fiscal 2024?"
+    plan = Plan.model_validate({**ANSWER, "calculation": "ratio", "steps": [
+        {**SEARCH_ONLY["steps"][0], "arguments": {**SEARCH_ONLY["steps"][0]["arguments"], "ticker": "MSFT"}},
+        {**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"], "ticker": "MSFT",
+                                             "metric": "net_income"}}]})
+    assert pl.search_only_steps(plan, q) == (plan, None)
+
+
+def test_the_company_scope_check_keeps_a_ticker_that_names_an_indexed_company():
+    q = "What was the search giant's revenue in fiscal 2024?"
+    goog = Plan.model_validate({**ANSWER, "steps": [{**ANSWER["steps"][0], "arguments": {
+        **ANSWER["steps"][0]["arguments"], "ticker": "GOOG"}}]})
+    assert pl.company_scope(goog, from_turns([q]), q) == (goog, None)
+
+
+def test_a_named_metric_next_to_a_search_only_line_item_stays():
+    q = "What was Microsoft's stock-based compensation as a percentage of revenue in fiscal 2024?"
+    plan = Plan.model_validate({**ANSWER, "calculation": "percent", "steps": [
+        {**SEARCH_ONLY["steps"][0], "arguments": {**SEARCH_ONLY["steps"][0]["arguments"], "ticker": "MSFT"}},
+        {**ANSWER["steps"][0], "arguments": {**ANSWER["steps"][0]["arguments"], "ticker": "MSFT"}}]})
+    assert pl.search_only_steps(plan, q) == (plan, None)
+    assert pl.search_only_steps(Plan.model_validate(ANSWER), "What was Apple's revenue in fiscal 2024?") == (
+        Plan.model_validate(ANSWER), None)
 
 
 def test_the_scope_check_keeps_the_models_own_refusal():

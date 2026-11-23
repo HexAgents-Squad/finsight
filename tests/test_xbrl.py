@@ -309,7 +309,8 @@ def test_a_concept_used_by_the_original_filing_wins_over_the_anchor():
 
 PLAN_METRICS = {"revenue", "operating_income", "net_income", "gross_profit", "rd_expense", "capex",
                 "operating_cash_flow", "eps_diluted", "total_assets", "total_liabilities", "stockholders_equity",
-                "cash", "long_term_debt"}
+                "cash", "long_term_debt",
+                "deposits", "noninterest_expense", "current_assets", "current_liabilities"}   # + W3-04 (ADR-040)
 
 
 def test_concept_map_covers_the_plan_metrics():

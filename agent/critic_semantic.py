@@ -7,10 +7,12 @@ A1's critic checked the contract (agent/critic_checks.py) and units, and caught 
 they were well formed, but about another line item, a company total for a segment, a refusal under the wrong rule.
 These checks read the question against the draft and the tools, one class of wrong answer each:
 
-    line_item       the question asks for a line item the facts tool does not have (deposits, noninterest or
-                    operating expenses, current assets, liabilities or ratio, the medical care ratio): the answer
-                    must state it, and no fact for another metric may stand in for it, unless the answer says the
-                    asked item is not available and names what it gives instead
+    line_item       the question asks for a line item A1 had to substitute (deposits, noninterest or operating
+                    expenses, current assets, liabilities or ratio, the medical care ratio): the answer must state it,
+                    and no fact for another metric may stand in for it, unless the answer says the asked item is not
+                    available and names what it gives instead. Since W3-04 the facts tool has deposits, noninterest
+                    expense and current assets and liabilities (ADR-040): their facts are the item, and a current
+                    ratio's are its two parts
     inputs          a calculation's fetched inputs are each named by the question or are the denominator its
                     operation implies (revenue for a margin or a share of revenue); one named input no longer lets
                     any other through
@@ -49,7 +51,8 @@ from agent.critic_checks import Violation, expected_operations
 from core.figures import figures
 
 # ----------------------------------------------------------------------------------------------- vocabularies
-# Line items the facts tool's 13 metrics (config/concept_map.yaml) do not cover, as a question or an answer words them
+# Line items A1 substituted for, as a question or an answer words them (W3-03); the facts tool's own metrics for them
+# (W3-04) count as the item through question_metrics and IMPLIED_METRICS
 LINE_ITEMS: dict[str, re.Pattern] = {
     "deposits": re.compile(r"\bdeposits\b", re.IGNORECASE),
     "noninterest expense": re.compile(r"\bnon-?interest expenses?\b", re.IGNORECASE),
@@ -58,6 +61,14 @@ LINE_ITEMS: dict[str, re.Pattern] = {
     "current assets": re.compile(r"\b(?:total )?current assets\b", re.IGNORECASE),
     "current liabilities": re.compile(r"\b(?:total )?current liabilities\b", re.IGNORECASE),
     "medical care ratio": re.compile(r"\bmedical (?:care|cost|loss) ratio\b|\bMCR\b", re.IGNORECASE),
+}
+# The facts tool's metrics that are the item, or that it is made of, however the question words it (named_metrics
+# reads only the concept map's labels: "noninterest expenses", "non-interest expense" or bare "operating expenses"
+# are the same line; a company without it gets not_reported, never another metric)
+IMPLIED_METRICS: dict[str, frozenset[str]] = {
+    "noninterest expense": frozenset({"noninterest_expense"}),
+    "operating expenses": frozenset({"noninterest_expense"}),
+    "current ratio": frozenset({"current_assets", "current_liabilities"}),
 }
 # "operating expenses" inside a longer name that is another line item
 LINE_ITEM_MASKS = (re.compile(r"\bnon-?interest expenses?\b", re.IGNORECASE),)
@@ -130,8 +141,8 @@ def reported_years() -> frozenset[int]:
 
 
 def asked_line_items(text: str) -> list[str]:
-    """The line items outside the facts tool that `text` names, in vocabulary order (a current ratio's parts count
-    as the ratio)."""
+    """The line items of LINE_ITEMS that `text` names, in vocabulary order (a current ratio's parts count as the
+    ratio)."""
     masked = text
     found = []
     for name, pattern in LINE_ITEMS.items():
@@ -218,21 +229,23 @@ def check_line_item(question: str, history: Sequence[str], draft: AnswerContract
     if not items or draft.refused:
         return []
     out = []
+    rows = used_fact_rows(draft, results)
     for item in items:
         pattern = LINE_ITEMS[item]
+        own = IMPLIED_METRICS.get(item, frozenset())        # the tool's own fact for it, stated under its label
         if not pattern.search(draft.answer) and not (item == "current ratio" and re.search(
-                r"\bcurrent\b", draft.answer, re.IGNORECASE)):
+                r"\bcurrent\b", draft.answer, re.IGNORECASE)) and not any(r["metric"] in own for r in rows):
             out.append(Violation("line_item", f"the question asks for {item}, but the answer does not state it: state "
-                                              f"{item} from the passages if they give it, otherwise say that {item} is "
-                                              f"not available (the facts tool has no such metric)"))
+                                              f"{item} from the figures or passages if they give it, otherwise say that "
+                                              f"{item} is not available"))
     admitted = any(_answer_admits(draft.answer, LINE_ITEMS[i]) for i in items)
-    allowed = question_metrics(text)
-    for row in used_fact_rows(draft, results):
+    allowed = question_metrics(text).union(*(IMPLIED_METRICS.get(i, frozenset()) for i in items))
+    for row in rows:
         if row["metric"] not in allowed and not admitted:
             out.append(Violation("line_item", f"the question asks for {', '.join(items)}, but the answer gives "
                                               f"{_label(row)} instead; never present another figure as {items[0]}: state "
-                                              f"{items[0]} from the passages if they give it, or say it is not available "
-                                              f"and name what you give instead"))
+                                              f"{items[0]} from the figures or passages if they give it, or say it is not "
+                                              f"available and name what you give instead"))
     return out
 
 

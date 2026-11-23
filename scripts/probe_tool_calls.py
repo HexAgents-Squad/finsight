@@ -11,7 +11,7 @@ Two measures, both with tool_choice auto (the agent's setting, ADR-016) and the 
   validated against its model (a search would load the index). A text answer without a tool call is not accepted.
 - the right call: the first call's tool and arguments (company, metric, year, period) against the first step of the planner's committed
   plan for the question (eval/results/planner_runs/P8.jsonl, every plan reviewed as right). Acceptance alone cannot
-  see a valid call for the wrong thing, e.g. a metric substituted for a line item that is not one of the 13.
+  see a valid call for the wrong thing, e.g. a metric substituted for a line item that is not one of the mapped metrics.
 - the calculator: each of those questions whose wording asks for a calculation (agent/critic_checks
   .expected_operations: a margin, a change in percent, ...) is replayed with the figures already fetched (the fact
   steps of the planner's committed run, executed on the local data); the next call should be calculate with an

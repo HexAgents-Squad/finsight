@@ -129,6 +129,26 @@ metrics:
       - concept: LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities
         label: long-term debt
         sectors: [financials]
+  # W3-04 (ADR-040): line items A1 had to substitute; each is one tagged concept with the same meaning everywhere
+  deposits:
+    period: instant
+    concepts:
+      - {concept: Deposits, label: total deposits, sectors: [financials]}
+  noninterest_expense:
+    period: duration
+    concepts:
+      - {concept: NoninterestExpense, label: total noninterest expense, sectors: [financials]}
+    ticker_labels:
+      C: total operating expenses
+      GS: total operating expenses
+  current_assets:
+    period: instant
+    concepts:
+      - {concept: AssetsCurrent, label: total current assets}
+  current_liabilities:
+    period: instant
+    concepts:
+      - {concept: LiabilitiesCurrent, label: total current liabilities}
 
 # Known gaps: the company presents no such line item, so the answer is "not reported" (spec §7.5, ADR-011).
 # ingest/05_xbrl_facts.py fails if the real coverage differs from this list (an undeclared gap or a stale entry).
@@ -162,6 +182,18 @@ gaps:
   long_term_debt:
     tickers: [GS]
     reason: secured and unsecured long-term borrowings are reported separately, with no total line
+  deposits:
+    tickers: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, JNJ, PFE, MRK, ABBV, UNH, WMT, COST, KO, PG]
+    reason: only the banks take customer deposits
+  noninterest_expense:
+    tickers: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, JNJ, PFE, MRK, ABBV, UNH, WMT, COST, KO, PG]
+    reason: a bank's expense line; other companies present their expenses by function (search for them)
+  current_assets:
+    tickers: [JPM, BAC, WFC, C, GS]
+    reason: banks present an unclassified balance sheet, with no current / noncurrent split
+  current_liabilities:
+    tickers: [JPM, BAC, WFC, C, GS]
+    reason: banks present an unclassified balance sheet, with no current / noncurrent split
 
 # Caveats the answer must carry (WP6 reads them with ingest/xbrl.py load_notes; 05 writes them to facts_table.csv)
 notes:

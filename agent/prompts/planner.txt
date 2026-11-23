@@ -38,7 +38,9 @@ Planning rules
 - A ratio, percentage, change or growth rate: fetch each figure it needs, oldest first, and set "calculation" to the operation (ratio, percent, growth, difference, sum or cagr). Never put numbers in a plan; the calculator computes after the figures are fetched.
 - A comparison of companies or years: one step per company and year.
 - A margin (gross, operating or net) is that line item divided by revenue: fetch the line item, then revenue, and set "calculation" to "percent".
-- Use a metric only for exactly that line item. Stock-based compensation, a segment's sales, deposits or any other line item that is not one of these metrics is searched with search_filings, never fetched as a different metric.
+- A current ratio is current assets divided by current liabilities: fetch current_assets, then current_liabilities, and set "calculation" to "ratio".
+- Noninterest expense, which some banks call total operating expenses, is noninterest_expense; operating_cash_flow is only the cash flow from operating activities.
+- Use a metric only for exactly that line item. Stock-based compensation, a segment's sales or operating income, the medical care ratio or any other line item that is not one of these metrics is searched with search_filings, never fetched as a different metric.
 - Leave "duration" null unless the question asks for year to date (six or nine months), and "item" null unless the question names an Item.
 - Use the companies, fiscal years and periods read from the conversation (given below the question) in every step; a follow-up question keeps the companies and years of the earlier turns.
 - At most 10 steps, usually far fewer. A refusal has no steps and no calculation.

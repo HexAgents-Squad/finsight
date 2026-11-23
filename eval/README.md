@@ -12,7 +12,7 @@
 | `run_retrieval.py` | Runs every chunk variant × retriever × filter setting, writes `results/runs/*.jsonl` and the tables in `results/retrieval_summary.md` (WP5) |
 | `planner_dev.jsonl` | W2-02: 34 tuning questions for the planner (`pdev-` ids: refusals for every rule R1-R7, partial refusals, answerable controls, one follow-up), written for tuning and kept apart from gold-v1 and the test sets (tests/test_planner.py) |
 | `results/tool_calls.md` | W2-03: native tool calling before/after the schema change (scripts/probe_tool_calls.py, ADR-026) |
-| `run_planner.py` | W2-02: the planner node on the development questions only (dev set + `planner_dev.jsonl`) -> `results/planner_runs/<run>.jsonl` and `results/planner_dev.md` (refusal decisions by rule, valid plans, tokens, seconds) |
+| `run_planner.py` | W2-02: the planner node on the development questions only (dev set + `planner_dev.jsonl`) -> `results/planner_runs/<run>.jsonl`, its summary `results/planner_runs/<run>.md` (kept per run, W3-04) and `results/planner_dev.md` (the latest run; refusal decisions by rule, valid plans, tokens, seconds) |
 | `run_models.py` | W1-13: one model over the 102 context-pack questions with the frozen B0 prompt → `results/model_runs/<run_id>.jsonl` + `.meta.json`; W1-09: `--run S1/S2/S3` runs a prompting strategy instead |
 | `strategies.py` | W1-09: the prompting strategies S1 few-shot, S2 chain of thought + self-consistency, S3 decomposition (prompts in `agent/prompts/s*`, frozen) |
 | `run_agent.py` | W2-11: the agent graph over the same 102 questions (A1; it retrieves for itself) → `results/model_runs/A1_….jsonl` + `.meta.json`, each record with its tool calls, their evidence and the whole answer (ADR-034); W3-01: `--ablation` runs A2-A4, A1 with one component off (ADR-036) |
@@ -101,9 +101,9 @@ The grading workflow (copies, handout, merge, examples) and the graders' instruc
 
 ## Planner (W2-02)
 ```bash
-python eval/run_planner.py --run P9        # 49 development questions; cached replies cost nothing
+python eval/run_planner.py --run P14       # 49 development questions; cached replies cost nothing
 ```
-Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs were measured live in P7 and with the final rules in P8 (replayed from the cache).
+Tuning only: after a prompt change, re-pin `agent/planner.py` PROMPT_SHA256 (it covers everything the model sees: the prompt, the decoding schema and the message templates; tests/test_planner.py checks it). The pinned inputs (`planner-v2`, W3-04) were measured live in P11 and replayed from the cache with the rules in P12 and with the final rules (after the PR review) in P13, the same plans: refusal decisions 49/49 (P8, `planner-v1`: 48/49). P9 and P10 are W3-04's first prompt, kept as measured. A changed planner prompt also means the A1 runs no longer replay from the cache (`--replay-of`, `eval/critic_eval.py`): their planner requests differ.
 
 ## Prompting baselines S1/S2/S3 (W1-09)
 ```bash

@@ -9,8 +9,9 @@ kept apart from gold-v1, the refusal tests and the injection tests by tests/test
 gold-v1 or the refusal tests: the prompt is tuned here, then frozen and pinned (agent/planner.py PROMPT_SHA256), and
 only then do the agent's gold runs (W2-11) see it.
 
-Writes eval/results/planner_runs/<run>.jsonl (one record per question: the plan, the decision, tokens, seconds) and
-eval/results/planner_dev.md (the summary of that run). Replies are cached (LLM_CACHE_DIR), so a re-run with the same
+Writes eval/results/planner_runs/<run>.jsonl (one record per question: the plan, the decision, tokens, seconds),
+eval/results/planner_runs/<run>.md (that run's summary, kept: a note can cite a run that is no longer the latest) and
+eval/results/planner_dev.md (the same summary, of the latest run). Replies are cached (LLM_CACHE_DIR), so a re-run with the same
 prompt costs no requests. One request at a time through core/llm.py (the shared key's rules, week1_plan §2.2).
 """
 from __future__ import annotations
@@ -150,7 +151,7 @@ def summary(records: list[dict[str, Any]], run_id: str, model: str) -> str:
         lines += [f"- {r['id']} ({r['kind']}): expected refused={r['expected_refused']} rule={r['expected_rule']}, "
                   f"got refused={r['refused']} rule={r['rule']}" + (f" ({r['error'][:80]})" if r["error"] else "")
                   + f": {r['question']}" for r in wrong]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip("\n") + "\n"         # no blank line at the end when no decision was wrong
 
 
 def write(records: list[dict[str, Any]], run_id: str, model: str, runs_dir: Path = RUNS_DIR,
@@ -161,7 +162,9 @@ def write(records: list[dict[str, Any]], run_id: str, model: str, runs_dir: Path
             "model": model}
     runs.write_text("".join(json.dumps({**meta, **r}, ensure_ascii=False) + "\n" for r in records),
                     encoding="utf-8", newline="\n")
-    summary_file.write_text(summary(records, run_id, model), encoding="utf-8", newline="\n")
+    text = summary(records, run_id, model)
+    (runs_dir / f"{run_id}.md").write_text(text, encoding="utf-8", newline="\n")
+    summary_file.write_text(text, encoding="utf-8", newline="\n")
     return runs, summary_file
 
 
