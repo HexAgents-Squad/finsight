@@ -5,21 +5,21 @@
 
 | Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|---|
-| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] | 10/14 = 71% [45%–88%] | 9/14 = 64% [39%–84%] |
-| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] | pending (1) |
-| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] | pending (8) |
+| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] | 10/14 = 71% [45%–88%] | 12/14 = 86% [60%–96%] |
+| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
+| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
 | Refusal & not reported | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 7/7 = 100% [65%–100%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
 | Category | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|---|
-| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] | 5/8 = 62% [31%–86%] | 4/8 = 50% [22%–78%] |
+| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] | 5/8 = 62% [31%–86%] | 7/8 = 88% [53%–98%] |
 | ratio | 0/3 = 0% [0%–56%] | 3/3 = 100% [44%–100%] | 3/3 = 100% [44%–100%] | 3/3 = 100% [44%–100%] |
 | period_comparison | 0/2 = 0% [0%–66%] | 2/2 = 100% [34%–100%] | 2/2 = 100% [34%–100%] | 2/2 = 100% [34%–100%] |
 | multi_turn | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] |
-| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] | pending (1) |
-| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] | pending (8) |
+| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
+| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
 | refuse | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 7/7 = 100% [65%–100%] |
 | refusal tests: refusal | – | – | – | – |
 | refusal tests: partial | – | – | – | – |
@@ -57,25 +57,25 @@
 | completion tokens (mean) | 278 | 269 | 225 | 226 |
 | latency p50 / p95 (s, answered calls) | 6.4 / 16.4 | 3.9 / 9.1 | 0.5 / 1.8 | 3.8 / 8.1 |
 | cached replies | 0/30 | 0/30 | 30/30 | 0/30 |
-| automatic verdicts overturned by graders | 2 | 1 | 2 | 0 |
+| automatic verdicts overturned by graders | 2 | 1 | 2 | 2 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
 
 | Label | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|---|
-| wrong_line_item | 9 | 0 | 1 | 2 |
+| wrong_line_item | 9 | 0 | 1 | 1 |
 | wrong_company | 1 | 0 | 0 | 0 |
 | over_refusal | 2 | 2 | 2 | 0 |
-| malformed_output | 1 | 2 | 1 | 3 |
-| incomplete_summary | 5 | 4 | 4 | 0 |
+| malformed_output | 1 | 2 | 1 | 1 |
+| incomplete_summary | 5 | 4 | 4 | 4 |
 | wrong_refusal_rule | 3 | 3 | 3 | 0 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|---|
-| graders' exact agreement (independent grades) | 9/9 | 9/9 | 9/9 | – |
-| graders' Cohen's kappa | 1.00 | 1.00 | 1.00 | – |
+| graders' exact agreement (independent grades) | 9/9 | 9/9 | 9/9 | 9/9 |
+| graders' Cohen's kappa | 1.00 | 1.00 | 1.00 | 1.00 |
 | final grade vs judge: exact agreement | – | – | – | – |
 | final grade vs judge: Cohen's kappa | – | – | – | – |
 
@@ -84,7 +84,7 @@
 
 | Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|---|
-| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] | 9/12 = 75% [47%–91%] |
+| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] | 12/12 = 100% [76%–100%] |
 | not all in the passages | 0/10 = 0% [0%–28%] | 0/3 = 0% [0%–56%] | 0/3 = 0% [0%–56%] | 0/1 = 0% [0%–79%] |
 
 ### 9. Cost per question and self-consistency
@@ -103,18 +103,18 @@
 
 | Answers | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|
-| Short: numeric | 8 / 0 (p = 0.01, n = 14) | 8 / 0 (p = 0.01, n = 14) | 9 / 2 (p = 0.07, n = 14) |
-| Short: entity | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) | – |
-| Summary | 1 / 0 (p = 1.00, n = 8) | 3 / 2 (p = 1.00, n = 8) | – |
+| Short: numeric | 8 / 0 (p = 0.01, n = 14) | 8 / 0 (p = 0.01, n = 14) | 10 / 0 (p < 0.01, n = 14) |
+| Short: entity | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) |
+| Summary | 1 / 0 (p = 1.00, n = 8) | 3 / 2 (p = 1.00, n = 8) | 2 / 1 (p = 1.00, n = 8) |
 | Refusal & not reported | 0 / 0 (p = 1.00, n = 7) | 0 / 0 (p = 1.00, n = 7) | 3 / 0 (p = 0.25, n = 7) |
-| All decided answers | 10 / 0 (p < 0.01, n = 30) | 12 / 2 (p = 0.01, n = 30) | 12 / 2 (p = 0.01, n = 21) |
+| All decided answers | 10 / 0 (p < 0.01, n = 30) | 12 / 2 (p = 0.01, n = 30) | 16 / 1 (p < 0.01, n = 30) |
 
 ### 11. The agent's own checks and cost
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 | A5_qwen3-8b_agent_think-off_dev-w306 |
 |---|---|---|---|---|
 | verified by its critic | 27/30 | 20/30 | 23/30 | 28/30 |
-| correct among the verified (decided) | 9/27 | 18/20 | 19/23 | 16/19 |
+| correct among the verified (decided) | 9/27 | 18/20 | 19/23 | 24/28 |
 | correct among the not verified (decided) | 0/3 | 1/10 | 0/7 | 0/2 |
 | tool calls per question (mean); questions with none | 1.5; 7 | 1.3; 7 | 1.3; 7 | 1.4; 5 |
 | tool calls that returned an error | 4/44 | 2/40 | 2/40 | 2/42 |
@@ -230,9 +230,19 @@ partial refusals) and prompt `planner-v3`. Run on 24 Nov 2026 on the shared key:
 **Refusal and not reported 7/7 (W3-05's run 4/7).** G23 and G25 (an instruction to ignore the rules, or a new role) are
 R6, G24 (tax on inherited shares) is R7, and A27 and A28 are now partial refusals: A27 gives Goldman Sachs's fiscal
 2023 net revenues ($46,254 million) and declines the forecast. A28 gives Pfizer's latest filed fiscal 2023 revenue
-($59,553 million, restated from the $58,496 million the item expects): the restatement question of B21 and C22, put to
-the set's verifier.
+($59,553 million), which the item now expects.
 
-**Otherwise as W3-05's run.** 22 of 30 answers are word for word the same; E25 and E26 changed with their plans and
-are equivalent or better, A23 drops its wrong explanation. Numeric 9/14 automatically (A23 and A24 carry no value, as
-before). The grading round (Amresh, Chandra Shekhar) is pending.
+**A28 expects the latest filed value (option B, agreed by Giridharan on 23 Nov 2026).** The fiscal 2024 10-K restates
+Pfizer's fiscal 2023 total revenues to $59,553 million (from $58,496 million first reported), as for B21 and C22; the
+first reported figure stays in the answer and notes, and the fiscal 2024 10-K is not listed as a source (ADR-038).
+Rescored: W3-04's and W3-05's runs are unchanged (they refused A28 whole).
+
+**Graded (Amresh and Chandra Shekhar, 9 of 9 grades agreeing, kappa 1.00): numeric 12/14 from W3-05's 10/14, entity
+1/1, summaries 4/8 graded 2 and 12 of 16 points, as W3-05's run.** 22 of 30 answers are word for word the same as
+W3-05's run. A23 (Costco's net sales, now without the wrong explanation) and A24 (AWS operating income) state the
+right figure without a value; both graders marked them right, so they are overturned as before. E25 (Pfizer's
+revenue decline) fell from 2 to 1: under `planner-v3` its search is worded differently, the passage with the $1.0
+billion currency impact ranks second, and the answer names the offsetting product revenues instead of it; a summary
+composer matter for A5, not a refusal rule. E28 (Wells Fargo) rose from 1 to 2 with the same text, graded by
+another pair; E26 changed and stays 2. Both graders labelled the A28 answer `wrong_line_item` before option B; the
+label row is kept as stale.

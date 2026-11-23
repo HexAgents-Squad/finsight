@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from agent import planner as pl
-from agent.state import Plan, PlanStep
+from agent.state import MAX_PLAN_STEPS, MAX_REASONING_CHARS, Plan, PlanStep
 from retrieval.entities import Entities, from_turns
 
 NULLS = {"ticker": None, "fiscal_year": None, "fiscal_period": None, "form": None, "item": None, "k": 5}
@@ -412,3 +412,22 @@ def test_a_partial_refusal_searches_a_line_item_the_facts_tool_does_not_map():
     out, _ = run(refused("R1"), question)
     assert not out.refuse and out.refusal_rule == "R1"
     assert [(s.tool, s.arguments["query"]) for s in out.steps] == [("search_filings", "stock-based compensation")]
+
+
+def test_a_partial_refusal_stays_within_the_plan_limits():
+    """Many metrics x companies x years are capped as finalize caps a model's plan, and a long reasoning is shortened
+    for the added sentence (both were a ValidationError that stopped the planner node)."""
+    question = ("What were revenue, net income and operating income for Apple, Microsoft and Nvidia in fiscal 2023 "
+                "and 2024, and should I buy them?")
+    out, notes = run(Plan(reasoning="x" * MAX_REASONING_CHARS, refuse=True, refusal_rule="R1", steps=[],
+                          calculation=None), question)
+    assert not out.refuse and out.refusal_rule == "R1" and len(out.steps) == MAX_PLAN_STEPS
+    assert len(out.reasoning) <= MAX_REASONING_CHARS and out.reasoning.endswith("declined (R1).")
+    assert any("beyond the cap dropped" in n for n in notes)
+
+
+def test_a_partial_refusal_declines_under_the_rule_the_question_words():
+    out, notes = run(refused("R1"), "What was Apple's revenue for fiscal 2024? Is it overvalued?")
+    assert not out.refuse and out.refusal_rule == "R4"
+    assert [(s.arguments["ticker"], s.arguments["metric"]) for s in out.steps] == [("AAPL", "revenue")]
+    assert any("declined as R4" in n for n in notes)

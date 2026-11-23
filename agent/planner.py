@@ -41,7 +41,16 @@ import yaml
 
 from agent.critic_checks import expected_operations
 from agent.guided import CompletionClient, GuidedReply, ask_guided
-from agent.state import MAX_PLAN_STEPS, AgentState, Plan, PlannedTool, PlanStep, ToolResult, plan_json_schema
+from agent.state import (
+    MAX_PLAN_STEPS,
+    MAX_REASONING_CHARS,
+    AgentState,
+    Plan,
+    PlannedTool,
+    PlanStep,
+    ToolResult,
+    plan_json_schema,
+)
 from core.llm import Message
 from ingest.edgar import COMPANIES_FILE, load_scope
 from ingest.xbrl import load_concept_map
@@ -315,10 +324,15 @@ def partial_refusal(plan: Plan, entities: Entities, question: str) -> tuple[Plan
     whole."""
     from agent.critic import search_only_line_item
     from agent.critic_semantic import FACT_ASK, FORECAST, RULE_BREAKING, asked_line_items, question_metrics
-    rule = plan.refusal_rule
-    cue = {"R1": ADVICE, "R2": FORECAST, "R4": VALUATION}.get(rule or "")
-    if not plan.refuse or cue is None or not cue.search(question) or RULE_BREAKING.search(question) \
+    cues = {"R1": ADVICE, "R2": FORECAST, "R4": VALUATION}
+    if not plan.refuse or plan.refusal_rule not in cues or RULE_BREAKING.search(question) \
             or not FACT_ASK.search(question):
+        return plan, None
+    # the model's rule when the question words it, else the rule the question does word ("... Is it overvalued?"
+    # refused as R1 is declined as R4)
+    worded = [r for r, cue in cues.items() if cue.search(question)]
+    rule = plan.refusal_rule if plan.refusal_rule in worded else next(iter(worded), None)
+    if rule is None:
         return plan, None
     # each named fiscal year with the named period the corpus indexes for it (a quarter's 10-Q), else its 10-K
     periods = [(y, next((p for p in entities.periods if _indexed(y, p)), "FY")) for y in entities.years]
@@ -335,12 +349,16 @@ def partial_refusal(plan: Plan, entities: Entities, question: str) -> tuple[Plan
     steps += [PlanStep.model_validate({"tool": SEARCH, "purpose": item, "arguments": {
         "query": item, "ticker": ticker, "fiscal_year": year, "fiscal_period": period, "form": None, "item": None,
         "k": SEARCH_K}}) for ticker in entities.tickers for item in items for year, period in periods]
-    partial = Plan.model_validate({"reasoning": f"{plan.reasoning} The question also asks for a reported figure: that "
-                                                f"part is answered and the rest declined ({rule}).".strip(),
-                                   "refuse": False, "refusal_rule": rule, "steps": [s.model_dump() for s in steps],
-                                   "calculation": None})
-    return partial, f"planner: a refusal ({rule}) of a question that also asks for a reported figure became a partial " \
-                    f"refusal"
+    # within the plan's limits: the steps capped as finalize caps a model's plan, and the model's reasoning shortened
+    # to leave room for the added sentence
+    added = f" The question also asks for a reported figure: that part is answered and the rest declined ({rule})."
+    reasoning = (plan.reasoning.strip()[:MAX_REASONING_CHARS - len(added)].rstrip() + added).strip()
+    partial = Plan.model_validate({"reasoning": reasoning, "refuse": False, "refusal_rule": rule,
+                                   "steps": [s.model_dump() for s in steps[:MAX_PLAN_STEPS]], "calculation": None})
+    moved = f", declined as {rule}" if rule != plan.refusal_rule else ""
+    capped = f", {len(steps) - MAX_PLAN_STEPS} step(s) beyond the cap dropped" if len(steps) > MAX_PLAN_STEPS else ""
+    return partial, f"planner: a refusal ({plan.refusal_rule}) of a question that also asks for a reported figure " \
+                    f"became a partial refusal{moved}{capped}"
 
 
 def search_only_steps(plan: Plan, question: str, history: Sequence[str] = ()) -> tuple[Plan, str | None]:
