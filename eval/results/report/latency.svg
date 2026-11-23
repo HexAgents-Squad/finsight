@@ -4,21 +4,21 @@
 <line x1="44" y1="262" x2="628" y2="262" stroke="#dddddd"/>
 <text x="38" y="266" text-anchor="end">0</text>
 <line x1="44" y1="204" x2="628" y2="204" stroke="#dddddd"/>
-<text x="38" y="208" text-anchor="end">3.75</text>
+<text x="38" y="208" text-anchor="end">4</text>
 <line x1="44" y1="146" x2="628" y2="146" stroke="#dddddd"/>
-<text x="38" y="150" text-anchor="end">7.5</text>
+<text x="38" y="150" text-anchor="end">8</text>
 <line x1="44" y1="88" x2="628" y2="88" stroke="#dddddd"/>
-<text x="38" y="92" text-anchor="end">11.25</text>
+<text x="38" y="92" text-anchor="end">12</text>
 <line x1="44" y1="30" x2="628" y2="30" stroke="#dddddd"/>
-<text x="38" y="34" text-anchor="end">15</text>
-<rect x="65.9" y="225.2" width="51.1" height="36.8" fill="#2f6db5"/>
-<rect x="117" y="206.1" width="51.1" height="55.9" fill="#e07b39"/>
-<rect x="211.9" y="230" width="51.1" height="32" fill="#2f6db5"/>
-<rect x="263" y="214.7" width="51.1" height="47.3" fill="#e07b39"/>
-<rect x="357.9" y="185.1" width="51.1" height="76.9" fill="#2f6db5"/>
-<rect x="409" y="68.7" width="51.1" height="193.3" fill="#e07b39"/>
-<rect x="503.9" y="176.4" width="51.1" height="85.6" fill="#2f6db5"/>
-<rect x="555" y="88.1" width="51.1" height="173.9" fill="#e07b39"/>
+<text x="38" y="34" text-anchor="end">16</text>
+<rect x="65.9" y="227.5" width="51.1" height="34.5" fill="#2f6db5"/>
+<rect x="117" y="209.7" width="51.1" height="52.3" fill="#e07b39"/>
+<rect x="211.9" y="232" width="51.1" height="30" fill="#2f6db5"/>
+<rect x="263" y="217.7" width="51.1" height="44.3" fill="#e07b39"/>
+<rect x="357.9" y="189.9" width="51.1" height="72.1" fill="#2f6db5"/>
+<rect x="409" y="82" width="51.1" height="180" fill="#e07b39"/>
+<rect x="503.9" y="181.7" width="51.1" height="80.3" fill="#2f6db5"/>
+<rect x="555" y="99" width="51.1" height="163" fill="#e07b39"/>
 <line x1="44" y1="262" x2="628" y2="262" stroke="#333333"/>
 <text x="117" y="276" text-anchor="middle">B0</text>
 <text x="263" y="276" text-anchor="middle">S1</text>

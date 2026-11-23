@@ -64,11 +64,12 @@ CHART = rp.Chart("Wrong answers", ["B0", "A5"], [("retrieval miss", [7.0, 2.0]),
 
 def test_a_stacked_chart_stacks_and_scales_to_a_round_maximum():
     g = rp.layout(CHART, 640, 320)
-    assert [t for _, t in g["ticks"]] == ["0", "5", "10", "15", "20"]          # 16 rounds up to 20
+    assert [t for _, t in g["ticks"]] == ["0", "4", "8", "12", "16"]          # four round steps reaching 16
     heights = {}
     for x, _, _, h, _ in g["bars"]:
         heights[round(x)] = heights.get(round(x), 0) + h
-    assert len(g["bars"]) == 3 and max(heights.values()) == pytest.approx(g["plot"][3] * 16 / 20)   # a zero draws nothing
+    assert len(g["bars"]) == 3 and max(heights.values()) == pytest.approx(g["plot"][3])    # a zero draws nothing
+    assert [rp._nice_max(v) for v in (52, 12.5, 7, 0)] == [60, 16, 8, 4]       # every tick a round number
 
 
 def test_the_svg_is_the_same_bytes_every_time_and_escapes_text():
@@ -91,3 +92,34 @@ def test_the_pdf_renders_the_markdown_and_is_reproducible():
 def test_a_report_without_its_markers_is_refused():
     with pytest.raises(rp.SourceError, match="GENERATED markers"):
         rp.build("# Evaluation report\n")
+
+
+def test_hard_wrapped_lines_are_one_paragraph_and_a_bullets_continuation_joins_it():
+    """Review: each Markdown source line was its own PDF paragraph, so the report's wrapped sentences broke."""
+    text = rp.pdf("First line of a sentence\nand its second line.\n\n- a bullet\n  continued here\n- another\n", {})
+    assert b"(First line of a sentence and its second line.) Tj" in text
+    assert b"(- a bullet continued here) Tj" in text and b"(- another) Tj" in text
+
+
+def test_odd_sources_are_named_errors_not_crashes(monkeypatch, tmp_path):
+    """Review: an unknown chart link, a traced record without a field and no live run each raise SourceError."""
+    with pytest.raises(rp.SourceError, match="not a generated chart"):
+        rp.pdf("![x](report/missing.svg)\n", {})
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    (traces / "t.jsonl").write_text('{"id": "q1", "verified": true}\n', encoding="utf-8")
+    monkeypatch.setattr(rp, "TRACES", traces)
+    monkeypatch.setattr(rp, "TRACED", (("t", "x", "live"),))
+    with pytest.raises(rp.SourceError, match="lacks refused, seconds, tokens, tool_calls"):
+        rp.traced_rows()
+    replayed = [rp.Version("A3", "a", "x", ({"cache_hits": 1, "answer_type": "summary", "correct": True},),
+                           {"context": "agent"})]
+    with pytest.raises(rp.SourceError, match="no version was run live"):
+        rp.charts(replayed)
+
+
+def test_the_p95_is_the_scorers():
+    """Review: the report said 12.50 s for A1 where agent_baselines.md says 12.4 (nearest rank vs interpolated)."""
+    from eval.score_answers import percentile
+    values = [float(v) for v in range(1, 102)]
+    assert rp.p95(values) == percentile(values, 95)

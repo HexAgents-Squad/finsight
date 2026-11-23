@@ -36,6 +36,8 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:                        # run as a script: eval.score_answers must import
+    sys.path.insert(0, str(REPO))
 RESULTS = REPO / "eval" / "results"
 SCORES = RESULTS / "scores"
 RUNS = RESULTS / "model_runs"
@@ -57,12 +59,18 @@ TRACED = (("W3-09-demo-a5", "the 10 demo queries, A5", "live"),
           ("W3-09-a1-failures-a5", "the same 16 questions, A5", "from the cache"))
 ANSWER_TYPES = (("Short: numeric", ("short_numeric",)), ("Short: entity", ("short_entity",)),
                 ("Summary", ("summary",)), ("Refusal & not reported", ("refusal", "trap", "partial", "control")))
+TRACE_FIELDS = ("seconds", "verified", "refused", "tokens", "tool_calls")       # what a traced run's record needs
 CLASSES = ("retrieval miss", "reasoning error", "tool-call error", "hallucination", "refusal error")
 TAXONOMY = {"over_refusal": "refusal error", "under_refusal": "refusal error", "wrong_refusal_rule": "refusal error",
             "invented_number": "hallucination", "ignored_not_reported": "hallucination",
             "malformed_output": "tool-call error"}
 RETRIEVAL_LABELS = ("wrong_line_item", "incomplete_summary")
 COLORS = ("#2f6db5", "#e07b39", "#4b9a5a", "#c44e52", "#8172b2")      # one per series, in legend order
+
+
+def _rel(path: Path) -> str:
+    """The path relative to the repository for a message, or as it is when it lies outside."""
+    return str(path.relative_to(REPO)) if path.is_relative_to(REPO) else str(path)
 
 
 class SourceError(ValueError):
@@ -88,9 +96,9 @@ def _scores(run_id: str) -> tuple[dict[str, Any], ...]:
     try:
         rows = tuple(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
     except (OSError, ValueError) as err:
-        raise SourceError(f"{path.relative_to(REPO)}: {err}") from err
+        raise SourceError(f"{_rel(path)}: {err}") from err
     if not rows or any(not {"id", "answer_type", "correct"} <= set(r) for r in rows):
-        raise SourceError(f"{path.relative_to(REPO)}: not a scores file")
+        raise SourceError(f"{_rel(path)}: not a scores file")
     return rows
 
 
@@ -99,7 +107,7 @@ def _meta(run_id: str) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as err:
-        raise SourceError(f"{path.relative_to(REPO)}: {err}") from err
+        raise SourceError(f"{_rel(path)}: {err}") from err
 
 
 def correct(scored: tuple[dict[str, Any], ...]) -> int:
@@ -130,11 +138,11 @@ def taxonomy_class(s: dict[str, Any]) -> str:
     return "reasoning error"
 
 
-def pct(values: list[float], q: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))]
+def p95(values: list[float]) -> float:
+    """The 95th percentile as the scorer computes it (eval/score_answers.percentile, interpolated), so this report
+    and agent_baselines.md give the same figure."""
+    from eval.score_answers import percentile
+    return percentile(values, 95)
 
 
 def live_latency(v: Version) -> bool:
@@ -216,11 +224,13 @@ def cost_rows(vs: list[Version]) -> list[list[str]]:
     for v in vs:
         tokens = [(s.get("prompt_tokens") or 0) + (s.get("completion_tokens") or 0) for s in v.scored]
         latency = [float(s.get("latency_s") or 0.0) for s in v.scored if not s.get("error")]
+        if not latency:
+            raise SourceError(f"{v.run_id}: every question errored, no latency")
         rows["tokens per question, mean"].append(f"{statistics.fmean(tokens):,.0f}")
         rows["tokens per question, p50"].append(f"{statistics.median(tokens):,.0f}")
         live = live_latency(v)
         rows["latency p50 (s)"].append(f"{statistics.median(latency):.2f}" if live else "– (replayed)")
-        rows["latency p95 (s)"].append(f"{pct(latency, 0.95):.2f}" if live else "– (replayed)")
+        rows["latency p95 (s)"].append(f"{p95(latency):.2f}" if live else "– (replayed)")
         rows["chat replies from the reply cache (when run)"].append(cache_rate(v))
     return [[k, *v] for k, v in rows.items()]
 
@@ -233,9 +243,11 @@ def traced_rows() -> list[list[str]]:
         try:
             recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         except (OSError, ValueError) as err:
-            raise SourceError(f"{path.relative_to(REPO)}: {err}") from err
+            raise SourceError(f"{_rel(path)}: {err}") from err
         if not recs:
-            raise SourceError(f"{path.relative_to(REPO)}: no question")
+            raise SourceError(f"{_rel(path)}: no question")
+        if missing := sorted({k for r in recs for k in TRACE_FIELDS if k not in r}):
+            raise SourceError(f"{_rel(path)}: a record lacks {', '.join(missing)}")
         seconds = [r["seconds"] for r in recs]
         rows.append([f"`{run_id}`", what, mode, str(len(recs)), str(sum(r["verified"] for r in recs)),
                      str(sum(r["refused"] for r in recs)),
@@ -263,7 +275,7 @@ def generated(vs: list[Version]) -> str:
             "![Latency p50 and p95 per version](report/latency.svg)", ""]
     out += table(["Measure", *names], cost_rows(vs))
     out += ["", "### 5. Traced runs (Langfuse)", ""]
-    out += table(["Run (tag run:<id>)", "Questions", "Replies", "n", "Verified", "Refused", "Seconds p50",
+    out += table(["Run (tag `run:<id>`)", "Questions", "Replies", "n", "Verified", "Refused", "Seconds p50",
                   "Tokens (mean)",
                   "Tool calls (mean)"], traced_rows())
     return "\n".join(out) + "\n"
@@ -286,8 +298,10 @@ def charts(vs: list[Version]) -> dict[str, Chart]:
            for label, types in ANSWER_TYPES]
     tax = [(c, [float(taxonomy_counts(v)[c]) for v in vs]) for c in CLASSES]
     live = [v for v in vs if live_latency(v)]           # replayed agent runs have no comparable latency
+    if not live:
+        raise SourceError("no version was run live: the latency chart would be empty")
     lat = [(name, [q(sorted(float(s.get("latency_s") or 0.0) for s in v.scored if not s.get("error")))
-                   for v in live]) for name, q in (("p50", statistics.median), ("p95", lambda x: pct(x, 0.95)))]
+                   for v in live]) for name, q in (("p50", statistics.median), ("p95", p95))]
     return {"accuracy.svg": Chart("Accuracy by answer type (% correct)", names, acc, False, "%"),
             "failure_taxonomy.svg": Chart("Wrong answers by failure class", names, tax, True, ""),
             "latency.svg": Chart("Latency per question, seconds (runs made live)", [v.label for v in live], lat,
@@ -295,10 +309,13 @@ def charts(vs: list[Version]) -> dict[str, Chart]:
 
 
 def _nice_max(value: float) -> float:
+    """The axis maximum: four equal round steps (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 or 10 times a power of ten) that
+    reach `value`, so every tick is a round number (52 -> 60 in steps of 15; 12.5 -> 16 in steps of 4)."""
     if value <= 0:
-        return 1.0
-    step = 10 ** math.floor(math.log10(value))
-    return next(m * step for m in (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10) if m * step >= value)
+        return 4.0
+    quarter = value / 4
+    power = 10 ** math.floor(math.log10(quarter))
+    return 4 * next(m * power for m in (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10) if m * power >= quarter - 1e-9)
 
 
 def layout(chart: Chart, width: float, height: float) -> dict[str, Any]:
@@ -446,6 +463,9 @@ class Pdf:
         clean = [[re.sub(r"[*`]", "", c) for c in r] for r in rows]
         widths = [max(len(r[i]) for r in clean if i < len(r)) for i in range(len(clean[0]))]
         size = max(5.5, min(8.0, (self.W - 2 * self.MARGIN) / (0.6 * (sum(widths) + 2 * len(widths)))))
+        height = len(clean) * (size + 3) + 6
+        if height < self.H - 2 * self.MARGIN:
+            self.need(height)                        # a table that fits on a page is never split across two
         for n, r in enumerate(clean):
             text = "  ".join(c.ljust(widths[i]) for i, c in enumerate(r))
             self.need(size + 3)
@@ -504,26 +524,51 @@ def pdf(markdown: str, chart_specs: dict[str, Chart]) -> bytes:
         """The next line with content after line n (a heading keeps its chart or table on its page)."""
         return next((x for x in lines[n + 1:] if x and not x.startswith("<!--")), "")
 
+    # A paragraph or a bullet is every source line up to the next blank line, heading, bullet, table or chart: the
+    # Markdown is hard-wrapped, and each source line must not become its own paragraph
+    block: list[str] = []
+    bullet: int | None = None                        # the bullet's indent, or None for a plain paragraph
+
+    def flush_block() -> None:
+        nonlocal bullet
+        if block:
+            text = re.sub(r"[*`]", "", " ".join(block))
+            if bullet is None:
+                doc.paragraph(text, 10)
+            else:
+                doc.paragraph("- " + text, 10, indent=10 + 2 * bullet, gap=1)
+        block.clear()
+        bullet = None
+
     for n, line in enumerate(lines):
         if line.startswith("|"):
+            flush_block()
             if not re.fullmatch(r"\|(\s*:?-+:?\s*\|)+", line):
                 rows.append([c.strip() for c in line.strip("|").split("|")])
             continue
         flush_table()
         if not line or line in (START, END) or line.startswith("<!--"):
+            flush_block()
             continue
         if m := re.fullmatch(r"!\[[^\]]*\]\(report/([^)]+)\)", line):
+            flush_block()
+            if m.group(1) not in chart_specs:
+                raise SourceError(f"the report links report/{m.group(1)}, which is not a generated chart")
             doc.chart(chart_specs[m.group(1)])
         elif m := re.fullmatch(r"(#{1,4})\s+(.*)", line):
+            flush_block()
             size = {1: 18.0, 2: 14.0, 3: 12.0, 4: 11.0}[len(m.group(1))]
             nxt = following(n)
             doc.need(size + 24 + (238 if nxt.startswith("![") else 60 if nxt.startswith("|") else 0))
             doc.y -= 8
             doc.paragraph(re.sub(r"[*`]", "", m.group(2)), size, "F2", gap=4)
         elif m := re.fullmatch(r"(\s*)[-*]\s+(.*)", line):
-            doc.paragraph("- " + re.sub(r"[*`]", "", m.group(2)), 10, indent=10 + 2 * len(m.group(1)), gap=1)
+            flush_block()
+            bullet = len(m.group(1))
+            block.append(m.group(2))
         else:
-            doc.paragraph(re.sub(r"[*`]", "", line), 10)
+            block.append(line.strip())               # a paragraph's or a bullet's next line
+    flush_block()
     flush_table()
     return doc.bytes()
 
@@ -532,7 +577,7 @@ def pdf(markdown: str, chart_specs: dict[str, Chart]) -> bytes:
 def build(report_text: str) -> tuple[str, dict[Path, bytes]]:
     """The report with its generated block replaced, and every file it consists of (Markdown, SVGs, PDF)."""
     if START not in report_text or END not in report_text:
-        raise SourceError(f"{REPORT.relative_to(REPO)} lost its GENERATED markers")
+        raise SourceError(f"{_rel(REPORT)} lost its GENERATED markers")
     vs = versions()
     head, rest = report_text.split(START, 1)
     text = head + START + "\n" + generated(vs) + END + rest.split(END, 1)[1]
@@ -555,12 +600,12 @@ def main(argv: list[str] | None = None) -> int:
     stale = [p for p, data in files.items() if not p.exists() or p.read_bytes() != data]
     if args.check:
         for p in stale:
-            print(f"stale: {p.relative_to(REPO)} (run python eval/report.py)", file=sys.stderr)
+            print(f"stale: {_rel(p)} (run python eval/report.py)", file=sys.stderr)
         return 1 if stale else 0
     for p, data in files.items():
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
-    print("wrote " + ", ".join(str(p.relative_to(REPO)) for p in files))
+    print("wrote " + ", ".join(str(_rel(p)) for p in files))
     return 0
 
 

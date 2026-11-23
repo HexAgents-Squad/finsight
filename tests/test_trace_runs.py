@@ -80,3 +80,31 @@ def test_nothing_is_traced_when_tracing_is_off(monkeypatch, capsys):
     import core.settings
     monkeypatch.setattr(core.settings, "get_settings", lambda: SimpleNamespace(LANGFUSE_ENABLED=False))
     assert tr.main(["--run-id", "x", "--demo"]) == 2 and "LANGFUSE_ENABLED" in capsys.readouterr().err
+
+
+def test_cache_only_still_answers_from_the_cache(tmp_path):
+    """Review: --cache-only must keep the cache read (core.llm reads the cache before _fetch)."""
+    from core.llm import LLMClient
+    from core.settings import Settings
+
+    class Chat:
+        def __init__(self):
+            self.requests = []
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        async def create(self, **request):
+            self.requests.append(request)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="cached"),
+                                                            finish_reason="stop")],
+                                   usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1))
+
+    settings = Settings(_env_file=None, LLM_BASE_URL="http://llm.test/v1", LLM_API_KEY="k", LLM_MODEL="m",
+                        SEC_USER_AGENT="HexAgents_Squad test@example.com", LLM_CACHE_DIR=str(tmp_path),
+                        LLM_CONTEXT_TOKENS="", LLM_RETRY_BASE_S=0.0, LLM_MIN_INTERVAL_S=0.0)
+    messages = [{"role": "user", "content": "q"}]
+    asyncio.run(LLMClient(settings, chat_client=Chat()).complete(messages))           # fills the cache
+    chat = Chat()
+    replay = tr.cache_only(LLMClient(settings, chat_client=chat))
+    assert asyncio.run(replay.complete(messages)).text == "cached" and chat.requests == []
+    with pytest.raises(tr.NotCached):
+        asyncio.run(replay.complete([{"role": "user", "content": "another"}]))
