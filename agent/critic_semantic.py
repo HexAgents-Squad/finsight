@@ -351,12 +351,13 @@ def check_summary(question: str, history: Sequence[str], draft: AnswerContract,
     if not cited:
         return []                                   # no passage cited: the contract's citation check says so
     # the subject words a stating sentence must carry: all of one or two, else two in three (rounded up), or the
-    # subject's acronym as the filing writes it ("MCR" for the medical care ratio, W3-05)
+    # subject's acronym as the filing writes it, three letters or more ("MCR" for the medical care ratio, W3-05;
+    # two-letter initials such as AR or GM collide with other terms)
     need = len(want) if len(want) <= 2 else max(2, -(-len(want) * 2 // 3))
     question_order = WORD.findall(POSSESSIVE.sub("", question.lower()))
     ordered = list(dict.fromkeys(w for w in question_order if w in want))
     subject = " ".join(ordered)                                                   # "data center revenue", as asked
-    acronym = re.compile(rf"\b{''.join(w[0] for w in ordered).upper()}s?\b") if len(ordered) >= 2 else None
+    acronym = re.compile(rf"\b{''.join(w[0] for w in ordered).upper()}s?\b") if len(ordered) >= 3 else None
     stating = [s for p in cited for s in SENTENCE.split(" ".join(p.split()))
                if CHANGE.search(s) and (len(want & set(WORD.findall(POSSESSIVE.sub("", s.lower())))) >= need
                                         or (acronym is not None and acronym.search(s)))]

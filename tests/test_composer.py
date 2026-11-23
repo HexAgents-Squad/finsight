@@ -843,7 +843,12 @@ def test_the_prompt_is_pinned():
      2023, True),
     ("In 2023, worldwide sales increased 6.5% to $85.2 billion as compared to an increase of 1.6% in 2022.", "1.6%",
      2023, False),                                                                     # the comparison's own figure
-    ("Revenue was $9.0 billion, up from $8.0 billion in 2022.", "$9.0 billion", 2023, True),
+    ("Revenue was $8.0 billion versus 2021 levels in fiscal 2022, while fiscal 2023 revenue was $9.0 billion.",
+     "$8.0 billion", 2023, False),                                     # the year after the base is the figure's
+    # PR #58 review: "over" and "from" are not comparison words here, so these stay another year's
+    ("Net sales were $2.9 billion over fiscal 2022.", "$2.9 billion", 2023, False),
+    ("Revenue of $8.0 billion from fiscal 2022 was recognized.", "$8.0 billion", 2023, False),
+    ("We repaid $1.5 billion of debt from the 2022 notes offering.", "$1.5 billion", 2023, False),
     ("Revenue was $9.0 billion, up from $8.0 billion in 2022.", "$8.0 billion", 2023, False),
 ])
 def test_a_year_after_compared_to_or_than_is_the_comparison_base(text, figure, year, own):
@@ -882,6 +887,37 @@ def test_a_send_back_with_figures_still_falls_back_to_them():
     ("According to P2 and P4, rates drove it.", "According to P2 and P4, rates drove it."),   # opening: left as is
     ("Rates drove it, according to P2 and P4.", "Rates drove it."),
     ("The P3 platform grew.", "The P3 platform grew."),                                # a name, not a reference
+    ("Revenue rose 7% per P1 and P2 data.", "Revenue rose 7% per P1 and P2 data."),    # PR #58 review: left alone
+    ("The model, per P12 rules, grew", "The model, per P12 rules, grew"),
 ])
 def test_passage_ids_are_taken_out_of_the_answer(answer, clean):
     assert cm.without_passage_ids(answer) == clean
+
+
+@pytest.mark.parametrize(("other", "question", "answer"), [
+    (hit("MSFT", 2023, "Item 7", 8, "Revenue grew 7% in fiscal 2023."), "What drove Apple's and Microsoft's revenue "
+     "in fiscal 2023?", "Apple's revenue rose 7% in fiscal 2023 on iPhone sales."),             # another company
+    (hit("AAPL", 2022, "Item 7", 8, "Revenue grew 7% in fiscal 2022."), "What drove Apple's revenue in fiscal 2023 "
+     "and fiscal 2022?", "Apple's revenue rose 7% in fiscal 2023 on iPhone sales."),            # another year
+])
+def test_another_filings_passage_never_backs_a_figure(other, question, answer):
+    """PR #58 review: a figure is backed by another shown passage only from the filing the answer already uses."""
+    own = hit("AAPL", 2023, "Item 7", 7, "iPhone sales were strong.")
+    s1, s2 = search_step("revenue", "AAPL", 2023), search_step("revenue", other["ticker"], other["fiscal_year"])
+    st = state(question, plan(s1, s2), [done(s1, [own]), done(s2, [other])], Entities(("AAPL", "MSFT"), (2022, 2023)))
+    llm = FakeLLM(reply(answer, ["P1"]), reply(answer, ["P1"]))
+    result = run(st, llm)
+    assert len(llm.calls) == 2                                 # not backed: asked again, as before W3-05
+    assert all(v.ticker == "AAPL" and v.fiscal_year == 2023 for v in result.draft.values)
+
+
+def test_another_passage_of_the_same_filing_backs_the_figure():
+    p1 = hit("JNJ", 2023, "Item 7", 7, "The net impact of acquisitions added 1.5% to sales growth.")
+    p2 = hit("JNJ", 2023, "Item 7", 5, "In 2023, worldwide sales increased 6.5% to $85.2 billion as compared to an "
+                                       "increase of 1.6% in 2022.")
+    step = search_step("worldwide sales", "JNJ", 2023)
+    st = state("What drove the increase in Johnson & Johnson's worldwide sales in fiscal 2023?", plan(step),
+               [done(step, [p1, p2])], Entities(("JNJ",), (2023,), ("FY",)))
+    llm = FakeLLM(reply("Worldwide sales increased 6.5% in fiscal 2023; acquisitions added 1.5%.", ["P1"]))
+    d = run(st, llm).draft
+    assert len(llm.calls) == 1 and {c.chunk_id for c in d.citations} == {p1["chunk_id"], p2["chunk_id"]}

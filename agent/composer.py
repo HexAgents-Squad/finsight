@@ -91,12 +91,12 @@ RESPECTIVELY = re.compile(r"\brespectively\b", re.IGNORECASE)
 # A comparison between a figure and the year after it makes that year the comparison's ("an increase of 6.5% as
 # compared to 2022", "2% lower than 2022", "increased 6.5% to $85.2 billion as compared to an increase of 1.6% in
 # 2022"), not the figure's own year
-COMPARISON_BETWEEN = re.compile(r"\b(?:than|compared\s+(?:to|with)|versus|over|from)\b|\bvs\.", re.IGNORECASE)
+COMPARISON_BETWEEN = re.compile(r"\b(?:than|compared\s+(?:to|with)|versus)\b|\bvs\.", re.IGNORECASE)
 # How an answer may name a passage by its id, which is FinSight's internal numbering, not something to show: a
 # trailing phrase after other words (", as stated in P3"; an opening "According to P2, ..." is left as written) or
 # a parenthesis ("(P1, P2)")
 PASSAGE_REFERENCE = re.compile(r"(?<=[\w%)\]])\s*,?\s*\b(?:as\s+(?:stated|noted|shown|reported|described|mentioned|"
-                               r"indicated|explained|given)\s+in|according\s+to|see|per)\s+(?:passages?\s+)?P\d{1,2}"
+                               r"indicated|explained|given)\s+in|according\s+to)\s+(?:passages?\s+)?P\d{1,2}"
                                r"(?:\s*(?:,|and|&)\s*P\d{1,2})*\b|\s*\((?:see\s+)?(?:passages?\s+)?P\d{1,2}"
                                r"(?:\s*(?:,|and|&)\s*P\d{1,2})*\)", re.IGNORECASE)
 SENTENCE_BREAK = re.compile(r"\n|(?<!U\.S\.)(?<!\bInc\.)(?<!\bCorp\.)(?<!\bCo\.)(?<!\bNo\.)(?<!\bvs\.)(?<!\bLtd\.)"
@@ -530,8 +530,9 @@ def _prose_is_year(text: str, start: int, end: int, fiscal_year: Any) -> bool:
     """A number in prose is the passage's fiscal year's: not in a "respectively" sentence; a year in its own
     clause after it decides ("$1.0 billion during 2023 compared to 2022"), unless that year is the comparison base
     ("an increase of 6.5% as compared to 2022", "2% lower than 2022", "... as compared to an increase of 1.6% in
-    2022": a comparison word between them, W3-05): then the sentence's other years decide
-    (the passage's year among them, or none); else not after "from"/"versus" or a
+    2022": "than", "compared to/with" or "versus" between them, W3-05): then the figure's own year is the nearest
+    year before it in the sentence, else the next year after the base in its clause, else the passage's; else not
+    after "from"/"versus" or a
     comparative word with no figure between ("prior year revenue was $11.0 billion"), nor before "in the prior
     year"; else a change ("an increase of $2.8 billion, or 6%") is the current year's when the sentence names
     the passage's year or none; else the last year earlier in the sentence decides; else it is the passage's."""
@@ -541,8 +542,11 @@ def _prose_is_year(text: str, start: int, end: int, fiscal_year: Any) -> bool:
     _, clause_end = _bounds(text, start, end, (", ", "; "))
     after = YEAR_IN_TEXT.search(text, end, min(clause_end, s_end))
     if after and COMPARISON_BETWEEN.search(text, end, after.start()):
-        others = [int(m.group()) for m in YEAR_IN_TEXT.finditer(text, s_start, s_end) if m.start() != after.start()]
-        return not others or fiscal_year in others
+        earlier = [int(m.group()) for m in YEAR_IN_TEXT.finditer(text, s_start, start)]
+        if earlier:
+            return earlier[-1] == fiscal_year
+        following = YEAR_IN_TEXT.search(text, after.end(), min(clause_end, s_end))
+        return int(following.group()) == fiscal_year if following else True
     if after:
         return int(after.group()) == fiscal_year
     before = text[s_start:start]
@@ -663,11 +667,16 @@ def decline_sentence(rule: str) -> str:
     return f"I can't help with the rest of the question because it is {REFUSAL_REASONS[rule]}."
 
 
+def _filing(hit: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """The filing a passage comes from, as the figure checks compare them: (ticker, fiscal year, fiscal period)."""
+    return hit.get("ticker"), hit.get("fiscal_year"), hit.get("fiscal_period")
+
+
 def without_passage_ids(answer: str) -> str:
     """The answer without its references to passage ids ("as stated in P3", "(P1, P2)"): the citations name the
     filings; P1, P2 ... are only the message's numbering (seen on the development set v2, W3-05)."""
-    text = PASSAGE_REFERENCE.sub("", answer)
-    return re.sub(r"\s+([.,;:])", r"\1", text).strip()
+    text, removed = PASSAGE_REFERENCE.subn("", answer)
+    return re.sub(r"\s+([.,;:])", r"\1", text).strip() if removed else answer
 
 
 def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tuple[AnswerContract, list[str]]:
@@ -699,12 +708,15 @@ def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tup
             used.append(fig.passage)
     # A dollar or percent figure the prose states that no value backs yet: a value from a passage the answer
     # used that prints it for its own fiscal year (the model often writes a passage's figure without listing it),
-    # else from another passage it was shown, which the answer then cites (W3-05: the model named the wrong passage
-    # for a change another one states)
+    # else from another passage of the same filing (company, fiscal year and period) as one the answer used, or of
+    # the one filing all the passages come from, which the answer then cites (W3-05: the model named the wrong
+    # passage of the filing that states the change; never another company's or year's passage)
     text = " ".join(reply.answer.split())
     probe = AnswerContract(answer=text, values=values, calculations=calculations, verified=False, refused=False)
     used_hits = [(pid, by_id[pid]) for pid in used]
-    other_hits = [(pid, hit) for pid, hit in by_id.items() if pid not in used]
+    filings = ({_filing(by_id[pid]) for pid in used}
+               or ({_filing(h) for h in by_id.values()} if len({_filing(h) for h in by_id.values()}) == 1 else set()))
+    other_hits = [(pid, hit) for pid, hit in by_id.items() if pid not in used and _filing(hit) in filings]
     for fig in unbacked_figures(probe):
         unit = backing_unit(fig, text)
         found = (passage_printing(fig, unit, used_hits) or passage_printing(fig, unit, other_hits)) if unit else None

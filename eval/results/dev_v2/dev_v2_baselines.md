@@ -5,21 +5,21 @@
 
 | Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
 |---|---|---|---|
-| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] | 8/14 = 57% [33%–79%] |
-| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | pending (1) |
-| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | pending (8) |
+| Short: numeric | 2/14 = 14% [4%–40%] | 10/14 = 71% [45%–88%] | 10/14 = 71% [45%–88%] |
+| Short: entity | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
+| Summary | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
 | Refusal & not reported | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
 
 ### 2. Accuracy by gold category and refusal-test kind
 
 | Category | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
 |---|---|---|---|
-| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] | 3/8 = 38% [14%–69%] |
+| fact | 2/8 = 25% [7%–59%] | 5/8 = 62% [31%–86%] | 5/8 = 62% [31%–86%] |
 | ratio | 0/3 = 0% [0%–56%] | 3/3 = 100% [44%–100%] | 3/3 = 100% [44%–100%] |
 | period_comparison | 0/2 = 0% [0%–66%] | 2/2 = 100% [34%–100%] | 2/2 = 100% [34%–100%] |
 | multi_turn | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] |
-| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | pending (1) |
-| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | pending (8) |
+| multi_company | 0/1 = 0% [0%–79%] | 1/1 = 100% [21%–100%] | 1/1 = 100% [21%–100%] |
+| qualitative | 3/8 = 38% [14%–69%] | 4/8 = 50% [22%–78%] | 4/8 = 50% [22%–78%] |
 | refuse | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
 | refusal tests: refusal | – | – | – |
 | refusal tests: partial | – | – | – |
@@ -57,7 +57,7 @@
 | completion tokens (mean) | 278 | 269 | 225 |
 | latency p50 / p95 (s, answered calls) | 6.4 / 16.4 | 3.9 / 9.1 | 0.5 / 1.8 |
 | cached replies | 0/30 | 0/30 | 30/30 |
-| automatic verdicts overturned by graders | 2 | 1 | 0 |
+| automatic verdicts overturned by graders | 2 | 1 | 2 |
 
 ### 6. Failure labels of wrong answers (confirmed in the grading sheet, else suggested)
 
@@ -66,16 +66,16 @@
 | wrong_line_item | 9 | 0 | 1 |
 | wrong_company | 1 | 0 | 0 |
 | over_refusal | 2 | 2 | 2 |
-| malformed_output | 1 | 2 | 3 |
-| incomplete_summary | 5 | 4 | 0 |
+| malformed_output | 1 | 2 | 1 |
+| incomplete_summary | 5 | 4 | 4 |
 | wrong_refusal_rule | 3 | 3 | 3 |
 
 ### 7. Human grades: the two graders, and the LLM judge on summaries
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
 |---|---|---|---|
-| graders' exact agreement (independent grades) | 9/9 | 9/9 | – |
-| graders' Cohen's kappa | 1.00 | 1.00 | – |
+| graders' exact agreement (independent grades) | 9/9 | 9/9 | 9/9 |
+| graders' Cohen's kappa | 1.00 | 1.00 | 1.00 |
 | final grade vs judge: exact agreement | – | – | – |
 | final grade vs judge: Cohen's kappa | – | – | – |
 
@@ -84,7 +84,7 @@
 
 | Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
 |---|---|---|---|
-| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] | 8/10 = 80% [49%–94%] |
+| all in the passages | 2/3 = 67% [21%–94%] | 10/10 = 100% [72%–100%] | 10/10 = 100% [72%–100%] |
 | not all in the passages | 0/10 = 0% [0%–28%] | 0/3 = 0% [0%–56%] | 0/3 = 0% [0%–56%] |
 
 ### 9. Cost per question and self-consistency
@@ -103,18 +103,18 @@
 
 | Answers | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
 |---|---|---|
-| Short: numeric | 8 / 0 (p = 0.01, n = 14) | 8 / 2 (p = 0.11, n = 14) |
-| Short: entity | 1 / 0 (p = 1.00, n = 1) | – |
-| Summary | 1 / 0 (p = 1.00, n = 8) | – |
+| Short: numeric | 8 / 0 (p = 0.01, n = 14) | 8 / 0 (p = 0.01, n = 14) |
+| Short: entity | 1 / 0 (p = 1.00, n = 1) | 1 / 0 (p = 1.00, n = 1) |
+| Summary | 1 / 0 (p = 1.00, n = 8) | 3 / 2 (p = 1.00, n = 8) |
 | Refusal & not reported | 0 / 0 (p = 1.00, n = 7) | 0 / 0 (p = 1.00, n = 7) |
-| All decided answers | 10 / 0 (p < 0.01, n = 30) | 8 / 2 (p = 0.11, n = 21) |
+| All decided answers | 10 / 0 (p < 0.01, n = 30) | 12 / 2 (p = 0.01, n = 30) |
 
 ### 11. The agent's own checks and cost
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 | A5_qwen3-8b_agent_think-off_dev-w305 |
 |---|---|---|---|
 | verified by its critic | 27/30 | 20/30 | 23/30 |
-| correct among the verified (decided) | 9/27 | 18/20 | 12/14 |
+| correct among the verified (decided) | 9/27 | 18/20 | 19/23 |
 | correct among the not verified (decided) | 0/3 | 1/10 | 0/7 |
 | tool calls per question (mean); questions with none | 1.5; 7 | 1.3; 7 | 1.3; 7 |
 | tool calls that returned an error | 4/44 | 2/40 | 2/40 |
