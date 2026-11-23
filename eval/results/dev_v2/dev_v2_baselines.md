@@ -5,7 +5,7 @@
 
 | Answer type | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| Short: numeric | 2/14 = 14% [4%–40%] | 7/14 = 50% [27%–73%] |
+| Short: numeric | 2/14 = 14% [4%–40%] | 9/14 = 64% [39%–84%] |
 | Short: entity | 0/1 = 0% [0%–79%] | pending (1) |
 | Summary | 3/8 = 38% [14%–69%] | pending (8) |
 | Refusal & not reported | 4/7 = 57% [25%–84%] | 4/7 = 57% [25%–84%] |
@@ -15,8 +15,8 @@
 | Category | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
 | fact | 2/8 = 25% [7%–59%] | 4/8 = 50% [22%–78%] |
-| ratio | 0/3 = 0% [0%–56%] | 2/3 = 67% [21%–94%] |
-| period_comparison | 0/2 = 0% [0%–66%] | 1/2 = 50% [9%–91%] |
+| ratio | 0/3 = 0% [0%–56%] | 3/3 = 100% [44%–100%] |
+| period_comparison | 0/2 = 0% [0%–66%] | 2/2 = 100% [34%–100%] |
 | multi_turn | 0/1 = 0% [0%–79%] | 0/1 = 0% [0%–79%] |
 | multi_company | 0/1 = 0% [0%–79%] | pending (1) |
 | qualitative | 3/8 = 38% [14%–69%] | pending (8) |
@@ -30,7 +30,7 @@
 | Check | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
 | unsupported numbers | 0/23 | 0/23 |
-| unsupported numbers, no calculation result counted as evidence (B0's rule; the same count for a pack run) | 5/23 | 3/23 |
+| unsupported numbers, no calculation result counted as evidence (B0's rule; the same count for a pack run) | 5/23 | 1/23 |
 | wrong fiscal year | 0/23 | 0/23 |
 | wrong company | 0/23 | 0/23 |
 | cited a passage it was not given (closed-book: any citation) | 0/23 | 0/23 |
@@ -63,7 +63,7 @@
 
 | Label | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| wrong_line_item | 9 | 3 |
+| wrong_line_item | 9 | 1 |
 | wrong_company | 1 | 0 |
 | over_refusal | 2 | 2 |
 | malformed_output | 1 | 2 |
@@ -84,7 +84,7 @@
 
 | Gold dollar figures | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
-| all in the passages | 2/3 = 67% [21%–94%] | 7/10 = 70% [40%–89%] |
+| all in the passages | 2/3 = 67% [21%–94%] | 9/10 = 90% [60%–98%] |
 | not all in the passages | 0/10 = 0% [0%–28%] | 0/3 = 0% [0%–56%] |
 
 ### 9. Cost per question and self-consistency
@@ -103,18 +103,18 @@
 
 | Answers | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|
-| Short: numeric | 6 / 1 (p = 0.12, n = 14) |
+| Short: numeric | 8 / 1 (p = 0.04, n = 14) |
 | Short: entity | – |
 | Summary | – |
 | Refusal & not reported | 0 / 0 (p = 1.00, n = 7) |
-| All decided answers | 6 / 1 (p = 0.12, n = 21) |
+| All decided answers | 8 / 1 (p = 0.04, n = 21) |
 
 ### 11. The agent's own checks and cost
 
 | Measure | A1_qwen3-8b_agent_think-off_a-v1 | A5_qwen3-8b_agent_think-off_dev-w304 |
 |---|---|---|
 | verified by its critic | 27/30 | 20/30 |
-| correct among the verified (decided) | 9/27 | 11/14 |
+| correct among the verified (decided) | 9/27 | 13/14 |
 | correct among the not verified (decided) | 0/3 | 0/7 |
 | tool calls per question (mean); questions with none | 1.5; 7 | 1.3; 7 |
 | tool calls that returned an error | 4/44 | 2/40 |
@@ -178,7 +178,7 @@ planner prompt `planner-v2`), on 23 Nov 2026 on the shared key: 38 live requests
 development checkpoint toward A5, not A5 (ADR-037); the first W3-04 prompt's run (49 live requests) was replaced by
 this one and is described in ADR-040.
 
-**Numeric 7/14, from A1's 2/14, and no numeric or refusal answer worse.** Now right: Bank of America's total deposits (A21), Wells Fargo's
+**Numeric 9/14, from A1's 2/14, and no numeric or refusal answer worse.** Now right: Bank of America's total deposits (A21), Wells Fargo's
 noninterest expense (A22), Citigroup's deposits in the partial refusal (A26), Pfizer's current ratio 0.91 (B22),
 Citigroup's operating expenses as a share of revenue, 66.4% (B23), and the change in Bank of America's deposits (C21);
 each now comes from the facts tool's own metric instead of a substitute. A23 (Costco's net sales) and A24 (AWS
@@ -187,11 +187,13 @@ value and scores right automatically, A24 does not and reads "no value" until it
 
 **One summary is likely worse.** E25 (Pfizer's revenue decline, a summary) is likely worse: the first draft was A1's own answer (graded 1 by both graders), W3-03's critic sent it back, and the rewrite failed its checks twice and fell back to "did not find"; a send-back can leave a partly right answer worse, which is W3-03's and A5's to fix, not a facts question.
 
-**Two misses are restatements, not the agent.** B21 (Bank of America, 63.1% for 65.6%) and C22 (Citigroup, -4.3% for
--4.2%) use the right metrics, but the facts tool returns the latest filed value (spec §7.7: Bank of America's revenue
-$105,856 million, restated from $101,887 million; Citigroup's noninterest expense $55,970 / $53,567 million for $56,366
-/ $53,984 million), while the development answers use the first reported figures. Which one the set expects is for the
-set's verifier to decide; nothing was tuned towards either.
+**Two items now expect the latest filed values (option B, agreed by Giridharan on 23 Nov 2026).** B21 (Bank of
+America) and C22 (Citigroup) were written from the first reported figures, while the facts tool returns the latest filed
+value (spec §7 rule 7): the fiscal 2025 10-Ks restate Bank of America's fiscal 2024 revenue to $105,856 million (from
+$101,887 million) and Citigroup's operating expenses to $55,970 / $53,567 million (from $56,366 / $53,984 million), as
+their Item 8 income statements print. The items now expect 63.1% and -4.3% (first reported 65.6% and -4.2%, kept in the
+answers and notes), and both answers are right; nothing in the agent was changed for them. The fiscal 2025 10-Ks are
+not listed as the items' sources, since gold-v1 cites those filing periods and the set stays apart from them (ADR-038).
 
 **Not W3-04's.** The refusal cases (G23-G25, A27, A28), UnitedHealth's medical care ratio (A25), the AWS margin
 follow-up (F21) and the summaries are W3-05 and W3-06; the summaries and D21 wait for the graders (rows added to
