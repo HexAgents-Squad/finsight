@@ -102,6 +102,10 @@ class HealthResponse(BaseModel):
     warm_up: str = Field(description='"ok", "pending", or the error type that stopped it')
     model: str | None
     cache_entries: int
+    cache_hits: int = Field(description="questions answered from the reply cache since start-up")
+    cache_misses: int = Field(description="questions the agent answered since start-up")
+    cache_hit_rate: float | None = Field(description="cache_hits / (cache_hits + cache_misses); null before the "
+                                                     "first question")
     sessions: int
 
 
@@ -187,33 +191,11 @@ def rate_limited(request: Request, exc: RateLimitExceeded) -> JSONResponse:
 def create_app(graph: Any = None, config: ApiConfig | None = None,
                warm_up: Callable[[], dict[str, Any]] | None = None) -> FastAPI:
     """The app. With `graph` it serves that graph with `config` (default ApiConfig()); without, it builds the real
-    graph from .env when it starts. `warm_up` runs on a thread at start-up (default tools.registry.warm_up when the
-    graph is the real one, else nothing)."""
+    graph from .env when it starts. `warm_up` runs on a thread at start-up (default real_warm_up when the graph is
+    the real one, else nothing)."""
     from core.pii import install_log_masking
     install_log_masking()                       # W2-13: no e-mail or phone number from a question reaches a log
     state = _State(config or ApiConfig(), graph)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if state.graph is not None:                  # a given graph (tests): no settings, no client
-            task = asyncio.create_task(_warm(state, warm_up)) if warm_up else None
-            if task is None:
-                state.warm_up = "ok"
-            yield
-            return
-        from agent.graph import build_graph
-        from agent.nodes import real_nodes
-        from core.llm import LLMClient
-        from core.settings import get_settings
-        settings = get_settings()                   # an incomplete .env stops the start-up here, loudly
-        state.configure(ApiConfig.from_settings(settings))
-        async with LLMClient(settings) as llm:
-            state.graph = build_graph(real_nodes(llm))
-            task = asyncio.create_task(_warm(state, warm_up or real_warm_up))
-            try:
-                yield
-            finally:
-                task.cancel()                       # a warm-up still running on its thread is left to finish
 
     def session_key(request: Request) -> str:
         """The per-session limit's key: the hash of an id this server issued (slowapi logs keys); a request with no
@@ -222,7 +204,7 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
         sent = request.headers.get(SESSION_HEADER)
         return f"session:{session_digest(sent)}" if sent and state.ids.valid(sent) else f"new:{uuid.uuid4().hex}"
 
-    app = FastAPI(title="FinSight", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="FinSight", version="0.1.0", lifespan=_lifespan(state, warm_up),
                   description="Questions about US companies' SEC 10-K and 10-Q filings, answered with citations.")
     limiter = Limiter(key_func=session_key)
     app.state.limiter = limiter
@@ -246,13 +228,7 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
     @app.get("/health", response_model=HealthResponse)
     async def health(response: Response) -> HealthResponse:
         """200 when ready, 503 while starting or degraded (for a container healthcheck), the body either way."""
-        status = "ok" if state.warm_up == "ok" else "starting" if state.warm_up == "pending" else "degraded"
-        if state.graph is None:
-            status = "starting"
-        if status != "ok":
-            response.status_code = 503
-        return HealthResponse(status=status, warm_up=state.warm_up, model=state.config.model,
-                              cache_entries=len(state.cache), sessions=len(state.sessions))
+        return _health(state, response)
 
     # The session limit is checked first (slowapi checks the decorator nearest the function first), so a request it
     # refuses costs no hit of the per-address limit, which all of a proxy's users share; the header is validated in a
@@ -262,29 +238,76 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
     @limiter.limit(lambda: state.config.rate_limit)
     async def ask(request: Request, response: Response, body: AskRequest,
                   session_id: Annotated[str | None, Depends(session_header)] = None) -> AskResponse:
-        started = time.monotonic()
-        if state.graph is None:                     # only without the lifespan (an app driven without starting it)
-            raise HTTPException(status_code=503, detail="starting up")
-        sid = session_id if state.ids.valid(session_id) else state.ids.issue()
-        response.headers[SESSION_HEADER] = sid
-        async with state.sessions.hold(sid) as session:     # a session's questions one at a time (W2-06)
-            history = cap_history(body.history if body.history is not None else session.history)
-            if history and normalise(history[-1]) == normalise(body.question):
-                history = history[:-1]              # the last question again (a client's retry): the same turn
-            key = cache_key(body.question, history)
-            hit = state.cache.get(key)
-            if hit is not None:
-                answer, summary = hit
-            else:
-                result = await _answer(state, body.question, history, sid)
-                answer, summary = result.answer, run_summary(result)
-                if cacheable(answer):
-                    state.cache.put(key, (answer, summary))
-            state.sessions.remember(sid, [*history, body.question])
-        return AskResponse(session_id=sid, cached=hit is not None, seconds=round(time.monotonic() - started, 2),
-                           history=history, answer=answer, run=summary)
+        return await _ask(state, response, body, session_id)
 
     return app
+
+
+def _lifespan(state: _State, warm_up: Callable[[], dict[str, Any]] | None) -> Callable[[FastAPI], Any]:
+    """Start-up and shut-down: a given graph (tests) needs no settings and no client; else the real graph on one
+    LLM client for the app's life, and the warm-up on a worker thread (its result goes to /health)."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if state.graph is not None:
+            task = asyncio.create_task(_warm(state, warm_up)) if warm_up else None
+            if task is None:
+                state.warm_up = "ok"
+            yield
+            return
+        from agent.graph import build_graph
+        from agent.nodes import real_nodes
+        from core.llm import LLMClient
+        from core.settings import get_settings
+        settings = get_settings()                   # an incomplete .env stops the start-up here, loudly
+        state.configure(ApiConfig.from_settings(settings))
+        async with LLMClient(settings) as llm:
+            state.graph = build_graph(real_nodes(llm))
+            task = asyncio.create_task(_warm(state, warm_up or real_warm_up))
+            try:
+                yield
+            finally:
+                task.cancel()                       # a warm-up still running on its thread is left to finish
+
+    return lifespan
+
+
+def _health(state: _State, response: Response) -> HealthResponse:
+    status = "ok" if state.warm_up == "ok" else "starting" if state.warm_up == "pending" else "degraded"
+    if state.graph is None:
+        status = "starting"
+    if status != "ok":
+        response.status_code = 503
+    return HealthResponse(status=status, warm_up=state.warm_up, model=state.config.model,
+                          cache_entries=len(state.cache), cache_hits=state.cache.hits,
+                          cache_misses=state.cache.misses, cache_hit_rate=state.cache.hit_rate,
+                          sessions=len(state.sessions))
+
+
+async def _ask(state: _State, response: Response, body: AskRequest, session_id: str | None) -> AskResponse:
+    """/ask after the rate limits: the session (a new signed id unless a valid one was sent), its history, the reply
+    cache, else the agent; a session's questions one at a time (W2-06)."""
+    started = time.monotonic()
+    if state.graph is None:                         # only without the lifespan (an app driven without starting it)
+        raise HTTPException(status_code=503, detail="starting up")
+    sid = session_id if state.ids.valid(session_id) else state.ids.issue()
+    response.headers[SESSION_HEADER] = sid
+    async with state.sessions.hold(sid) as session:
+        history = cap_history(body.history if body.history is not None else session.history)
+        if history and normalise(history[-1]) == normalise(body.question):
+            history = history[:-1]                  # the last question again (a client's retry): the same turn
+        key = cache_key(body.question, history)
+        hit = state.cache.get(key)
+        if hit is not None:
+            answer, summary = hit
+        else:
+            result = await _answer(state, body.question, history, sid)
+            answer, summary = result.answer, run_summary(result)
+            if cacheable(answer):
+                state.cache.put(key, (answer, summary))
+        state.sessions.remember(sid, [*history, body.question])
+    return AskResponse(session_id=sid, cached=hit is not None, seconds=round(time.monotonic() - started, 2),
+                       history=history, answer=answer, run=summary)
 
 
 async def _answer(state: _State, question: str, history: list[str], session_id: str) -> AgentRun:
@@ -315,12 +338,15 @@ async def _warm(state: _State, warm_up: Callable[[], dict[str, Any]]) -> None:
 
 
 def real_warm_up() -> dict[str, Any]:
-    """The real app's warm-up: the fact store, the index and one search (tools.registry.warm_up), then the Qwen
-    tokenizer the executor counts with, so its first load does not block the event loop during a question."""
+    """The real app's warm-up: the fact store, the index and one search (tools.registry.warm_up), the agent's
+    one-time loads (agent.nodes.warm_up: prompts, schemas, config files, company names), then the Qwen tokenizer
+    the executor counts with, so none of them is loaded during the first question."""
+    from agent.nodes import warm_up as warm_agent
     from core.exceptions import FinSightError
     from core.tokens import count_tokens
     from tools.registry import warm_up
     result = warm_up()
+    warm_agent()
     try:
         count_tokens("warm up")
     except FinSightError as err:                    # the executor then estimates (agent/executor.py)

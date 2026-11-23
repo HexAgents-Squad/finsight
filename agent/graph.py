@@ -64,8 +64,8 @@ GIVE_UP_ANSWER = "I could not find a verified answer to this question in the ind
 NO_VERDICT = Verdict(violations=[("critic", "the critic returned no verdict")])
 LIMIT_AFTER_CHECK = "limit reached after the answer was checked: "
 # Per-question fields, reset at the start of every question (None resets a reducer field, see agent/state.py)
-PER_QUESTION = ("messages", "entities", "plan", "tool_results", "tool_error", "draft", "verdict", "answer", "tokens",
-                "visits", "errors", "stop_reason")
+PER_QUESTION = ("entities", "plan", "tool_results", "tool_error", "draft", "verdict", "answer", "tokens", "visits",
+                "errors", "stop_reason")
 # Earlier questions a turn sees (W2-06): the gold set's follow-ups go back one turn, entities are filled from the
 # latest turn that names them; six keeps a long conversation's prompts bounded (~30 tokens per question)
 MAX_HISTORY_TURNS = 6
@@ -220,7 +220,7 @@ def _node_input(state: AgentState) -> dict[str, Any]:
 def _node_output(update: dict[str, Any]) -> dict[str, Any]:
     """A node's update as a trace records it: tool outputs are summarised (each tool call has its own span with the
     full output), the rest is what the node wrote."""
-    out = {key: value for key, value in update.items() if key not in {"tool_results", "messages"}}
+    out = {key: value for key, value in update.items() if key != "tool_results"}
     if update.get("tool_results"):
         out["tool_results"] = [{"tool": r.call.name, "error": r.error_type} for r in update["tool_results"]]
     return out

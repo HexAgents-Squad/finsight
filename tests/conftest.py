@@ -5,6 +5,24 @@ import pytest
 
 from core.settings import Settings
 
+CORPUS_OPTION = "--corpus"
+
+
+def pytest_addoption(parser):
+    parser.addoption(CORPUS_OPTION, action="store_true", default=False,
+                     help="also run the tests marked corpus, which scan the whole downloaded corpus (minutes, W3-07)")
+
+
+def pytest_collection_modifyitems(config, items):
+    """The corpus scans (pytest.mark.corpus) are opt-in, so the default suite runs in under two minutes on a
+    checkout with data (W3-07); CI has no corpus, so they would skip there anyway."""
+    if config.getoption(CORPUS_OPTION):
+        return
+    skip = pytest.mark.skip(reason=f"scans the whole corpus: run with {CORPUS_OPTION}")
+    for item in items:
+        if item.get_closest_marker("corpus"):
+            item.add_marker(skip)
+
 
 @pytest.fixture(autouse=True)
 def _no_settings_from_the_shell(monkeypatch):

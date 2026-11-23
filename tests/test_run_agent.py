@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
 import io
 import json
 import shutil
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -286,10 +289,23 @@ def test_a_question_that_raises_is_recorded_and_the_run_goes_on(tmp_path, capsys
     assert "errors: " + bad[0].id in capsys.readouterr().out
 
 
+@functools.cache
+def _first_run_files() -> tuple[bytes, bytes]:
+    """One stub run's runs file and meta, made once for the tests that replay it (W3-07: each made its own, the same
+    102 questions through the graph)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        assert run_cli(out) == 0
+        return (out / f"{ra.RUN_ID}.jsonl").read_bytes(), (out / f"{ra.RUN_ID}.meta.json").read_bytes()
+
+
 def earlier_run(tmp_path, change=None):
     """A first run's files, with its own timings and cost (as a live run records them)."""
     first = tmp_path / "first"
-    assert run_cli(first) == 0
+    first.mkdir()
+    runs, meta = _first_run_files()
+    (first / f"{ra.RUN_ID}.jsonl").write_bytes(runs)
+    (first / f"{ra.RUN_ID}.meta.json").write_bytes(meta)
     path = first / f"{ra.RUN_ID}.jsonl"
     lines = []
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):

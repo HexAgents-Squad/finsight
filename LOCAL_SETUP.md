@@ -145,7 +145,7 @@ The UI talks only to the API (`FINSIGHT_API_URL`, default http://127.0.0.1:8000)
 pytest -q
 ruff check .
 ```
-The tests run offline in seconds (the LLM client is tested against fake clients), so they need no Ollama.
+The tests run offline (the LLM client is tested against fake clients), so they need no Ollama: about 1.5 minutes with `data/`, less without. Three tests scan the whole downloaded corpus for injected instructions (~14 minutes); they run only with `pytest --corpus`. Coverage: `pytest --cov=agent --cov=core --cov=api`.
 
 ## Building the data (needed for retrieval and the tools)
 Each step writes git-ignored files under `data/` and can be re-run; the outputs are deterministic.

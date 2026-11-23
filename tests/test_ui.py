@@ -617,3 +617,19 @@ def test_a_question_with_markdown_is_shown_as_typed():
     at = app(FakeApi(ok()))
     at.chat_input[0].set_value("What was *Apple*'s $ revenue?").run()
     assert render.escape("What was *Apple*'s $ revenue?") in markdown(at)
+
+
+@pytest.mark.parametrize(("health", "caption"), [
+    ({"status": "ok", "cache_hits": 3, "cache_misses": 7}, "Answer cache: 3 of 10 questions (30%)"),
+    ({"status": "ok", "cache_hits": 0, "cache_misses": 0}, None),          # no question yet
+    ({"status": "ok"}, None),                                              # an API without the counts
+    (None, None),
+])
+def test_the_cache_caption_shows_the_hit_rate(health, caption):
+    assert render.cache_caption(health) == caption
+
+
+def test_the_sidebar_shows_the_answer_cache_hit_rate():
+    """W3-07: the API's answer-cache hit rate, under the ready status."""
+    at = app(FakeApi(health={"status": "ok", "model": "m", "cache_hits": 1, "cache_misses": 3}))
+    assert not at.exception and any(c.value == "Answer cache: 1 of 4 questions (25%)" for c in at.sidebar.caption)

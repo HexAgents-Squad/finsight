@@ -452,3 +452,24 @@ def test_a_corrupt_cache_file_is_a_setup_error(tmp_path, monkeypatch, capsys):
         (tmp_path / f"{company.ticker}.json").write_text("{not json", encoding="utf-8")
     assert script.main([]) == 2
     assert "run with --refresh" in capsys.readouterr().err
+
+
+def test_the_config_files_are_parsed_once_per_version(tmp_path):
+    """W3-07: the planner read config/companies.yaml and config/concept_map.yaml five times a question; they are
+    parsed once per version of the file now, and an edited file is read again."""
+    import os
+
+    from ingest import COMPANIES_FILE
+    from ingest.edgar import load_scope
+    companies = tmp_path / "companies.yaml"
+    companies.write_bytes(COMPANIES_FILE.read_bytes())
+    first = load_scope(companies)
+    assert load_scope(companies) is first
+    text = companies.read_text(encoding="utf-8")
+    companies.write_text(text.replace("fiscal_years: [", "fiscal_years: [2019, ", 1), encoding="utf-8")
+    stat = companies.stat()
+    os.utime(companies, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))   # a new version even on a coarse clock
+    assert load_scope(companies) is not first and 2019 in load_scope(companies).tenk_years | load_scope(companies).tenq_years
+    metrics = load_concept_map()
+    metrics.pop("revenue")                                     # each caller gets its own dict
+    assert "revenue" in load_concept_map()

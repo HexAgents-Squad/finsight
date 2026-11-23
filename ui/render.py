@@ -6,6 +6,7 @@
     figure_rows / calculation_lines / citation_links / trace(...)   the card's parts
     scope_hints(path)                the companies, fiscal years and quarters FinSight covers (config/companies.yaml)
     disclaimer(companies)            the research-assistant disclaimer
+    cache_caption(health)            the API's answer-cache hit rate since start-up (W3-07), or None before a question
     session_trace_url(session_id)    the Langfuse page of a conversation, when FINSIGHT_TRACE_SESSIONS_URL is set
 
 The API returns the answer contract (agent/contract.py) as JSON; this module reads it as dicts and never imports the
@@ -48,6 +49,15 @@ def disclaimer(companies: int) -> str:
     return (f"FinSight is a research assistant. It answers from the indexed SEC 10-K and 10-Q filings of {companies} "
             "companies, cites them, and can be wrong: check the cited filing before relying on a figure. It gives no "
             "investment advice, forecasts or opinions on valuation.")
+
+
+def cache_caption(health: dict[str, Any] | None) -> str | None:
+    """"Answer cache: 3 of 10 questions (30%)" from the API's /health body; None before the first question or for
+    an older API without the counts."""
+    hits, misses = (health or {}).get("cache_hits"), (health or {}).get("cache_misses")
+    if not isinstance(hits, int) or not isinstance(misses, int) or hits + misses == 0:
+        return None
+    return f"Answer cache: {hits} of {hits + misses} questions ({hits / (hits + misses):.0%})"
 
 
 def escape(text: Any) -> str:

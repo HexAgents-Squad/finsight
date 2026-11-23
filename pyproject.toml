@@ -8,6 +8,8 @@ requires-python = ">=3.11"
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-ra"
+# W3-07: a test that reads the whole downloaded corpus takes minutes; it runs only with `pytest --corpus` (tests/conftest.py)
+markers = ["corpus: scans the whole downloaded corpus (minutes); skipped unless pytest is given --corpus"]
 # langsmith (a langgraph dependency) calls asyncio.iscoroutinefunction, deprecated from Python 3.14
 filterwarnings = ["ignore:.asyncio.iscoroutinefunction. is deprecated:DeprecationWarning"]
 

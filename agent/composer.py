@@ -18,10 +18,13 @@ Who writes what (ADR-030):
   must show them (display()), the "not reported" facts and the numbered passages (quoted as data, spec §6). On a
   send-back the critic's problems are in the message.
 - Before the critic, the draft is checked for what the composer controls (invariants 1, 2 and 6, a citation, the
-  calculation the question asks for); a draft that fails is asked again once with the problems (not on a
-  send-back round), and if it still fails its unbacked sentences are dropped when what is left passes and still
-  states every fact value; otherwise (or if the call fails) the answer is a template written from the values:
-  there is always a draft, and the critic decides whether it is verified.
+  calculation the question asks for). A draft that fails loses its unbacked sentences when what is left passes and
+  still states every fact value (no figure is missing: W3-07, no second call); otherwise it is asked again once
+  with the problems (not on a send-back round), and if it still fails its unbacked sentences are dropped on the
+  same terms; otherwise (or if the call fails) the answer is a template written from the values: there is always
+  a draft, and the critic decides whether it is verified.
+- Only passages the answer may cite are shown: the question's companies and periods (W3-07, as the critic's
+  invariant 4).
 - A partial refusal: the model answers the factual part; the composer adds the one declining sentence with the
   rule's reason (refused false, refusal_rule set; spec §6, invariant 6).
 
@@ -210,6 +213,8 @@ class Evidence:
                                                                          # checked on (one hit each, W2-07)
     removed: int = 0                                                     # passages left out: a sentence in
                                                                          # them addresses an AI system (W2-13)
+    uncitable: int = 0                                                   # passages left out: another company or
+                                                                         # period than the question's (W3-07)
 
     @property
     def empty(self) -> bool:
@@ -301,13 +306,26 @@ def _is_statement_heading(line: str, title: re.Pattern[str]) -> bool:
     return "consolidated" in line.lower() or re.sub(r"\([^)]*\)", "", line).isupper()
 
 
+def citable(hit: dict[str, Any], entities: Entities | None) -> bool:
+    """A passage the answer may cite: its filing's company, fiscal year and period are the question's, as the critic
+    checks a citation (critic_checks.check_scope, invariant 4; the planner's entities, an empty set not checked)."""
+    if entities is None:
+        return True
+    return ((not entities.tickers or hit.get("ticker") in entities.tickers)
+            and (not entities.years or hit.get("fiscal_year") in entities.years)
+            and (not entities.periods or hit.get("fiscal_period") in entities.periods))
+
+
 def gather(state: AgentState, *, injection_guard: bool = True) -> Evidence:
     """The current plan's evidence. Facts are kept once per (company, metric, year, period, duration). With the
     injection guard (W2-13, the default), a passage with any sentence addressed to an AI system is left out whole
     (agent/injection.tampered): the model never sees it and no figure in it can be used, and the answer comes from
-    the remaining sources (docs/spec.md §6.3)."""
+    the remaining sources (docs/spec.md §6.3). Only passages the answer may cite are shown (citable, W3-07): a
+    passage of another company or period than the question's would cost prompt tokens for a citation the critic
+    rejects."""
     plan = state.get("plan")
     results = list(state.get("tool_results") or [])
+    entities = state.get("entities")
     evidence = Evidence()
     if plan is None:
         return evidence
@@ -334,6 +352,9 @@ def gather(state: AgentState, *, injection_guard: bool = True) -> Evidence:
                     seen_chunks.add(chunk)
                     if injection_guard and tampered(str(hit.get("text", ""))):
                         evidence.removed += 1                    # quarantined whole: nothing of it is shown
+                        continue
+                    if not citable(hit, entities):
+                        evidence.uncitable += 1                  # the critic would reject its citation (invariant 4)
                         continue
                     evidence.passages.append(hit)
     fact_values = [row["value"] for row in evidence.facts]
@@ -834,6 +855,9 @@ async def compose(state: AgentState, llm: CompletionClient, *, llm_model: str | 
         if IGNORED_NOTE not in result.draft.notes:
             result.draft = result.draft.model_copy(update={"notes": [*result.draft.notes, IGNORED_NOTE]})
         result.notes.append(f"composer: {evidence.removed} passage(s) with text addressed to an AI system left out")
+    if evidence.uncitable:
+        result.notes.append(f"composer: {evidence.uncitable} passage(s) of another company or period than the "
+                            "question's left out")
     return result
 
 
@@ -862,6 +886,16 @@ async def _compose_from(state: AgentState, llm: CompletionClient, evidence: Evid
             result.draft, result.notes = draft, [*result.notes, *notes]
             return result
         if attempt + 1 < attempts:
+            # No figure is missing when the answer without its unbacked sentences passes and still states every
+            # fetched figure (trimmed_draft): that answer is taken without asking again (W3-07: A1's four re-asks
+            # all ended with the unbacked sentences dropped, one LLM call later)
+            trimmed = trimmed_draft(state, evidence, last)
+            if trimmed is not None:
+                draft, notes, dropped = trimmed
+                result.draft = draft
+                result.notes = [*result.notes, f"composer: dropped {dropped} sentence(s) whose figures no evidence "
+                                "backs, without asking again", *notes]
+                return result
             result.notes.append(f"composer: asked again for {len(problems)} problem(s): {problems[0]}")
             messages = [*messages, {"role": "assistant", "content": reply.raw or ""},
                         {"role": "user", "content": REASK + "\n".join(f"- {p}" for p in problems)}]

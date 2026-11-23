@@ -271,8 +271,18 @@ def _mask_false_metric_spans(text: str) -> str:
     return out
 
 
+@functools.cache
+def _metric_patterns() -> tuple[tuple[re.Pattern[str], str], ...]:
+    """_metric_phrases() as whole-word patterns, compiled once (W3-07: compiling them on every call was most of the
+    critic's time), in the same order."""
+    return tuple((re.compile(rf"(?<![\w]){re.escape(phrase)}(?![\w])", re.IGNORECASE), metric)
+                 for phrase, metric in _metric_phrases())
+
+
+@functools.lru_cache(maxsize=4096)
 def named_metrics(question: str) -> frozenset[str]:
-    """Mapped metrics the question's wording clearly names (longest phrase wins per span)."""
+    """Mapped metrics the question's wording clearly names (longest phrase wins per span); one question's answer
+    is kept (the planner, the critic and its checks ask it about the same question several times)."""
     text = _mask_false_metric_spans(" ".join(question.lower().split()))
     found: set[str] = set()
     covered = [False] * len(text)
@@ -286,8 +296,7 @@ def named_metrics(question: str) -> frozenset[str]:
 
     for match in OPERATING_CASH_LOOSE.finditer(text):
         _cover(match.start(), match.end(), "operating_cash_flow")
-    for phrase, metric in _metric_phrases():
-        pattern = re.compile(rf"(?<![\w]){re.escape(phrase)}(?![\w])", re.IGNORECASE)
+    for pattern, metric in _metric_patterns():
         for match in pattern.finditer(text):
             _cover(match.start(), match.end(), metric)
     for match in CASH_BARE.finditer(text):

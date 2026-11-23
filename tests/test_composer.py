@@ -921,3 +921,55 @@ def test_another_passage_of_the_same_filing_backs_the_figure():
     llm = FakeLLM(reply("Worldwide sales increased 6.5% in fiscal 2023; acquisitions added 1.5%.", ["P1"]))
     d = run(st, llm).draft
     assert len(llm.calls) == 1 and {c.chunk_id for c in d.citations} == {p1["chunk_id"], p2["chunk_id"]}
+
+
+# ----------------------------------------------------------------------------------------------- W3-07 cost
+def test_an_unbacked_sentence_is_dropped_without_asking_again_when_no_figure_is_missing():
+    """W3-07: the answer still states the fetched figure once the unbacked sentence goes, so no second call."""
+    step = fact_step()
+    st = state("What was Apple's total revenue in fiscal 2024?", plan(step), [done(step, fact())],
+               Entities(("AAPL",), (2024,), ("FY",)))
+    llm = FakeLLM(reply("Apple's total net sales were $391,035 million in fiscal 2024. Services grew 13%."))
+    result = run(st, llm)
+    assert len(llm.calls) == 1
+    assert result.draft.answer == "Apple's total net sales were $391,035 million in fiscal 2024."
+    assert any("without asking again" in n for n in result.notes)
+    assert critic_problems(result.draft, st) == []
+
+
+def test_an_answer_missing_its_figure_is_still_asked_again():
+    step = fact_step()
+    st = state("What was Apple's total revenue in fiscal 2024?", plan(step), [done(step, fact())],
+               Entities(("AAPL",), (2024,), ("FY",)))
+    llm = FakeLLM(reply("Apple's revenue grew 2% in fiscal 2024."),
+                  reply("Apple's total net sales were $391,035 million in fiscal 2024."))
+    result = run(st, llm)
+    assert len(llm.calls) == 2 and any("asked again" in n for n in result.notes)
+    assert result.draft.answer == "Apple's total net sales were $391,035 million in fiscal 2024."
+
+
+def test_only_passages_the_answer_may_cite_are_shown():
+    """W3-07: a passage of another company or period than the question's costs tokens for a citation the critic
+    rejects (invariant 4), so it is left out; a question without companies or years checks nothing."""
+    own, other_year, other_company = hit("AAPL", 2024, n=1), hit("AAPL", 2023, n=2), hit("MSFT", 2024, n=3)
+    step = search_step()
+    results = [done(step, [own, other_year, other_company])]
+    st = state("What are Apple's risk factors in fiscal 2024?", plan(step), results, Entities(("AAPL",), (2024,), ()))
+    evidence = cm.gather(st)
+    assert [h["chunk_id"] for h in evidence.passages] == [own["chunk_id"]] and evidence.uncitable == 2
+    result = run(st, FakeLLM(reply("Apple names supply chain concentration as a risk factor.", ["P1"])))
+    assert any("2 passage(s) of another company or period" in n for n in result.notes)
+    assert len(cm.gather(state("q", plan(step), results, Entities((), (), ()))).passages) == 3
+
+
+def test_a_search_with_no_citable_passage_is_answered_as_not_found_without_a_call():
+    """Review: when every passage is of another period than the question's, nothing is left to answer from, so the
+    composer writes "did not find" without an LLM call (before, the model drafted from them and the critic rejected
+    every citation)."""
+    step = search_step()
+    st = state("What are Apple's risk factors in fiscal 2024?", plan(step), [done(step, [hit("AAPL", 2023)])],
+               Entities(("AAPL",), (2024,), ()))
+    llm = FakeLLM()
+    result = run(st, llm)
+    assert llm.calls == [] and result.draft.answer == cm.NOTHING_FOUND and not result.draft.verified
+    assert any("1 passage(s) of another company or period" in n for n in result.notes)
