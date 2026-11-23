@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     text = render(rows, args.run)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(text, encoding="utf-8")
+        args.out.write_text(text, encoding="utf-8", newline="\n")      # LF on Windows too (W3-09)
         print(f"written: {args.out} ({len(rows)} questions)")
     else:
         print(text)
