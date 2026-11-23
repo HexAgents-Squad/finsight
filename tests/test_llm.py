@@ -242,7 +242,12 @@ def test_env_example_covers_every_setting():
     example = Path(__file__).resolve().parents[1] / ".env.example"
     keys = {line.split("=", 1)[0] for line in example.read_text(encoding="utf-8").splitlines()
             if "=" in line and not line.startswith("#")}
-    assert keys == set(Settings.model_fields)
+    assert set(Settings.model_fields) <= keys
+    # the rest are what docker-compose.yml reads from .env (W3-11); the Makefile sets FINSIGHT_UID/GID itself
+    import re
+    compose = (example.parent / "docker-compose.yml").read_text(encoding="utf-8")
+    assert keys - set(Settings.model_fields) == set(re.findall(r"\$\{([A-Z_]+)", compose)) - {"FINSIGHT_UID",
+                                                                                               "FINSIGHT_GID"}
 
 
 def test_get_settings_is_read_once(monkeypatch):

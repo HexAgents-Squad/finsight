@@ -140,6 +140,9 @@ streamlit run ui/app.py               # in another, then open http://localhost:8
 ```
 The UI talks only to the API (`FINSIGHT_API_URL`, default http://127.0.0.1:8000). Ask a question, then a follow-up in the same chat ("And in fiscal 2024?"); "New conversation" starts over. Each answer shows whether it was verified, its calculation, its figures and links to the SEC filings it cites; "Show trace" shows the run behind it. Optional: `FINSIGHT_TRACE_SESSIONS_URL` (your Langfuse project's sessions page) adds a link to the conversation's traces.
 
+## Running it with Docker (W3-11)
+`make up` builds one image and starts the API and the UI with Docker Compose, mounting `.env`'s settings, `certs/` and the data from `data/`; `make down` stops them. The steps from a clean clone, WSL2 on Windows included, are in [README.md](README.md#run-it-with-docker-w3-11). Inside a container `localhost` is the container: a local Ollama is `LLM_BASE_URL=http://host.docker.internal:11434/v1`.
+
 ## Running the tests
 ```bash
 pytest -q

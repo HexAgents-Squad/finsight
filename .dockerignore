@@ -1,0 +1,19 @@
+# An allowlist (W3-11, ADR-046): everything is excluded, then only the code the API and the UI run is added back.
+# So .env, certs/, data/, .git and the virtual environments can never reach the image, whatever their names.
+# tests/test_deploy.py checks that every package the runtime imports is listed.
+*
+!agent/
+!api/
+!config/
+!core/
+!ingest/
+!retrieval/
+!tools/
+!ui/
+!.streamlit/
+!pyproject.toml
+!requirements.txt
+!requirements-dev.txt
+!constraints-docker.txt
+**/__pycache__
+**/*.py[cod]
