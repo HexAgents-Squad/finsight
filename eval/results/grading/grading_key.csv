@@ -4,6 +4,7 @@ k01fda9a33c,S3_qwen3-8b_rag_think-off_s3-v1,RF04
 k03a1057290,M2_llama3.2-3b_rag_think-off_b0-v1,B10
 k0738555ba0,M2_llama3.2-3b_rag_think-off_b0-v1,RF07
 k07396e4a38,M1_qwen3-8b_rag_think-off_b0-v1,D05
+k07b826883e,A5_qwen3-8b_agent_think-off_a-v1,E04
 k0825195aea,M2_llama3.2-3b_rag_think-off_b0-v1,C04
 k083a0964de,S2_qwen3-8b_rag_think-off_s2-v1,D02
 k08a627a0e3,M1_qwen3-8b_rag_think-off_b0-v1,C09
@@ -37,6 +38,7 @@ k181da266c2,M2_llama3.2-3b_rag_think-off_b0-v1,C03
 k1869b25806,A2_qwen3-8b_agent_think-off_a-v1-no-calculator,B15
 k1aec7c4599,A1_qwen3-8b_agent_think-off_a-v1,D05
 k1c40c4ca53,M1_qwen3-8b_rag_think-off_b0-v1,E09
+k1c86de8013,A5_qwen3-8b_agent_think-off_a-v1,E07
 k1caca3043b,M3_qwen3-8b_closed_think-off_b0-v1,D06
 k1cfe73155f,M2_llama3.2-3b_rag_think-off_b0-v1,B03
 k1d51c6c10f,S2_qwen3-8b_rag_think-off_s2-v1,F02
@@ -81,6 +83,7 @@ k3347957d4e,M3_qwen3-8b_closed_think-off_b0-v1,F03
 k336235336b,M1_qwen3-8b_rag_think-off_b0-v1,B14
 k33e715b688,M3_qwen3-8b_closed_think-off_b0-v1,G09
 k3444a22356,A1_qwen3-8b_agent_think-off_a-v1,RF14
+k34f60b5004,A5_qwen3-8b_agent_think-off_a-v1,C08
 k351a8f8f66,M3_qwen3-8b_closed_think-off_b0-v1,B06
 k359ddacd4d,M2_llama3.2-3b_rag_think-off_b0-v1,E08
 k38a5c16d70,M1_qwen3-8b_rag_think-off_b0-v1,RF11
@@ -93,11 +96,14 @@ k3d2bd8c784,A1_qwen3-8b_agent_think-off_a-v1,E02
 k3d4516068d,S1_qwen3-8b_rag_think-off_s1-v1,C08
 k3f004905e2,A1_qwen3-8b_agent_think-off_a-v1,D03
 k3f0fe10c16,M3_qwen3-8b_closed_think-off_b0-v1,A13
+k3f15eae6d4,A5_qwen3-8b_agent_think-off_a-v1,E09
 k3f5556cedd,M1_qwen3-8b_rag_think-off_b0-v1,E08
 k3ff283a583,S1_qwen3-8b_rag_think-off_s1-v1,C01
 k41135b559e,A2_qwen3-8b_agent_think-off_a-v1-no-calculator,D08
 k4206789b9e,M2_llama3.2-3b_rag_think-off_b0-v1,E07
 k441311c6ce,S1_qwen3-8b_rag_think-off_s1-v1,C03
+k44fe2abd33,A5_qwen3-8b_agent_think-off_a-v1,E05
+k45797442a3,A5_qwen3-8b_agent_think-off_a-v1,E12
 k458d620e9c,M3_qwen3-8b_closed_think-off_b0-v1,B10
 k471440bd0e,A1_qwen3-8b_agent_think-off_a-v1,A06
 k473d7e5041,M3_qwen3-8b_closed_think-off_b0-v1,A10
@@ -155,6 +161,7 @@ k5ab60d4157,S2_qwen3-8b_rag_think-off_s2-v1,B15
 k5be52f53d2,M1_qwen3-8b_rag_think-off_b0-v1,RF10
 k5c354ad546,S1_qwen3-8b_rag_think-off_s1-v1,G08
 k5cf35b60fc,M3_qwen3-8b_closed_think-off_b0-v1,G03
+k5d60fa2bf3,A5_qwen3-8b_agent_think-off_a-v1,E03
 k5d6af35aa2,S2_qwen3-8b_rag_think-off_s2-v1,B01
 k5dad15f422,S3_qwen3-8b_rag_think-off_s3-v1,B12
 k5dff4dea97,S1_qwen3-8b_rag_think-off_s1-v1,E03
@@ -226,6 +233,7 @@ k7ee283bb78,S1_qwen3-8b_rag_think-off_s1-v1,A05
 k7ee7058992,M2_llama3.2-3b_rag_think-off_b0-v1,RF10
 k7eea11b142,M1_qwen3-8b_rag_think-off_b0-v1,E10
 k7f1c81e862,M3_qwen3-8b_closed_think-off_b0-v1,E08
+k803dd9479d,A5_qwen3-8b_agent_think-off_a-v1,F02
 k8044f0508e,S1_qwen3-8b_rag_think-off_s1-v1,C07
 k806eff636a,M2_llama3.2-3b_rag_think-off_b0-v1,F01
 k826801de8d,S1_qwen3-8b_rag_think-off_s1-v1,E08
@@ -261,6 +269,7 @@ k92039e8124,M3_qwen3-8b_closed_think-off_b0-v1,E06
 k923386045d,M2_llama3.2-3b_rag_think-off_b0-v1,F02
 k925a0907c6,S1_qwen3-8b_rag_think-off_s1-v1,E09
 k92b9ed35fd,M2_llama3.2-3b_rag_think-off_b0-v1,C01
+k93738de1ef,A5_qwen3-8b_agent_think-off_a-v1,E02
 k93959d01f1,A1_qwen3-8b_agent_think-off_a-v1,D09
 k94700819a4,M2_llama3.2-3b_rag_think-off_b0-v1,C02
 k94b7f387e0,S2_qwen3-8b_rag_think-off_s2-v1,F03
@@ -278,6 +287,7 @@ k9c59daf8d8,A1_qwen3-8b_agent_think-off_a-v1,E09
 k9c6321b99b,M2_llama3.2-3b_rag_think-off_b0-v1,RF12
 k9e3d7f1b3d,S2_qwen3-8b_rag_think-off_s2-v1,E09
 k9e42c74f0b,M1_qwen3-8b_rag_think-off_b0-v1,E04
+k9e4c0efc33,A5_qwen3-8b_agent_think-off_a-v1,B08
 k9e72f2e1e9,S3_qwen3-8b_rag_think-off_s3-v1,B01
 k9ea7405602,A2_qwen3-8b_agent_think-off_a-v1-no-calculator,B13
 k9f14654c0e,S2_qwen3-8b_rag_think-off_s2-v1,RF13
@@ -285,6 +295,7 @@ ka257eea1f8,M1_qwen3-8b_rag_think-off_b0-v1,G05
 ka28cc8df6a,M3_qwen3-8b_closed_think-off_b0-v1,A06
 ka2c15bf004,S3_qwen3-8b_rag_think-off_s3-v1,E10
 ka33a093b2b,M3_qwen3-8b_closed_think-off_b0-v1,C02
+ka509a1dcc8,A5_qwen3-8b_agent_think-off_a-v1,E08
 ka615fdba8f,M1_qwen3-8b_rag_think-off_b0-v1,C04
 ka83037d12a,M2_llama3.2-3b_rag_think-off_b0-v1,RF04
 ka9231605e3,S3_qwen3-8b_rag_think-off_s3-v1,A04
@@ -296,6 +307,7 @@ kad342e9552,M3_qwen3-8b_closed_think-off_b0-v1,E07
 kadf4269b59,S2_qwen3-8b_rag_think-off_s2-v1,C05
 kae7cc628ae,S2_qwen3-8b_rag_think-off_s2-v1,D09
 kae7d42bf12,S1_qwen3-8b_rag_think-off_s1-v1,D01
+kae932f5aeb,A5_qwen3-8b_agent_think-off_a-v1,E01
 kaeec4973f1,A1_qwen3-8b_agent_think-off_a-v1,C08
 kafa7602067,M2_llama3.2-3b_rag_think-off_b0-v1,C06
 kafb8b4a79d,M1_qwen3-8b_rag_think-off_b0-v1,D10
@@ -320,6 +332,7 @@ kb549675b7e,S1_qwen3-8b_rag_think-off_s1-v1,E06
 kb58ce5d61e,A2_qwen3-8b_agent_think-off_a-v1-no-calculator,C11
 kb6b0091656,S2_qwen3-8b_rag_think-off_s2-v1,RF04
 kb7e664a242,S1_qwen3-8b_rag_think-off_s1-v1,C02
+kb7eae1f3c2,A5_qwen3-8b_agent_think-off_a-v1,E06
 kb83e96ec63,M2_llama3.2-3b_rag_think-off_b0-v1,B06
 kb846502a0f,S2_qwen3-8b_rag_think-off_s2-v1,E11
 kb8563cb783,S3_qwen3-8b_rag_think-off_s3-v1,E03
@@ -363,6 +376,7 @@ kcb0067f89e,S2_qwen3-8b_rag_think-off_s2-v1,C07
 kcc2d092f71,M2_llama3.2-3b_rag_think-off_b0-v1,E04
 kcd10a7a0a9,A4_qwen3-8b_agent_think-off_a-v1-no-statements-first,E12
 kcd9c381f18,M3_qwen3-8b_closed_think-off_b0-v1,A02
+kce1b93683c,A5_qwen3-8b_agent_think-off_a-v1,E11
 kce2836938a,M2_llama3.2-3b_rag_think-off_b0-v1,RF11
 kce2f05dc79,M1_qwen3-8b_rag_think-off_b0-v1,B07
 kce371c33bd,S2_qwen3-8b_rag_think-off_s2-v1,RF15
@@ -411,6 +425,7 @@ ke27f957682,M1_qwen3-8b_rag_think-off_b0-v1,G09
 ke2e64448c6,S1_qwen3-8b_rag_think-off_s1-v1,A04
 ke373cf7c2e,M1_qwen3-8b_rag_think-off_b0-v1,C01
 ke3e3904f23,S2_qwen3-8b_rag_think-off_s2-v1,F06
+ke4df102748,A5_qwen3-8b_agent_think-off_a-v1,E10
 ke6523ab68a,S2_qwen3-8b_rag_think-off_s2-v1,A02
 ke7dcca374d,S3_qwen3-8b_rag_think-off_s3-v1,G08
 kea2de9bff9,M2_llama3.2-3b_rag_think-off_b0-v1,RF09
@@ -420,6 +435,7 @@ keabd7be8b6,M3_qwen3-8b_closed_think-off_b0-v1,A07
 keb2da29cf0,A1_qwen3-8b_agent_think-off_a-v1,D08
 kec15eaeabb,S1_qwen3-8b_rag_think-off_s1-v1,A12
 kec81711b78,S2_qwen3-8b_rag_think-off_s2-v1,B11
+kedf507343d,A5_qwen3-8b_agent_think-off_a-v1,D08
 kee3c89f2f6,M1_qwen3-8b_rag_think-off_b0-v1,F02
 kee4f0ee669,M2_llama3.2-3b_rag_think-off_b0-v1,C05
 kee71d917bf,M2_llama3.2-3b_rag_think-off_b0-v1,A01
@@ -431,6 +447,7 @@ kf12700c5d1,M3_qwen3-8b_closed_think-off_b0-v1,B03
 kf1b5277d08,M2_llama3.2-3b_rag_think-off_b0-v1,RF08
 kf21a5fb28f,S1_qwen3-8b_rag_think-off_s1-v1,RF15
 kf23b980e4a,A1_qwen3-8b_agent_think-off_a-v1,RF10
+kf34dae440e,A5_qwen3-8b_agent_think-off_a-v1,B14
 kf392d0b712,M1_qwen3-8b_rag_think-off_b0-v1,E07
 kf51a703997,M3_qwen3-8b_closed_think-off_b0-v1,E11
 kf64e28e333,M2_llama3.2-3b_rag_think-off_b0-v1,D02

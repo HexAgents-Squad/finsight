@@ -65,7 +65,8 @@ row whose answer changed or is no longer needed stays as task "stale".
 Shared grades (W3-01): an ablation's answer that is word for word its reference run's answer to the same question,
 with the same automatic verdict and suggested label, takes the reference row's sheet key (share_grades), so it is
 graded once and the graders see only the answers the switch changed. A changed answer gets its own row; the graders'
-agreement (table 7) counts a shared grade once, under the reference.
+agreement (table 7) counts a shared grade once, under the reference. W3-08: a later agent run on gold (A5) shares
+with A1 the same way, so the graders grade only what A5 answers differently.
 Exit codes: 0 = scored, 1 = invalid input files, 2 = no runs found.
 """
 from __future__ import annotations
@@ -586,14 +587,26 @@ def ablation_of(meta: RunMeta) -> str | None:
     return reference if isinstance(reference, str) and reference else None
 
 
+def grade_reference(meta: RunMeta, run_ids: set[str]) -> str | None:
+    """The run whose grades this run's identical answers take (share_grades): an ablation's reference (W3-01), or A1
+    for a later agent run on the gold questions (W3-08, A5); None for any other run (A1 itself, the B0 runs, the
+    strategies and the development-set runs, which are graded on their own)."""
+    if reference := ablation_of(meta):
+        return reference
+    a1 = sorted(r for r in run_ids if r.startswith(A1_PREFIX))
+    later_agent = getattr(meta, "context", None) == "agent" and not meta.run_id.startswith(A1_PREFIX)
+    return a1[0] if later_agent and getattr(meta, "questions", None) == "gold" and a1 else None
+
+
 def share_grades(runs: list[tuple[RunMeta, list[RunRecord], list[dict]]]) -> None:
-    """An ablation's answer that is word for word its reference run's answer to the same question, with the same
-    answer type, automatic verdict and suggested label (which reads the run's own evidence), takes the reference
-    answer's sheet key: one row, graded once, the grade and label applied to both, and marked `shared_grade` (so the
-    graders' agreement counts it once, under the reference). Anything else keeps its own key."""
+    """An answer of an ablation or a later agent gold run (grade_reference) that is word for word its reference run's
+    answer to the same question, with the same answer type, automatic verdict and suggested label (which reads the
+    run's own evidence), takes the reference answer's sheet key: one row, graded once, the grade and label applied
+    to both, and marked `shared_grade` (so the graders' agreement counts it once, under the reference). Anything
+    else keeps its own key."""
     scored_by_run = {meta.run_id: scored for meta, _, scored in runs}
     for meta, _, scored in runs:
-        reference = ablation_of(meta)
+        reference = grade_reference(meta, set(scored_by_run))
         if reference is None:
             continue
         if reference not in scored_by_run:

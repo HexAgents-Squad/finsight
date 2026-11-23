@@ -940,3 +940,33 @@ def test_the_comparison_needs_a1_and_the_same_questions():
     assert sa.against_a1_table([a5]) == ""                                   # no A1: no section
     with pytest.raises(ValueError, match="different questions"):
         sa.against_a1_table([_agent("A1_qwen3-8b_agent_think-off_a-v1", A1_VERDICTS[:3]), a5])
+
+
+def test_a_later_agent_gold_run_shares_a1s_grades_and_nothing_else_does():
+    """W3-08: A5's answers word for word A1's take A1's grade; A1 itself, a development run and a non-agent run do
+    not share, and an ablation keeps its own reference."""
+    from types import SimpleNamespace
+    runs = {"A1_qwen3-8b_agent_think-off_a-v1", "M1_qwen3-8b_rag_think-off_b0-v1"}
+
+    def meta(run_id, context="agent", questions="gold", extra=None):
+        return SimpleNamespace(run_id=run_id, context=context, questions=questions, model_extra=extra or {})
+    assert sa.grade_reference(meta("A5_qwen3-8b_agent_think-off_a-v1"), runs) == "A1_qwen3-8b_agent_think-off_a-v1"
+    assert sa.grade_reference(meta("A1_qwen3-8b_agent_think-off_a-v1"), runs) is None
+    assert sa.grade_reference(meta("A5_qwen3-8b_agent_think-off_dev-w306", questions="dev2"), runs) is None
+    assert sa.grade_reference(meta("M1_qwen3-8b_rag_think-off_b0-v1", context="rag"), runs) is None
+    assert sa.grade_reference(meta("A5_qwen3-8b_agent_think-off_a-v1"), {"M1_qwen3-8b_rag_think-off_b0-v1"}) is None
+    ablation = meta("A3_qwen3-8b_agent_think-off_a-v1-no-critic", extra={"ablation_of": "A1_x"})
+    assert sa.grade_reference(ablation, runs) == "A1_x"
+
+
+def test_shared_grades_cover_only_identical_answers():
+    from types import SimpleNamespace
+    a1 = SimpleNamespace(run_id="A1_qwen3-8b_agent_think-off_a-v1", context="agent", questions="gold", model_extra={})
+    a5 = SimpleNamespace(run_id="A5_qwen3-8b_agent_think-off_a-v1", context="agent", questions="gold", model_extra={})
+    row = {"answer_type": "summary", "correct": None, "suggested_label": None}
+    a1_scored = [{"id": "E01", "model_answer": "same", "sheet_key": "k1", **row},
+                 {"id": "E02", "model_answer": "old", "sheet_key": "k2", **row}]
+    a5_scored = [{"id": "E01", "model_answer": "same", "sheet_key": "k3", **row},
+                 {"id": "E02", "model_answer": "new", "sheet_key": "k4", **row}]
+    sa.share_grades([(a1, [], a1_scored), (a5, [], a5_scored)])
+    assert [(s["sheet_key"], s.get("shared_grade")) for s in a5_scored] == [("k1", True), ("k4", None)]
