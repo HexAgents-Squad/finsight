@@ -87,7 +87,7 @@ def examples() -> list[str]:
 
 def test_the_prompt_examples_carry_no_figures():
     """ADR-018: S1's examples helped refusals but S1 copied a real figure from one, so these have none."""
-    assert len(examples()) == 10
+    assert len(examples()) == 15                       # 10, plus W3-06's rule-priority and partial-refusal patterns
     for example in examples():
         numbers = [n for n in re.findall(r"\d+(?:[.,]\d+)*", example) if not re.fullmatch(r"20\d\d", n)]
         assert not numbers and "$" not in example, example
