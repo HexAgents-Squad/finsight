@@ -408,8 +408,11 @@ def carry_over(records: list[RunRecord], previous: Path, meta: RunMeta) -> tuple
         out.append(r.model_copy(update={
             "latency_s": p["latency_s"], "cached": p["cached"], "retries": p["retries"],
             "prompt_tokens": p["prompt_tokens"], "completion_tokens": p["completion_tokens"],
+            # the cost is the earlier run's whole (W3-08: a fix that saves a call, such as W3-07's, would otherwise
+            # pair the earlier run's calls with the replay's own token count)
             "agent": r.agent.model_copy(update={"llm_calls": pa["llm_calls"], "live_requests": pa["live_requests"],
-                                                "cache_hits": pa.get("cache_hits", 0)})}))
+                                                "cache_hits": pa.get("cache_hits", 0),
+                                                "tokens": pa.get("tokens", r.agent.tokens)})}))
     return out, prev_meta
 
 

@@ -318,7 +318,7 @@ def earlier_run(tmp_path, change=None):
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
         r = json.loads(line)
         r["latency_s"], r["cached"] = 4.5 + n, False
-        r["agent"].update(llm_calls=2, live_requests=2)
+        r["agent"].update(llm_calls=2, live_requests=2, tokens=900 + n)
         r["agent"].pop("cache_hits")                                   # an older runs file has no such field
         if change and n == 0:
             change(r)
@@ -338,6 +338,7 @@ def test_a_replay_keeps_the_earlier_runs_timings_cost_and_dates(tmp_path):
     recs = [RunRecord.model_validate_json(x) for x in (out / f"{ra.RUN_ID}.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r.latency_s for r in recs[:2]] == [4.5, 5.5] and not any(r.cached for r in recs)
     assert (recs[0].agent.llm_calls, recs[0].agent.live_requests, recs[0].agent.cache_hits) == (2, 2, 0)
+    assert [r.agent.tokens for r in recs[:2]] == [900, 901]                  # the whole cost is the earlier run's
     meta = json.loads((out / f"{ra.RUN_ID}.meta.json").read_text(encoding="utf-8"))
     assert (meta["started"], meta["git_commit"]) == ("2026-11-20T20:51:02+00:00", "abc")
     assert meta["requests"] == {"live": 204, "cache_hits": 0, "http_retries": 0}       # embed_calls dropped
