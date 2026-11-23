@@ -378,18 +378,16 @@ def test_durations_are_written_in_words_so_the_model_does_not_copy_a_figure():
     assert cm.duration_text(None) == "" and cm.duration_text("3M") == ", 3 months"
 
 
-def test_a_prose_figure_from_a_passage_the_answer_did_not_name_is_asked_again():
-    """The backing reads only the passages the answer says it used; the re-ask tells the model to list the figure."""
+def test_a_prose_figure_from_a_passage_the_answer_did_not_name_is_backed_by_it_and_cited():
+    """W3-05: a percentage or dollar figure another shown passage prints for its own fiscal year backs the prose, and
+    that passage is cited (before, only the passages the answer named were read, and the model was asked again)."""
     step = search_step("Microsoft revenue change", "MSFT", 2023)
     table = hit("MSFT", 2023, "Item 7", 7, "Revenue grew 7% in fiscal 2023.")
     st = state("What drove the change in Microsoft's revenue in fiscal 2023?", plan(step), [done(step, [table])],
                Entities(("MSFT",), (2023,), ("FY",)))
-    listed = {"passage": "P1", "name": "revenue growth", "value": 7, "unit": "%"}
-    llm = FakeLLM(reply("Microsoft's revenue rose 7% in fiscal 2023.", []),
-                  reply("Microsoft's revenue rose 7% in fiscal 2023.", ["P1"], [listed]))
+    llm = FakeLLM(reply("Microsoft's revenue rose 7% in fiscal 2023.", []))
     d = run(st, llm).draft
-    reask = llm.calls[1]["messages"][-1]["content"]
-    assert len(llm.calls) == 2 and "passage_figures" in reask and "invariant 1:" in reask
+    assert len(llm.calls) == 1
     assert [c.chunk_id for c in d.citations] == [table["chunk_id"]] and critic_problems(d, st) == []
 
 
@@ -831,3 +829,59 @@ def test_the_prompt_is_pinned():
     """A change to what the model sees must be deliberate: re-measure, then update the pin."""
     seen = cm.system_prompt() + json.dumps(cm.reply_schema(), sort_keys=True)
     assert hashlib.sha256(seen.encode("utf-8")).hexdigest() == cm.PROMPT_SHA256
+
+
+# ----------------------------------------------------------------------------------------------- W3-05
+@pytest.mark.parametrize(("text", "figure", "year", "own"), [
+    ("Worldwide sales were $85.2 billion for 2023, an increase of 6.5% as compared to 2022.", "6.5%", 2023, True),
+    ("Net revenues were $46.25 billion for 2023, 2% lower than 2022.", "2%", 2023, True),
+    ("Net revenues were $46.25 billion for 2023, 2% lower than 2022.", "$46.25 billion", 2023, True),
+    ("Revenue was $9.0 billion in 2022, 5% higher than 2021.", "5%", 2023, False),     # another year's change
+    ("Revenue was $9.0 billion in 2022, 5% higher than 2021.", "$9.0 billion", 2023, False),
+    ("Sales were $1.0 billion during 2023 compared to 2022.", "$1.0 billion", 2023, True),
+    ("In 2023, worldwide sales increased 6.5% to $85.2 billion as compared to an increase of 1.6% in 2022.", "6.5%",
+     2023, True),
+    ("In 2023, worldwide sales increased 6.5% to $85.2 billion as compared to an increase of 1.6% in 2022.", "1.6%",
+     2023, False),                                                                     # the comparison's own figure
+    ("Revenue was $9.0 billion, up from $8.0 billion in 2022.", "$9.0 billion", 2023, True),
+    ("Revenue was $9.0 billion, up from $8.0 billion in 2022.", "$8.0 billion", 2023, False),
+])
+def test_a_year_after_compared_to_or_than_is_the_comparison_base(text, figure, year, own):
+    start = text.index(figure.lstrip("$"))
+    assert cm.belongs_to_year(text, start, start + len(figure.lstrip("$")), year) is own
+
+
+def test_a_send_back_whose_rewrite_fails_keeps_the_previous_summary():
+    step = search_step("net sales increase", "COST", 2023)
+    passage = hit("COST", 2023, "Item 7", 14, "Net sales increased $14,980 or 7% during 2023. The improvement was "
+                                              "attributable to an increase in comparable sales of 3%.")
+    previous = AnswerContract(answer="Costco's net sales rose on comparable sales growth.", verified=False,
+                              refused=False)
+    verdict = Verdict(violations=[("summary", "state the size of the change")])
+    st = state("What drove Costco's net sales increase in fiscal 2023?", plan(step), [done(step, [passage])],
+               Entities(("COST",), (2023,), ("FY",)), draft=previous, verdict=verdict)
+    llm = FakeLLM(reply("Net sales rose $99,999 million.", ["P1"]))         # a figure no passage prints
+    result = run(st, llm)
+    assert result.draft == previous and cm.KEPT_NOTE in result.notes and cm.FALLBACK_NOTE not in result.notes
+
+
+def test_a_send_back_with_figures_still_falls_back_to_them():
+    """A numeric answer's figures make a better answer than a kept draft (the template is not empty)."""
+    step = fact_step()
+    verdict = Verdict(violations=[("1", "a figure is not a value")])
+    st = state("What was Apple's total revenue in fiscal 2024?", plan(step), [done(step, fact())],
+               Entities(("AAPL",), (2024,), ("FY",)), draft=AnswerContract(answer="d", verified=False, refused=False),
+               verdict=verdict)
+    result = run(st, FakeLLM(reply("About $400,000 million.")))
+    assert cm.FALLBACK_NOTE in result.notes and cm.KEPT_NOTE not in result.notes
+
+
+@pytest.mark.parametrize(("answer", "clean"), [
+    ("The MCR rose due to elevated care activity, as stated in P3.", "The MCR rose due to elevated care activity."),
+    ("Sales rose 7% (P1, P2) on comparable sales.", "Sales rose 7% on comparable sales."),
+    ("According to P2 and P4, rates drove it.", "According to P2 and P4, rates drove it."),   # opening: left as is
+    ("Rates drove it, according to P2 and P4.", "Rates drove it."),
+    ("The P3 platform grew.", "The P3 platform grew."),                                # a name, not a reference
+])
+def test_passage_ids_are_taken_out_of_the_answer(answer, clean):
+    assert cm.without_passage_ids(answer) == clean

@@ -456,3 +456,11 @@ def test_a_degenerate_reply_neither_crashes_nor_stalls_the_critic():
         started = time.perf_counter()
         check_contract(c, MSFT_2024, MARGIN_QUESTION)
         assert time.perf_counter() - started < 2.0, answer[:30]
+
+
+# W3-05: a drivers question asks for the drivers, not an operation
+def test_a_drivers_question_expects_no_operation_even_when_it_names_a_ratio_or_a_margin():
+    from agent.critic_checks import expected_operations
+    assert expected_operations("Why did UnitedHealth Group's medical care ratio rise in fiscal 2024?") == frozenset()
+    assert expected_operations("What drove the increase in Apple's gross margin in fiscal 2024?") == frozenset()
+    assert expected_operations("What was UnitedHealth Group's medical care ratio in fiscal 2024?") == {"ratio", "percent"}

@@ -75,7 +75,7 @@ log = logging.getLogger(__name__)
 
 PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "composer.txt"
 # sha256 of the system prompt and the reply schema (everything fixed the model sees), so a change is deliberate
-PROMPT_SHA256 = "cb0c35b7bcf25ad54bf0d9947f370e3a723fbf375e691a2bd997cc5ea38a2579"
+PROMPT_SHA256 = "6c852f2e019f6f04dc9215e81e20191407524b7971c3cb6e0e6efe110091433f"
 MAX_PASSAGES = 8                    # numbered passages shown to the model
 MAX_PASSAGE_CHARS = 1500            # of one passage's text (a statement table is longer; its head has the rows)
 MAX_PASSAGE_FIGURES = 6
@@ -88,6 +88,17 @@ COMPARATIVE_BEFORE = re.compile(r"(?:\b(?:from|versus|vs\.?)\s*|\b(?:compared\s+
                                 r"year-earlier|year-ago|last\s+year|a\s+year\s+(?:earlier|ago))\b[^$\d]{0,25}?)"
                                 r"\$?\s*\(?\s*$", re.IGNORECASE)
 RESPECTIVELY = re.compile(r"\brespectively\b", re.IGNORECASE)
+# A comparison between a figure and the year after it makes that year the comparison's ("an increase of 6.5% as
+# compared to 2022", "2% lower than 2022", "increased 6.5% to $85.2 billion as compared to an increase of 1.6% in
+# 2022"), not the figure's own year
+COMPARISON_BETWEEN = re.compile(r"\b(?:than|compared\s+(?:to|with)|versus|over|from)\b|\bvs\.", re.IGNORECASE)
+# How an answer may name a passage by its id, which is FinSight's internal numbering, not something to show: a
+# trailing phrase after other words (", as stated in P3"; an opening "According to P2, ..." is left as written) or
+# a parenthesis ("(P1, P2)")
+PASSAGE_REFERENCE = re.compile(r"(?<=[\w%)\]])\s*,?\s*\b(?:as\s+(?:stated|noted|shown|reported|described|mentioned|"
+                               r"indicated|explained|given)\s+in|according\s+to|see|per)\s+(?:passages?\s+)?P\d{1,2}"
+                               r"(?:\s*(?:,|and|&)\s*P\d{1,2})*\b|\s*\((?:see\s+)?(?:passages?\s+)?P\d{1,2}"
+                               r"(?:\s*(?:,|and|&)\s*P\d{1,2})*\)", re.IGNORECASE)
 SENTENCE_BREAK = re.compile(r"\n|(?<!U\.S\.)(?<!\bInc\.)(?<!\bCorp\.)(?<!\bCo\.)(?<!\bNo\.)(?<!\bvs\.)(?<!\bLtd\.)"
                             r"(?<=[.;!?])\s+")
 DOLLAR_BEFORE = re.compile(r"\$\s*\(?\s*$")
@@ -106,6 +117,8 @@ OWN_RULES = frozenset({"1", "2", "6", "citations", "operation"})
 QUARTER_WORDS = {"Q1": "first", "Q2": "second", "Q3": "third"}
 FALLBACK_NOTE = "composer: the model's answer failed its checks twice; wrote the answer from the figures"
 NOTHING_FOUND = "FinSight did not find this in the indexed filings."
+KEPT_NOTE = ("composer: the rewrite after the critic's send-back failed its checks and the figures give no answer; "
+             "kept the previous draft (it leaves unverified)")
 REASK = ("Your answer has these problems. Fix every one and reply with the whole JSON object again. A figure you "
          "take from a passage must be listed in passage_figures with that passage's id; a figure no evidence gives "
          "must go.\n")
@@ -515,7 +528,10 @@ def _sentence(text: str, start: int, end: int) -> tuple[int, int]:
 
 def _prose_is_year(text: str, start: int, end: int, fiscal_year: Any) -> bool:
     """A number in prose is the passage's fiscal year's: not in a "respectively" sentence; a year in its own
-    clause after it decides ("$1.0 billion during 2023 compared to 2022"); else not after "from"/"versus" or a
+    clause after it decides ("$1.0 billion during 2023 compared to 2022"), unless that year is the comparison base
+    ("an increase of 6.5% as compared to 2022", "2% lower than 2022", "... as compared to an increase of 1.6% in
+    2022": a comparison word between them, W3-05): then the sentence's other years decide
+    (the passage's year among them, or none); else not after "from"/"versus" or a
     comparative word with no figure between ("prior year revenue was $11.0 billion"), nor before "in the prior
     year"; else a change ("an increase of $2.8 billion, or 6%") is the current year's when the sentence names
     the passage's year or none; else the last year earlier in the sentence decides; else it is the passage's."""
@@ -524,6 +540,9 @@ def _prose_is_year(text: str, start: int, end: int, fiscal_year: Any) -> bool:
         return False
     _, clause_end = _bounds(text, start, end, (", ", "; "))
     after = YEAR_IN_TEXT.search(text, end, min(clause_end, s_end))
+    if after and COMPARISON_BETWEEN.search(text, end, after.start()):
+        others = [int(m.group()) for m in YEAR_IN_TEXT.finditer(text, s_start, s_end) if m.start() != after.start()]
+        return not others or fiscal_year in others
     if after:
         return int(after.group()) == fiscal_year
     before = text[s_start:start]
@@ -644,9 +663,17 @@ def decline_sentence(rule: str) -> str:
     return f"I can't help with the rest of the question because it is {REFUSAL_REASONS[rule]}."
 
 
+def without_passage_ids(answer: str) -> str:
+    """The answer without its references to passage ids ("as stated in P3", "(P1, P2)"): the citations name the
+    filings; P1, P2 ... are only the message's numbering (seen on the development set v2, W3-05)."""
+    text = PASSAGE_REFERENCE.sub("", answer)
+    return re.sub(r"\s+([.,;:])", r"\1", text).strip()
+
+
 def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tuple[AnswerContract, list[str]]:
     """The draft from the model's prose and the structured parts; passage figures kept only when printed there."""
     plan = typing.cast(Plan, state["plan"])
+    reply = reply.model_copy(update={"answer": without_passage_ids(reply.answer)})
     values, citations, calculations, notes = structured_parts(evidence)
     by_id = {f"P{i}": hit for i, hit in enumerate(evidence.passages, start=1)}
     used = [pid for pid in dict.fromkeys(reply.passages) if pid in by_id]
@@ -671,16 +698,21 @@ def assemble(state: AgentState, evidence: Evidence, reply: ComposerReply) -> tup
         if fig.passage not in used:
             used.append(fig.passage)
     # A dollar or percent figure the prose states that no value backs yet: a value from a passage the answer
-    # used that prints it for its own fiscal year (the model often writes a passage's figure without listing it)
+    # used that prints it for its own fiscal year (the model often writes a passage's figure without listing it),
+    # else from another passage it was shown, which the answer then cites (W3-05: the model named the wrong passage
+    # for a change another one states)
     text = " ".join(reply.answer.split())
     probe = AnswerContract(answer=text, values=values, calculations=calculations, verified=False, refused=False)
     used_hits = [(pid, by_id[pid]) for pid in used]
+    other_hits = [(pid, hit) for pid, hit in by_id.items() if pid not in used]
     for fig in unbacked_figures(probe):
         unit = backing_unit(fig, text)
-        found = passage_printing(fig, unit, used_hits) if unit else None
+        found = (passage_printing(fig, unit, used_hits) or passage_printing(fig, unit, other_hits)) if unit else None
         if found is None:
             continue
         pid, hit = found
+        if pid not in used:
+            used.append(pid)
         try:
             values.append(_backing_value(fig, typing.cast(str, unit), hit))
         except (ValidationError, KeyError) as err:
@@ -827,6 +859,13 @@ async def _compose_from(state: AgentState, llm: CompletionClient, evidence: Evid
         result.draft = draft
         result.notes = [*result.notes, f"composer: dropped {dropped} sentence(s) whose figures no evidence backs",
                         *notes]
+        return result
+    previous = state.get("draft")
+    if feedback and previous is not None and not previous.refused and previous.answer != NOTHING_FOUND \
+            and template_answer(evidence) == NOTHING_FOUND:
+        # Seen on the development set v2 (W3-05): a partly right summary sent back once, its rewrite failing, became
+        # "did not find" although the passages were there; the critic judges the kept draft again (unverified)
+        result.draft, result.notes = previous, [*result.notes, KEPT_NOTE]
         return result
     draft, notes = fallback_draft(state, evidence)
     result.draft, result.notes = draft, [*result.notes, FALLBACK_NOTE, *notes]

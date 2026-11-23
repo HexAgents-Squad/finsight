@@ -94,6 +94,13 @@ OPERATION_RULES: tuple[tuple[re.Pattern, frozenset[str]], ...] = (
      frozenset({"sum"})),
 )
 
+# A question that asks what drove a change (a driver word is needed: "What does X say about its pricing?" asks for
+# what the filing says, not for a change). It asks for the drivers, not an operation: "Why did the medical care ratio
+# rise?" names a ratio but wants no calculation (W3-05)
+DRIVERS = re.compile(r"\bwhat (?:drove|explains|caused|contributed to|were the (?:drivers|reasons))\b|\bwhy did\b|"
+                     r"\bdrove\b|\bdrivers? of\b|\battribut\w* (?:the|its|this|that)\b[^?]{0,60}\bto\b",
+                     re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -300,8 +307,11 @@ def check_citations_present(contract: AnswerContract) -> list[Violation]:
 
 # ----------------------------------------------------------------------------------------------- operation
 def expected_operations(question: str) -> frozenset[str]:
-    """The operations the question's wording asks for; empty when it asks for none in particular."""
+    """The operations the question's wording asks for; empty when it asks for none in particular, or asks what drove
+    a change (DRIVERS)."""
     out: frozenset[str] = frozenset()
+    if DRIVERS.search(question):
+        return out
     for pattern, operations in OPERATION_RULES:
         if pattern.search(question):
             out |= operations
