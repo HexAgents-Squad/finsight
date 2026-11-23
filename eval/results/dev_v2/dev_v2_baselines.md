@@ -214,7 +214,9 @@ request (57 cache hits).
 **All 8 summaries verified (W3-04's run: 5).** E21 (J&J) now opens with "worldwide sales increased 6.5% to $85.2
 billion", E23 (NVIDIA Gaming) with "fell 27%", E24 (Goldman Sachs) with "declined 2%", E25 (Pfizer) with "$41.8
 billion, or 42%". E24, E25 and E26, graded 0 in W3-04's run, now answer from the MD&A. Every search of these questions
-now returns MD&A passages only. The grades are pending (Amresh and Giridharan).
+now returns MD&A passages only.
+
+**Graded.** Graded by Amresh and Giridharan (9 of 9 grades agreeing, kappa 1.00): summaries 4/8 graded 2, 12 of 16 grade points (W3-04's run 4/8 and 9/16, A1 3/8 and 9/16); E25 and E26 rose from 0 to 2, E24 from 0 to 1, E22 and E23 stay 2, E21 stays 1; E27 and E28 fell from 2 to 1: E27 now gives the 7% and the total ($237,710, as the table prints it, without its unit) but no longer the $14,980 increase, and E28 adds a redundant sentence, so rule 10's "amount or percentage" lets the model drop the amount. Numeric 10/14 after grading (A23 and A24 overturned: both graders marked them right), entity 1/1, refusals 4/7 (unchanged).
 
 **Numeric 8/14 automatically, against W3-04's 10/14 after grading.** A23 (Costco net sales) and A24 (AWS operating
 income) state the right figure without a value (A24 as in W3-04's run; A23 also adds a wrong explanation of how the
