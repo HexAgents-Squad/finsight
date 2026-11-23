@@ -456,3 +456,24 @@ def test_a_degenerate_reply_neither_crashes_nor_stalls_the_critic():
         started = time.perf_counter()
         check_contract(c, MSFT_2024, MARGIN_QUESTION)
         assert time.perf_counter() - started < 2.0, answer[:30]
+
+
+# W3-05: a drivers question asks for the drivers, not an operation
+def test_a_drivers_question_expects_no_operation_even_when_it_names_a_ratio_or_a_margin():
+    from agent.critic_checks import expected_operations
+    assert expected_operations("Why did UnitedHealth Group's medical care ratio rise in fiscal 2024?") == frozenset()
+    assert expected_operations("What drove the increase in Apple's gross margin in fiscal 2024?") == frozenset()
+    assert expected_operations("What was UnitedHealth Group's medical care ratio in fiscal 2024?") == {"ratio", "percent"}
+
+
+
+@pytest.mark.parametrize(("question", "expected"), [
+    ("What drove the gross margin in fiscal 2023, and what was it?", {"percent"}),
+    ("What was the percentage change in revenue in fiscal 2023 and what drove it?", {"growth", "cagr"}),
+    ("What was Apple's revenue CAGR from fiscal 2023 to 2025 and what drove it?", {"cagr"}),
+    ("What were the drivers of Apple's gross margin change in fiscal 2024?", set()),
+])
+def test_a_drivers_question_that_also_asks_for_a_figure_keeps_its_operation(question, expected):
+    """PR #58 review: only a question that asks for the drivers alone expects no operation."""
+    from agent.critic_checks import expected_operations
+    assert expected_operations(question) == expected

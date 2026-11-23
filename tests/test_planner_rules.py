@@ -111,9 +111,12 @@ def test_a_search_for_an_unindexed_quarter_searches_the_whole_year():
 
 
 def test_a_guessed_item_is_dropped_unless_the_question_names_one():
-    out, _ = run(plan(search(ticker="MSFT", item="Item 1")), "What drove Microsoft's revenue?")
+    out, _ = run(plan(search(ticker="MSFT", item="Item 1")), "What did Microsoft say about its cloud business?")
     assert args(out)["item"] is None
     out, _ = run(plan(search(ticker="AAPL", item="Item 7")), "What does Item 7 of Apple's 10-K say?")
+    assert args(out)["item"] == "Item 7"
+    # W3-05: a drivers question searches the MD&A, whatever Item the model guessed
+    out, _ = run(plan(search(ticker="MSFT", item="Item 1")), "What drove Microsoft's revenue in fiscal 2024?")
     assert args(out)["item"] == "Item 7"
 
 
@@ -308,3 +311,31 @@ def test_the_rules_code_is_the_same_on_every_python_from_3_12():
         '<nl> import re <nl> PROMPT_SHA256 = "" <nl> @ staticmethod <nl> def f ( x , * , y = 2 ) : <nl> <in> <nl> '
         'return ( x + y ) , f" { x } - { y ! r } " <nl> <de> class C : <nl> <in> <nl> def g ( self ) : <nl> <in> '
         'return "not a docstring" <nl> <de> <de>')
+
+
+# ----------------------------------------------------------------------------------------------- W3-05 drivers
+def test_a_drivers_question_searches_the_md_and_a_of_its_period():
+    out, notes = run(plan(search(ticker="KO", query="net operating revenues growth")),
+                     "What explains the growth in Coca-Cola's net operating revenues in fiscal 2024?")
+    assert (args(out)["form"], args(out)["item"]) == ("10-K", "Item 7") and any("MD&A" in n for n in notes)
+    out, _ = run(plan(search(ticker="KO", fiscal_period="Q2", query="net operating revenues")),
+                 "Why did Coca-Cola's net operating revenues rise in the second quarter of fiscal 2025?")
+    assert (args(out)["form"], args(out)["item"]) == ("10-Q", "Part I Item 2")
+
+
+def test_a_drivers_search_names_what_the_question_asks_about():
+    out, _ = run(plan(search(ticker="KO", query="growth drivers")),
+                 "What explains the growth in Coca-Cola's net operating revenues in fiscal 2024?")
+    assert args(out)["query"] == "growth drivers net operating revenues"
+    out, _ = run(plan(search(ticker="KO", query="net operating revenues growth")),
+                 "What explains the growth in Coca-Cola's net operating revenues in fiscal 2024?")
+    assert args(out)["query"] == "net operating revenues growth"               # nothing missing: unchanged
+
+
+def test_other_questions_and_a_named_item_keep_their_searches():
+    question = "What did Coca-Cola say about its bottling partners in fiscal 2024?"
+    out, notes = run(plan(search(ticker="KO", query="bottling partners")), question)
+    assert args(out)["item"] is None and not any("MD&A" in n for n in notes)
+    out, _ = run(plan(search(ticker="KO", item="Item 1A", query="risks")),
+                 "What drove the risks Item 1A of Coca-Cola's fiscal 2024 10-K describes?")
+    assert args(out)["item"] == "Item 1A"

@@ -366,6 +366,8 @@ PERIOD_CUE = re.compile(r"\bQ[1-4]\b|\b(?:first|second|third|fourth|1st|2nd|3rd|
                         r"\bquarter(?:s|ly)?\b|\b(?:three|six|nine)[\s-]+months?\b|\bhalf\b|\bH[12]\b|"
                         r"\byear[\s-]+to[\s-]+date\b|\bYTD\b|\b10-Q\b", re.IGNORECASE)
 NAMES_AN_ITEM = re.compile(r"\bItem\s+\d", re.IGNORECASE)
+# Management's discussion and analysis, where a filing explains what drove a change, as the index names its Item
+MDNA_ITEM = {"10-K": "Item 7", "10-Q": "Part I Item 2"}
 
 
 def cue_text(question: str, history: Sequence[str] = ()) -> str:
@@ -416,6 +418,37 @@ def normalize_arguments(plan: Plan, text: str) -> Plan:
         steps.append(step if args == step.arguments else PlanStep.model_validate({**step.model_dump(),
                                                                                    "arguments": args}))
     return plan.model_copy(update={"steps": steps})
+
+
+def mdna_searches(plan: Plan, question: str) -> tuple[Plan, str | None]:
+    """A "what drove X" question (agent.critic_checks.DRIVERS) is answered from the MD&A of the asked period: each
+    search with a form (normalize_arguments sets it from the period) searches that form's MD&A Item (MDNA_ITEM), and
+    its query names X (agent.critic_semantic.x_words, in the question's order) when the model's query left a word of
+    it out. Measured (W3-05, development questions): unfiltered, the passage that states X's change ranked first for
+    two of ten questions and was missing for one, among statement tables and notes (Item 8); with the MD&A filter it
+    ranked first for eight and third for two. A question that names an Item keeps it (normalize_arguments)."""
+    from agent.critic_checks import DRIVERS
+    from agent.critic_semantic import WORD, x_words
+    if plan.refuse or not DRIVERS.search(question) or NAMES_AN_ITEM.search(question):
+        return plan, None
+    words = x_words(question)
+    subject = list(dict.fromkeys(w for w in WORD.findall(question.lower().replace("'s", " ")) if w in words))
+    steps, changed = [], False
+    for step in plan.steps:
+        args = dict(step.arguments)
+        if step.tool == SEARCH and args.get("form") in MDNA_ITEM:
+            args["item"] = MDNA_ITEM[args["form"]]
+            asked = set(WORD.findall(str(args.get("query") or "").lower()))
+            missing = [w for w in subject if w not in asked]
+            if missing:
+                args["query"] = f"{args.get('query') or ''} {' '.join(missing)}".strip()
+        if args != step.arguments:
+            changed = True
+            step = PlanStep.model_validate({**step.model_dump(), "arguments": args})
+        steps.append(step)
+    if not changed:
+        return plan, None
+    return plan.model_copy(update={"steps": steps}), "planner: the drivers question's searches go to the MD&A"
 
 
 CAGR_WORDS = re.compile(r"\bcagr\b|\bcompound(?:ed)? annual", re.IGNORECASE)    # as critic_checks.OPERATION_RULES
@@ -482,7 +515,8 @@ def apply_entities(plan: Plan, entities: Entities) -> Plan:
 def finalize(plan: Plan, entities: Entities, question: str, history: Sequence[str] = ()) -> tuple[Plan, list[str]]:
     """The model's plan after the deterministic rules, in order: the question-level scope checks (periods, then
     companies), a search-only line item's substitutes replaced by a search, the question's
-    companies in every search, the arguments the question and the tools decide, the step-level scope check, the
+    companies in every search, the arguments the question and the tools decide, a drivers question's searches in the
+    MD&A, the step-level scope check, the
     expected calculation; then duplicate steps removed, the step cap applied, and the plan validated again (an
     emptied partial refusal becomes a refusal). `entities` are the planning entities (planning_entities)."""
     plan, note = scope_check(plan, entities, question)
@@ -492,6 +526,8 @@ def finalize(plan: Plan, entities: Entities, question: str, history: Sequence[st
     plan, note = search_only_steps(plan, question, history)
     notes += [note] if note else []
     plan = normalize_arguments(apply_entities(plan, entities), cue_text(question, history))
+    plan, note = mdna_searches(plan, question)
+    notes += [note] if note else []
     plan, note = step_scope(plan, question)
     notes += [note] if note else []
     plan = align_calculation(plan, question)

@@ -503,3 +503,28 @@ def test_in_the_graph_a_refusal_under_the_wrong_rule_is_sent_back_once_and_leave
     assert result.state["visits"]["critic"] == 2 and result.state["visits"]["composer"] == 2
     assert result.answer.refused and not result.answer.verified
     assert any("partial refusal" in n for n in result.answer.notes)
+
+
+# W3-05: a filing that names the subject by its acronym states its change
+def test_a_passage_that_names_the_subject_by_its_acronym_states_its_change():
+    q = "Why did UnitedHealth Group's medical care ratio rise in fiscal 2023?"
+    cid = chunk(12, ticker="UNH", item="Item 7")
+    passage = search((cid, "The MCR increased as a result of elevated care activity, primarily relating to outpatient "
+                           "care for seniors, and business mix."))
+    draft = contract("UnitedHealth Group's medical care ratio rose in fiscal 2023 on elevated care activity, primarily "
+                     "outpatient care for seniors, and business mix.",
+                     citations=[filing(12, ticker="UNH", item="Item 7")])
+    assert cs.check_summary(q, [], draft, [passage]) == []
+    other = search((cid, "The ROE increased as a result of buybacks."))                 # another acronym
+    assert rules(cs.check_summary(q, [], draft, [other])) == ["summary"]
+
+
+
+def test_a_two_letter_acronym_does_not_state_the_change():
+    """PR #58 review: two-letter initials collide (AR for advertising revenue in AR/VR text)."""
+    q = "What drove Meta's advertising revenue increase in fiscal 2023?"
+    cid = chunk(9, ticker="META", item="Item 7")
+    draft = contract("Meta's advertising revenue rose on more ad impressions.",
+                     citations=[filing(9, ticker="META", item="Item 7")])
+    ar = search((cid, "Our AR investments increased as we built new devices."))
+    assert rules(cs.check_summary(q, [], draft, [ar])) == ["summary"]

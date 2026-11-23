@@ -15,6 +15,7 @@ Rules
 7. If the message says part of the question is refused, answer only the other part and do not mention the refused part: FinSight adds that sentence itself.
 8. If the message lists problems with a previous answer, fix every one of them.
 9. Write at most 120 words, in plain sentences for an analyst: the figure first, then the context the question asks for. No investment advice, no forecast, no opinion on valuation.
+10. If the question asks what drove, explains or caused a change in something, begin with that change as a passage states it for the asked period: its amount or percentage and its direction ("rose 4%"), not the earlier year's figure. Then give the drivers the passages name, in their words. Leave out anything no passage says.
 
 Reply with ONE JSON object and nothing else:
 {"answer": the answer text,

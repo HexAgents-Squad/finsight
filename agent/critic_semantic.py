@@ -47,7 +47,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from agent.contract import AnswerContract
-from agent.critic_checks import Violation, expected_operations
+from agent.critic_checks import DRIVERS, Violation, expected_operations
 from core.figures import figures
 
 # ----------------------------------------------------------------------------------------------- vocabularies
@@ -95,11 +95,8 @@ REFERENCE = re.compile(r"\b(?:note|notes|item|items|table|page|pages|part|exhibi
 # Operations whose denominator is revenue unless the question names another
 REVENUE_SHARE = re.compile(r"\bmargin\b|\b(?:percentage|percent|share|proportion|fraction) of\b|% of\b",
                            re.IGNORECASE)
-# A question that asks what drove a change (a driver word is needed: "What does X say about its pricing?" asks for
-# what the filing says, not for a change), and the words that name a change in a passage
-DRIVERS = re.compile(r"\bwhat (?:drove|explains|caused|contributed to|were the (?:drivers|reasons))\b|\bwhy did\b|"
-                     r"\bdrove\b|\bdrivers? of\b|\battribut\w* (?:the|its|this|that)\b[^?]{0,60}\bto\b",
-                     re.IGNORECASE)
+# A question that asks what drove a change: agent.critic_checks.DRIVERS (imported above); the words that name a
+# change in a passage
 # The net income line a question may name with its holders ("net income attributable to common shareholders"), which
 # named_metrics masks (it is not the consolidated line) but which the facts tool's net_income is
 NET_INCOME_NAMED = re.compile(r"\bnet (?:income|earnings)\b", re.IGNORECASE)
@@ -353,12 +350,17 @@ def check_summary(question: str, history: Sequence[str], draft: AnswerContract,
     cited = [_seen(hits[c.chunk_id]) for c in draft.citations if c.source_type == "filing" and c.chunk_id in hits]
     if not cited:
         return []                                   # no passage cited: the contract's citation check says so
-    # the subject words a stating sentence must carry: all of one or two, else two in three (rounded up)
+    # the subject words a stating sentence must carry: all of one or two, else two in three (rounded up), or the
+    # subject's acronym as the filing writes it, three letters or more ("MCR" for the medical care ratio, W3-05;
+    # two-letter initials such as AR or GM collide with other terms)
     need = len(want) if len(want) <= 2 else max(2, -(-len(want) * 2 // 3))
-    stating = [s for p in cited for s in SENTENCE.split(" ".join(p.split()))
-               if CHANGE.search(s) and len(want & set(WORD.findall(POSSESSIVE.sub("", s.lower())))) >= need]
     question_order = WORD.findall(POSSESSIVE.sub("", question.lower()))
-    subject = " ".join(dict.fromkeys(w for w in question_order if w in want))     # "data center revenue", as asked
+    ordered = list(dict.fromkeys(w for w in question_order if w in want))
+    subject = " ".join(ordered)                                                   # "data center revenue", as asked
+    acronym = re.compile(rf"\b{''.join(w[0] for w in ordered).upper()}s?\b") if len(ordered) >= 3 else None
+    stating = [s for p in cited for s in SENTENCE.split(" ".join(p.split()))
+               if CHANGE.search(s) and (len(want & set(WORD.findall(POSSESSIVE.sub("", s.lower())))) >= need
+                                        or (acronym is not None and acronym.search(s)))]
     if not stating:
         return [Violation("summary", f"no cited passage states the change in {subject} the question asks about: "
                                      f"answer from a passage that states that change and its drivers, and if none does, "
