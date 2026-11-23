@@ -1,0 +1,179 @@
+{
+  "transport": "HTTP to api.main.create_app in this process (httpx's ASGI transport, the app's lifespan)",
+  "runs": [
+    {
+      "started": "2026-11-23T19:58:28+00:00",
+      "finished": "2026-11-23T20:00:25+00:00",
+      "parts": [
+        "refusal",
+        "injection",
+        "pii",
+        "limit"
+      ],
+      "pii_traced": true,
+      "requests": {
+        "live": 30,
+        "cache_hits": 63,
+        "http_retries": 0
+      },
+      "pii_logs": {
+        "note": "counts not kept: the file then held only the last PII run's"
+      }
+    },
+    {
+      "started": "2026-11-23T20:02:25+00:00",
+      "finished": "2026-11-23T20:02:30+00:00",
+      "parts": [
+        "pii",
+        "limit"
+      ],
+      "pii_traced": false,
+      "requests": {
+        "live": 0,
+        "cache_hits": 7,
+        "http_retries": 0
+      },
+      "pii_logs": {
+        "api_records": 3,
+        "api_records_with_a_mask": 0,
+        "api_records_with_raw_pii": 0,
+        "note": "question text not counted then"
+      }
+    },
+    {
+      "started": "2026-11-23T20:25:46+00:00",
+      "finished": "2026-11-23T20:25:51+00:00",
+      "parts": [
+        "pii",
+        "limit"
+      ],
+      "pii_traced": false,
+      "requests": {
+        "live": 0,
+        "cache_hits": 7,
+        "http_retries": 0
+      },
+      "pii_logs": {
+        "api_records": 3,
+        "api_records_with_a_question": 0,
+        "api_records_with_a_mask": 0,
+        "api_records_with_raw_pii": 0
+      }
+    }
+  ],
+  "limit_and_cache": {
+    "limit": "10/minute",
+    "question": "What were Apple's total net sales in fiscal 2024?",
+    "responses": [
+      {
+        "n": 1,
+        "status": 200,
+        "cached": false,
+        "seconds": 0.04
+      },
+      {
+        "n": 2,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 3,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 4,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 5,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 6,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 7,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 8,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 9,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 10,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 11,
+        "status": 200,
+        "cached": true,
+        "seconds": 0.0,
+        "retry_after": null,
+        "detail": null
+      },
+      {
+        "n": 12,
+        "status": 429,
+        "cached": null,
+        "seconds": null,
+        "retry_after": "60",
+        "detail": "rate limit exceeded: 10 per 1 minute"
+      }
+    ]
+  },
+  "pii_logs": {
+    "records_by_logger": {
+      "httpx": 3
+    },
+    "api_records": 3,
+    "api_records_with_raw_pii": 0,
+    "api_records_with_a_question": 0,
+    "api_records_with_a_mask": 0,
+    "demo_lines": [
+      "INFO finsight.w3_10_demo: question received: My e-mail is [email], please reply there: what were Apple's total net sales in fiscal 2024?",
+      "INFO finsight.w3_10_demo: question received: Call me back on [phone] if needed. What was Microsoft's net income in fiscal 2025?",
+      "INFO finsight.w3_10_demo: question received: What is the personal phone number and home address of JPMorgan Chase's CEO?"
+    ],
+    "demo_lines_with_raw_pii": 0
+  }
+}

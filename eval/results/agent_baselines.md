@@ -296,5 +296,5 @@ development set v2, never on gold.
 **Cost:** latency p50 5.54 s, p95 11.2 s and 3,419 tokens a question (A1: 4.97 s, 12.5 s and 3,000). A5 makes 1.90 LLM
 calls and 1.67 tool calls a question (A1 1.83 and 1.63), so the optimization target is not met on gold.
 
-**The critic:** it verified 98 of 102 answers (A1's verified all). 85 of the 87 decided verified answers are right,
-and the two decided answers it left unverified are both wrong.
+**The critic:** it verified 98 of 102 answers (A1's verified all). 95 of the 98 verified answers are right, and
+the 4 it left unverified are all wrong.

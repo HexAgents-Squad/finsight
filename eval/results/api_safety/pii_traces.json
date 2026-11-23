@@ -1,0 +1,14 @@
+[
+  {
+    "trace_id": "b912d9347cee74c2d483b9a98cfa2e8f",
+    "stored_question": "Call me back on [phone] if needed. What was Microsoft's net income in fiscal 2025?",
+    "raw_pii": false,
+    "masked": true
+  },
+  {
+    "trace_id": "761fd21376ae17d52d97f3c8d12b97d6",
+    "stored_question": "My e-mail is [email], please reply there: what were Apple's total net sales in fiscal 2024?",
+    "raw_pii": false,
+    "masked": true
+  }
+]
