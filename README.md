@@ -62,6 +62,7 @@ The agentic layer: a LangGraph planner → executor → composer → critic agen
 
 ## Week 3 (22–27 Nov, next)
 Evaluate, improve, harden, ship: ablations; an improved agent (A5: stronger deterministic critic checks, the missing XBRL metrics, better summaries and refusal edge cases, tuned on a development set v2 and run on gold once); optimization of latency, tokens and code; the evaluation report with the failure taxonomy; the trace dashboard; safety tests through the API; Docker Compose; the 12-page report; code freeze 25 Nov, submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt).
+The technical report: [docs/report/final_report.pdf](docs/report/final_report.pdf) (source [final_report.md](docs/report/final_report.md), rubric checklist [rubric_checklist.md](docs/report/rubric_checklist.md)); the evaluation report: [eval/results/evaluation_report.md](eval/results/evaluation_report.md).
 
 ## Folder structure
 ```

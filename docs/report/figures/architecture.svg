@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" font-family="Segoe UI, Arial, sans-serif" font-size="12">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6b73"/>
+    </marker>
+  </defs>
+  <rect width="900" height="430" fill="#ffffff"/>
+
+  <!-- Serving path -->
+  <text x="16" y="22" font-size="11" font-weight="bold" fill="#5b6b73">SERVING (Docker Compose: api + ui)</text>
+  <rect x="16" y="34" width="150" height="62" rx="8" fill="#d7e9e6" stroke="#1f7a72"/>
+  <text x="91" y="58" text-anchor="middle" font-weight="bold" fill="#12343b">Streamlit UI</text>
+  <text x="91" y="76" text-anchor="middle" font-size="10.5" fill="#1e2b2f">answer card, badge,</text>
+  <text x="91" y="89" text-anchor="middle" font-size="10.5" fill="#1e2b2f">citations, trace</text>
+
+  <rect x="200" y="34" width="170" height="62" rx="8" fill="#d7e9e6" stroke="#1f7a72"/>
+  <text x="285" y="58" text-anchor="middle" font-weight="bold" fill="#12343b">FastAPI: POST /ask</text>
+  <text x="285" y="76" text-anchor="middle" font-size="10.5" fill="#1e2b2f">signed sessions, reply cache,</text>
+  <text x="285" y="89" text-anchor="middle" font-size="10.5" fill="#1e2b2f">rate limits, PII-masked logs</text>
+  <line x1="166" y1="65" x2="198" y2="65" stroke="#5b6b73" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Graph -->
+  <rect x="404" y="28" width="480" height="196" rx="10" fill="#f3f8f7" stroke="#8fb9b3" stroke-dasharray="5 3"/>
+  <text x="416" y="46" font-size="11" font-weight="bold" fill="#5b6b73">LANGGRAPH AGENT (bounded: 10 tool steps, ~12k tokens, 60 s)</text>
+  <line x1="370" y1="65" x2="402" y2="65" stroke="#5b6b73" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="416" y="58" width="104" height="70" rx="8" fill="#ffffff" stroke="#1f7a72" stroke-width="1.4"/>
+  <text x="468" y="80" text-anchor="middle" font-weight="bold" fill="#12343b">Planner</text>
+  <text x="468" y="96" text-anchor="middle" font-size="10" fill="#1e2b2f">refusal first;</text>
+  <text x="468" y="108" text-anchor="middle" font-size="10" fill="#1e2b2f">JSON plan,</text>
+  <text x="468" y="120" text-anchor="middle" font-size="10" fill="#1e2b2f">no numbers</text>
+
+  <rect x="536" y="58" width="104" height="70" rx="8" fill="#ffffff" stroke="#1f7a72" stroke-width="1.4"/>
+  <text x="588" y="80" text-anchor="middle" font-weight="bold" fill="#12343b">Executor</text>
+  <text x="588" y="96" text-anchor="middle" font-size="10" fill="#1e2b2f">runs the tools;</text>
+  <text x="588" y="108" text-anchor="middle" font-size="10" fill="#1e2b2f">calculator from</text>
+  <text x="588" y="120" text-anchor="middle" font-size="10" fill="#1e2b2f">fetched figures</text>
+
+  <rect x="656" y="58" width="104" height="70" rx="8" fill="#ffffff" stroke="#1f7a72" stroke-width="1.4"/>
+  <text x="708" y="80" text-anchor="middle" font-weight="bold" fill="#12343b">Composer</text>
+  <text x="708" y="96" text-anchor="middle" font-size="10" fill="#1e2b2f">writes the text;</text>
+  <text x="708" y="108" text-anchor="middle" font-size="10" fill="#1e2b2f">values, citations</text>
+  <text x="708" y="120" text-anchor="middle" font-size="10" fill="#1e2b2f">from tool rows</text>
+
+  <rect x="776" y="58" width="100" height="70" rx="8" fill="#f8ebd3" stroke="#e3a23b" stroke-width="1.4"/>
+  <text x="826" y="80" text-anchor="middle" font-weight="bold" fill="#12343b">Critic</text>
+  <text x="826" y="96" text-anchor="middle" font-size="10" fill="#1e2b2f">deterministic</text>
+  <text x="826" y="108" text-anchor="middle" font-size="10" fill="#1e2b2f">checks, no</text>
+  <text x="826" y="120" text-anchor="middle" font-size="10" fill="#1e2b2f">model call</text>
+
+  <line x1="520" y1="93" x2="534" y2="93" stroke="#5b6b73" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="640" y1="93" x2="654" y2="93" stroke="#5b6b73" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="760" y1="93" x2="774" y2="93" stroke="#5b6b73" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M826,128 C826,150 708,150 708,130" fill="none" stroke="#b4483f" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <text x="767" y="160" text-anchor="middle" font-size="9.5" fill="#b4483f">fails: one send-back</text>
+  <path d="M588,128 C588,150 468,150 468,130" fill="none" stroke="#b4483f" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <text x="528" y="160" text-anchor="middle" font-size="9.5" fill="#b4483f">tool error: one replan</text>
+
+  <rect x="416" y="176" width="344" height="36" rx="6" fill="#ffffff" stroke="#8fb9b3"/>
+  <text x="588" y="198" text-anchor="middle" font-size="10.5" fill="#1e2b2f">Qwen3-8B (course endpoint): 1 call in the planner, 1 in the composer</text>
+  <rect x="776" y="176" width="100" height="36" rx="6" fill="#ffffff" stroke="#8fb9b3"/>
+  <text x="826" y="198" text-anchor="middle" font-size="10.5" fill="#1e2b2f">verified flag</text>
+
+  <path d="M826,212 L826,250 L330,250 L330,98" fill="none" stroke="#5b6b73" stroke-width="1.3" marker-end="url(#a)"/>
+  <text x="578" y="244" text-anchor="middle" font-size="10" fill="#5b6b73">answer contract: answer, values, calculation, citations, verified, refusal rule, notes</text>
+
+  <!-- Tools -->
+  <text x="16" y="282" font-size="11" font-weight="bold" fill="#5b6b73">TOOLS</text>
+  <rect x="16" y="292" width="200" height="54" rx="8" fill="#ffffff" stroke="#2f4858"/>
+  <text x="116" y="314" text-anchor="middle" font-weight="bold" fill="#12343b">search_filings</text>
+  <text x="116" y="331" text-anchor="middle" font-size="10" fill="#1e2b2f">hybrid BM25 + bge-small, filters</text>
+  <rect x="232" y="292" width="200" height="54" rx="8" fill="#ffffff" stroke="#2f4858"/>
+  <text x="332" y="314" text-anchor="middle" font-weight="bold" fill="#12343b">get_financial_fact</text>
+  <text x="332" y="331" text-anchor="middle" font-size="10" fill="#1e2b2f">17 XBRL metrics, exact values</text>
+  <rect x="448" y="292" width="200" height="54" rx="8" fill="#ffffff" stroke="#2f4858"/>
+  <text x="548" y="314" text-anchor="middle" font-weight="bold" fill="#12343b">compare_periods</text>
+  <text x="548" y="331" text-anchor="middle" font-size="10" fill="#1e2b2f">one metric across years, YoY growth</text>
+  <rect x="664" y="292" width="212" height="54" rx="8" fill="#ffffff" stroke="#2f4858"/>
+  <text x="770" y="314" text-anchor="middle" font-weight="bold" fill="#12343b">calculate</text>
+  <text x="770" y="331" text-anchor="middle" font-size="10" fill="#1e2b2f">ratio, percent, growth, sum, CAGR ...</text>
+  <line x1="588" y1="212" x2="588" y2="290" stroke="#2f4858" stroke-width="1.2" stroke-dasharray="3 3"/>
+
+  <!-- Data pipeline -->
+  <text x="16" y="372" font-size="11" font-weight="bold" fill="#5b6b73">OFFLINE DATA PIPELINE (make ingest index)</text>
+  <rect x="16" y="382" width="868" height="38" rx="8" fill="#eaf2f1" stroke="#8fb9b3"/>
+  <text x="450" y="406" text-anchor="middle" font-size="10.5" fill="#1e2b2f">SEC EDGAR: 120 filings → 1,260 Item sections → C3 table-aware chunks → BM25 + Chroma index   ·   SEC companyfacts → XBRL facts per company</text>
+
+  <!-- Langfuse -->
+  <rect x="16" y="196" width="280" height="44" rx="8" fill="#ffffff" stroke="#e3a23b"/>
+  <text x="156" y="214" text-anchor="middle" font-weight="bold" font-size="11" fill="#12343b">Langfuse tracing</text>
+  <text x="156" y="230" text-anchor="middle" font-size="9.5" fill="#1e2b2f">a span per node, tool and model call; PII masked</text>
+</svg>
