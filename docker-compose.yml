@@ -5,6 +5,7 @@
 # - api: uvicorn api.main:app, the only service that reads .env (the endpoint key, Langfuse keys). The index,
 #   the chunks, the XBRL facts and the filing manifest are mounted from data/; the reply cache is mounted writable.
 # - ui: streamlit run ui/app.py. It talks only to the API, needs no secret, and starts once the API is healthy.
+# - tools profile: the same image with all of data/ writable, for `make ingest index DOCKER=1`.
 # - langfuse profile (optional): a self-hosted Langfuse v3 (web, worker, Postgres, ClickHouse, Redis, MinIO),
 #   following Langfuse's own Compose file; its secrets come from the LF_* lines in .env (`make langfuse`).
 #   The team traces to Langfuse Cloud instead (.env.example, ADR-029).
@@ -67,6 +68,19 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # The data pipeline in the image (`make ingest index DOCKER=1`): the whole of data/ writable, which the api's
+  # read-only mounts would not allow. A profile, so `make up` never starts it; `docker compose run` does.
+  tools:
+    <<: *finsight
+    profiles: ["tools"]
+    restart: "no"
+    command: ["python", "--version"]
+    env_file: .env              # SEC_USER_AGENT for the download; the embedding settings for the index
+    volumes:
+      - ./data:/app/data
+      - ./certs:/app/certs:ro
+      - hf-cache:/cache/huggingface
 
   # ---- optional: self-hosted Langfuse v3 (`make langfuse`; tracing to it: LANGFUSE_HOST=http://langfuse-web:3000)
   langfuse-worker:

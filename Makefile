@@ -10,7 +10,7 @@ SHELL := /bin/bash
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 COMPOSE ?= docker compose
 ifeq ($(DOCKER),1)
-RUN = $(COMPOSE) run --rm --no-deps --volume "$(CURDIR)/data:/app/data" api python
+RUN = $(COMPOSE) run --rm tools python
 else
 RUN = $(PYTHON)
 endif

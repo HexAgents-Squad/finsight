@@ -35,7 +35,7 @@ One command, `make up`, starts the API and the UI, which talks to it. The data a
 6. **Stop:** `make down` stops the containers. The data, the reply cache and the model volume are kept, so the next `make up` is quick.
 
 **Other targets** (`make help` lists them all):
-- `make test`: ruff and pytest, as CI runs them.
+- `make test`: ruff and pytest, as CI runs them. Like `make eval`, it runs on the host and needs the virtual environment from [LOCAL_SETUP.md](LOCAL_SETUP.md).
 - `make eval`: offline checks of the gold, test and development sets, and of the evaluation report against the committed results.
 - `make ps` and `make logs`: the containers' health and their logs.
 - `make langfuse`: optional, a self-hosted Langfuse at http://localhost:3000. It needs the `LF_*` lines in `.env`; the team traces to Langfuse Cloud instead.

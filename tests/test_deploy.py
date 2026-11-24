@@ -47,9 +47,9 @@ def test_the_two_services_run_the_documented_commands_from_one_image():
     assert ui["environment"]["FINSIGHT_API_URL"] == "http://api:8000"     # the UI talks only to the API
 
 
-def test_only_the_api_reads_env_and_every_port_listens_on_localhost():
-    assert SERVICES["api"]["env_file"] == ".env"
-    assert [name for name, s in SERVICES.items() if "env_file" in s] == ["api"]
+def test_only_the_api_and_the_pipeline_read_env_and_every_port_listens_on_localhost():
+    assert SERVICES["api"]["env_file"] == SERVICES["tools"]["env_file"] == ".env"
+    assert [name for name, s in SERVICES.items() if "env_file" in s] == ["api", "tools"]
     assert not any(SECRET_NAME.search(key) for key in SERVICES["ui"]["environment"])
     ports = [p for s in SERVICES.values() for p in s.get("ports", [])]
     assert ports and all(p.startswith("127.0.0.1:") for p in ports), ports    # the API has no authentication
@@ -71,6 +71,17 @@ def test_the_api_mounts_exactly_the_data_the_code_loads():
     assert mounts["/cache/huggingface"][0] == "hf-cache" and "HF_HOME=/cache/huggingface" in DOCKERFILE
 
 
+def test_the_pipeline_in_the_image_can_write_all_of_data():
+    """`make ingest index DOCKER=1` writes raw/, sections/, xbrl/, chunks/ and index/: through the tools service,
+    whose data/ is writable, never the api's read-only mounts (which a `run --volume` would sit under)."""
+    tools = SERVICES["tools"]
+    assert tools["profiles"] == ["tools"] and "ports" not in tools          # `make up` never starts it
+    assert volumes("tools")["/app/data"] == ("./data", "rw")
+    assert not [t for t in volumes("tools") if t.startswith("/app/data/")]
+    run = re.search(r"^ifeq \(\$\(DOCKER\),1\)\nRUN = (.*)$", MAKEFILE, re.M).group(1)
+    assert run == "$(COMPOSE) run --rm tools python"
+
+
 def test_health_checks_gate_the_ui_on_a_ready_api():
     api, ui = SERVICES["api"], SERVICES["ui"]
     assert "/health" in " ".join(api["healthcheck"]["test"])    # 200 only when ready, 503 while starting
@@ -80,7 +91,7 @@ def test_health_checks_gate_the_ui_on_a_ready_api():
 
 
 def test_langfuse_is_an_optional_profile_whose_secrets_all_come_from_env():
-    optional = {name: s for name, s in SERVICES.items() if name not in ("api", "ui")}
+    optional = {name: s for name, s in SERVICES.items() if name not in ("api", "ui", "tools")}
     assert {"langfuse-web", "langfuse-worker", "postgres"} <= set(optional)
     assert all(s.get("profiles") == ["langfuse"] for s in optional.values())
     assert "profiles" not in SERVICES["api"] and "profiles" not in SERVICES["ui"]

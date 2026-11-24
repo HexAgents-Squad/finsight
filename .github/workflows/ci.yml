@@ -81,7 +81,15 @@ jobs:
           make --dry-run DOCKER=1 ingest index
 
       - name: Build the image
-        run: docker compose build api
+        run: |
+          docker compose build api
+          docker image ls finsight:local
+
+      - name: The data pipeline container can write every data folder (make ingest index DOCKER=1)
+        run: |
+          mkdir -p data/raw data/sections data/xbrl data/chunks data/index certs
+          export FINSIGHT_UID=$(id -u) FINSIGHT_GID=$(id -g)
+          docker compose run --rm tools sh -c 'for d in raw sections xbrl chunks index; do touch data/$d/.w && rm data/$d/.w || exit 1; done'
 
       - name: The image holds no secret, no data and no tests, and imports the app
         run: >-
