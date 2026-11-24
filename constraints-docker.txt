@@ -1,0 +1,29 @@
+# Pins for the Docker image (W3-11, ADR-046), applied with `pip install -c`: the versions of the full set tested
+# locally on Python 3.14 (requirements.txt), so a rebuild next week installs what was tested. Most important,
+# chromadb: the image opens the index that `make index` built, read-write, and a newer chromadb may migrate it.
+# Update these with the local versions after testing a change (pip list), never to whatever is newest.
+beautifulsoup4==4.15.0
+chromadb==1.5.9
+fastapi==0.165.0
+httpx==0.28.1
+langchain-core==1.8.1
+langfuse==3.15.0
+langgraph==1.2.22
+lxml==6.1.3
+numpy==2.5.4
+onnxruntime==1.31.1
+openai==3.45.0
+pydantic==2.14.2
+pydantic-settings==2.16.2
+python-dotenv==1.2.4
+PyYAML==6.0.3
+rank-bm25==0.2.2
+requests==2.34.2
+sentence-transformers==6.2.0
+slowapi==0.1.10
+starlette==1.10.0
+streamlit==1.67.0
+tokenizers==0.23.3
+torch==2.15.0
+transformers==5.22.1
+uvicorn==0.54.0

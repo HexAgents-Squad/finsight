@@ -1,7 +1,7 @@
 # Application dependencies. Dev tools (pytest, ruff) and their pinned versions come from requirements-dev.txt.
 # Upper bounds on the heavy libraries: their next major versions have changed APIs before (chromadb 0.x -> 1.x
-# changed how collections are listed and looked up). The full set is tested locally on Python 3.14 (openai 3.37,
-# chromadb 1.5.9, sentence-transformers 6.1, numpy 2.5); CI (Python 3.12) installs only requirements-dev.txt.
+# changed how collections are listed and looked up). The full set is tested locally on Python 3.14 (the tested versions,
+# pinned for the Docker image: constraints-docker.txt); CI (Python 3.12) installs only requirements-dev.txt.
 -r requirements-dev.txt
 pydantic>=2.6.0
 pydantic-settings>=2.2.0

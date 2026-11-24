@@ -56,3 +56,63 @@ jobs:
       # verification, separation from gold-v1 and from v1)
       - name: Validate development set v2 (final rules, no overlap with gold-v1 or v1)
         run: python eval/validate_dev_set.py eval/dev_set_v2.jsonl --final
+
+  # W3-11 (ADR-046): the deployment works on Linux. No data and no secret here, so the API starts and reports
+  # itself degraded (it cannot load an index), which proves the image, the settings and the commands; the UI starts
+  # on its own. tests/test_deploy.py checks the files themselves.
+  docker:
+    name: Docker image, Compose file and Makefile
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Compose file is valid, with and without the Langfuse profile
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose --profile langfuse config --quiet
+
+      - name: Makefile targets parse (dry run)
+        run: |
+          make help
+          make --dry-run ingest index eval test up down
+          make --dry-run DOCKER=1 ingest index
+
+      - name: Build the image
+        run: |
+          docker compose build api
+          docker image ls finsight:local
+
+      - name: The data pipeline container can write every data folder (make ingest index DOCKER=1)
+        run: |
+          mkdir -p data/raw data/sections data/xbrl data/chunks data/index certs
+          export FINSIGHT_UID=$(id -u) FINSIGHT_GID=$(id -g)
+          docker compose run --rm tools sh -c 'for d in raw sections xbrl chunks index; do touch data/$d/.w && rm data/$d/.w || exit 1; done'
+
+      - name: The image holds no secret, no data and no tests, and imports the app
+        run: >-
+          docker run --rm --entrypoint sh finsight:local -c
+          'test ! -e .env && test ! -e certs && test ! -e tests && test ! -e .git && test -z "$(ls -A data)"
+          && python -c "import api.main, ui.client, chromadb, sentence_transformers, langgraph, streamlit"'
+
+      - name: The containers start (the API reports degraded without data, and the UI answers its health check)
+        run: |
+          mkdir -p data/index data/chunks data/xbrl data/raw data/cache/llm certs
+          export FINSIGHT_UID=$(id -u) FINSIGHT_GID=$(id -g)
+          docker compose up --detach --no-build api
+          docker compose up --detach --no-build --no-deps ui
+          for i in $(seq 1 60); do
+            curl -s http://127.0.0.1:8000/health > health.json || true
+            grep -q '"status":"degraded"' health.json && break
+            sleep 3
+          done
+          cat health.json
+          grep -q '"status":"degraded"' health.json
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8501/_stcore/health && break; sleep 2; done
+          curl -sf http://127.0.0.1:8501/_stcore/health
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker compose logs

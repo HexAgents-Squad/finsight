@@ -11,6 +11,46 @@ The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt). What
 ## Setup in 15 minutes
 Python 3.11–3.14 venv → `pip install -r requirements.txt` → install Ollama and pull `llama3.2:3b` (chat) → copy `.env.example` to `.env` → `python scripts/smoke_llm.py` → `pytest -q`. Embeddings are `bge-small-en-v1.5`, from the course's embedding endpoint (`EMBED_BACKEND=openai`) or run locally as `BAAI/bge-small-en-v1.5` (the same vectors, downloaded on first use). Step by step, including the data pipeline and the hosted Qwen3-8B endpoint (group CA certificate, `.env` only): [LOCAL_SETUP.md](LOCAL_SETUP.md).
 
+## Run it with Docker (W3-11)
+One command, `make up`, starts the API and the UI, which talks to it. The data and `.env` stay on your machine and are mounted at run time, so no image holds a secret or the corpus (ADR-046).
+
+**You need:** Docker with Compose v2 (`docker compose version`), GNU make, git and python3. On Windows, use WSL2: install Docker Desktop with the WSL2 backend and Ubuntu from the Microsoft Store, then run every command below in the Ubuntu shell. Clone into the Linux file system (`~/`), not `/mnt/c`: it is much faster, and the search index's SQLite file needs real file locks.
+
+1. **Clone:**
+   ```bash
+   git clone https://github.com/HexAgents-Squad/finsight.git
+   cd finsight
+   ```
+   The repository is private, so git asks for your GitHub sign-in. In WSL2, to reuse the one Git for Windows already
+   holds, run this once before cloning:
+   `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/libexec/git-core/git-credential-manager.exe"`.
+   Elsewhere, sign in with a personal access token, or clone over SSH.
+2. **Settings:** `cp .env.example .env`, then edit `.env`:
+   - the hosted endpoint: the five `LLM_*` lines from [LOCAL_SETUP.md](LOCAL_SETUP.md#hosted-endpoint-qwen3-8b), with the group's CA certificate in `certs/`;
+   - or a local Ollama on the same machine: `LLM_BASE_URL=http://host.docker.internal:11434/v1` (inside a container, `localhost` is the container itself);
+   - `SEC_USER_AGENT` with your contact e-mail (needed only to download the filings).
+3. **Data:** the API loads the C3 search index, its chunks, the XBRL facts and the filing manifest from `data/`. Either:
+   - copy them from a teammate who built them: `data/index/`, `data/chunks/chunks_C3.jsonl`, `data/xbrl/` and `data/raw/manifest.jsonl` (about 1.4 GB), or
+   - build them with `make ingest index DOCKER=1` (in the image, so no Python setup is needed). It downloads 120 filings from SEC EDGAR and builds the index, which takes well over an hour on a CPU.
+
+   `make check-data` lists anything still missing.
+4. **Start:** `make up`. It checks `.env` and `data/`, builds the image, starts both containers and waits until both are healthy. The first run takes several minutes: it installs the libraries and downloads the embedding model and the tokenizer into a Docker volume. It then prints the two addresses.
+5. **Use it:** open http://localhost:8501 and ask, for example, "What were Apple's total net sales in fiscal 2024?". The API's own documentation is at http://localhost:8000/docs.
+6. **Stop:** `make down` stops the containers. The data, the reply cache and the model volume are kept, so the next `make up` is quick.
+
+**Other targets** (`make help` lists them all):
+- `make test`: ruff and pytest, as CI runs them. Like `make eval`, it runs on the host and needs the virtual environment from [LOCAL_SETUP.md](LOCAL_SETUP.md).
+- `make eval`: offline checks of the gold, test and development sets, and of the evaluation report against the committed results.
+- `make ps` and `make logs`: the containers' health and their logs.
+- `make langfuse`: optional, a self-hosted Langfuse at http://localhost:3000. It needs the `LF_*` lines in `.env`; the team traces to Langfuse Cloud instead.
+
+**If something goes wrong:**
+- The API stays unhealthy: `make logs` shows the reason. Usually a file is missing from `data/`, or the `LLM_CA_CERT` path does not exist under `certs/`.
+- A port is in use: set `FINSIGHT_UI_PORT` or `FINSIGHT_API_PORT` in `.env`.
+- Questions fail but `/health` says ok: check the `LLM_*` lines. The smoke test checks them outside Docker: `python scripts/smoke_llm.py`.
+
+The second-person run on a clean machine is recorded in [docs/deploy_check.md](docs/deploy_check.md).
+
 ## Status (end of Week 0)
 Built and tested: corpus download and Item-level parsing (`ingest/01`, `02`), XBRL facts (`ingest/05`), chunking and hybrid retrieval with recall@k (`ingest/03`, `04`, `retrieval/`, `eval/run_retrieval.py`), the four agent tools (`tools/`), the LLM client (`core/`), the gold set (`eval/gold_set.jsonl`, tag `gold-v1`) and the refusal/injection test sets. Planned: the agents (`agent/`), the API (`api/`), the UI (`ui/`) and a reranker. Decisions: [docs/decisions.md](docs/decisions.md); retrieval results: [eval/results/retrieval_summary.md](eval/results/retrieval_summary.md).
 

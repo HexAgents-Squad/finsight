@@ -1,0 +1,211 @@
+# FinSight with Docker Compose (W3-11, ADR-046). `make up` checks data/ and .env, then runs
+# `docker compose up --build --detach --wait`. The UI is then at http://localhost:8501 and the API at
+# http://localhost:8000/docs. README.md has the steps from a clean clone.
+#
+# - api: uvicorn api.main:app, the only service that reads .env (the endpoint key, Langfuse keys). The index,
+#   the chunks, the XBRL facts and the filing manifest are mounted from data/; the reply cache is mounted writable.
+# - ui: streamlit run ui/app.py. It talks only to the API, needs no secret, and starts once the API is healthy.
+# - tools profile: the same image with all of data/ writable, for `make ingest index DOCKER=1`.
+# - langfuse profile (optional): a self-hosted Langfuse v3 (web, worker, Postgres, ClickHouse, Redis, MinIO),
+#   following Langfuse's own Compose file; its secrets come from the LF_* lines in .env (`make langfuse`).
+#   The team traces to Langfuse Cloud instead (.env.example, ADR-029).
+#
+# The ports listen on 127.0.0.1 only (the API has no authentication). The containers run as the host user
+# (FINSIGHT_UID/GID, set by the Makefile), so files they write to data/ stay the user's.
+
+x-finsight: &finsight
+  build: .
+  image: finsight:local
+  user: "${FINSIGHT_UID:-1000}:${FINSIGHT_GID:-1000}"
+  init: true
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  api:
+    <<: *finsight
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    # The host machine's name inside the container, also on Linux: a local Ollama is
+    # LLM_BASE_URL=http://host.docker.internal:11434/v1 in .env (localhost would be the container itself)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${FINSIGHT_API_PORT:-8000}:8000"
+    volumes:
+      - ./data/index:/app/data/index              # BM25 + Chroma (Chroma opens its SQLite file read-write)
+      - ./data/chunks:/app/data/chunks:ro         # the C3 chunks the dense index returns
+      - ./data/xbrl:/app/data/xbrl:ro             # the XBRL company facts
+      - ./data/raw:/app/data/raw:ro               # manifest.jsonl: the filings the facts tool cites
+      - ./data/cache/llm:/app/data/cache/llm      # the reply cache (LLM_CACHE_DIR)
+      - ./certs:/app/certs:ro                     # the endpoint's CA certificate (LLM_CA_CERT=certs/...)
+      - hf-cache:/cache/huggingface               # the embedding model and the tokenizers, downloaded once
+    healthcheck:
+      # /health answers 200 only once the index, the facts and the agent are loaded (503 while starting)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 600s        # the first start downloads the embedding model and loads ~1 GB of index
+
+  ui:
+    <<: *finsight
+    command: ["streamlit", "run", "ui/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+    environment:
+      FINSIGHT_API_URL: http://api:8000
+      FINSIGHT_TRACE_SESSIONS_URL: ${FINSIGHT_TRACE_SESSIONS_URL:-}
+    ports:
+      - "127.0.0.1:${FINSIGHT_UI_PORT:-8501}:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # The data pipeline in the image (`make ingest index DOCKER=1`): the whole of data/ writable, which the api's
+  # read-only mounts would not allow. A profile, so `make up` never starts it; `docker compose run` does.
+  tools:
+    <<: *finsight
+    profiles: ["tools"]
+    restart: "no"
+    command: ["python", "--version"]
+    env_file: .env              # SEC_USER_AGENT for the download; the embedding settings for the index
+    volumes:
+      - ./data:/app/data
+      - ./certs:/app/certs:ro
+      - hf-cache:/cache/huggingface
+
+  # ---- optional: self-hosted Langfuse v3 (`make langfuse`; tracing to it: LANGFUSE_HOST=http://langfuse-web:3000)
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    profiles: ["langfuse"]
+    restart: unless-stopped
+    depends_on: &langfuse-depends
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://postgres:${LF_POSTGRES_PASSWORD:-}@postgres:5432/postgres
+      SALT: ${LF_SALT:-}
+      ENCRYPTION_KEY: ${LF_ENCRYPTION_KEY:-}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LF_MINIO_PASSWORD:-}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LF_MINIO_PASSWORD:-}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LF_REDIS_PASSWORD:-}
+      REDIS_TLS_ENABLED: "false"
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    profiles: ["langfuse"]
+    restart: unless-stopped
+    depends_on: *langfuse-depends
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${LF_NEXTAUTH_SECRET:-}
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3
+    profiles: ["langfuse"]
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    profiles: ["langfuse"]
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${LF_MINIO_PASSWORD:-}
+    ports:
+      - "127.0.0.1:9090:9000"
+    volumes:
+      - langfuse-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  redis:
+    image: redis:7
+    profiles: ["langfuse"]
+    restart: unless-stopped
+    command: ["--requirepass", "${LF_REDIS_PASSWORD:-}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: postgres:17
+    profiles: ["langfuse"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LF_POSTGRES_PASSWORD:-}
+      POSTGRES_DB: postgres
+    volumes:
+      - langfuse-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  hf-cache:
+  langfuse-postgres-data:
+  langfuse-clickhouse-data:
+  langfuse-clickhouse-logs:
+  langfuse-minio-data:
