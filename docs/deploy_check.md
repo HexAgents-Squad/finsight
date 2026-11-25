@@ -20,6 +20,7 @@ To be filled in by the person who ran it. Nothing below is a result until they d
 
 ## Fixes needed
 - The repository is private, so `git clone` fails without a GitHub sign-in. It's fixed in the README in commit `3625045`.
+  (Since 25 Nov 2026 the repository is public: cloning needs no sign-in, and the README says so.)
 
 ## Result
 - [x] `make up` served the UI against the API

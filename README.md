@@ -21,10 +21,9 @@ One command, `make up`, starts the API and the UI, which talks to it. The data a
    git clone https://github.com/HexAgents-Squad/finsight.git
    cd finsight
    ```
-   The repository is private, so git asks for your GitHub sign-in. In WSL2, to reuse the one Git for Windows already
-   holds, run this once before cloning:
+   The repository is public, so cloning needs no sign-in. Pushing does (team members only): in WSL2, to reuse the
+   GitHub sign-in Git for Windows already holds, run this once:
    `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/libexec/git-core/git-credential-manager.exe"`.
-   Elsewhere, sign in with a personal access token, or clone over SSH.
 2. **Settings:** `cp .env.example .env`, then edit `.env`:
    - the hosted endpoint: the five `LLM_*` lines from [LOCAL_SETUP.md](LOCAL_SETUP.md#hosted-endpoint-qwen3-8b), with the group's CA certificate in `certs/`;
    - or a local Ollama on the same machine: `LLM_BASE_URL=http://host.docker.internal:11434/v1` (inside a container, `localhost` is the container itself);
@@ -62,6 +61,7 @@ The agentic layer: a LangGraph planner → executor → composer → critic agen
 
 ## Week 3 (22–27 Nov, next)
 Evaluate, improve, harden, ship: ablations; an improved agent (A5: stronger deterministic critic checks, the missing XBRL metrics, better summaries and refusal edge cases, tuned on a development set v2 and run on gold once); optimization of latency, tokens and code; the evaluation report with the failure taxonomy; the trace dashboard; safety tests through the API; Docker Compose; the 12-page report; code freeze 25 Nov, submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt).
+The technical report: [docs/report/final_report.pdf](docs/report/final_report.pdf) (source [final_report.md](docs/report/final_report.md), rubric checklist [rubric_checklist.md](docs/report/rubric_checklist.md)); the evaluation report: [eval/results/evaluation_report.md](eval/results/evaluation_report.md).
 
 ## Folder structure
 ```
