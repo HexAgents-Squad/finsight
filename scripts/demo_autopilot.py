@@ -168,7 +168,8 @@ async def drive(url: str, headless: bool, pause: float | None, shots: Path | Non
     args = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--window-size=1440,960", "about:blank"] + (["--headless=new"] if headless else [])
     print(f"Starting {'headless ' if headless else ''}Chrome ...", flush=True)
-    proc = subprocess.Popen(args)
+    log = open(profile / "chrome.log", "wb")                       # Chrome's own messages, for a failed start
+    proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
     local = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 127.0.0.1 never through a proxy
     failed = 0
     try:
@@ -186,8 +187,17 @@ async def drive(url: str, headless: bool, pause: float | None, shots: Path | Non
                 time.sleep(0.3)
         pages = [t["webSocketDebuggerUrl"] for t in tabs or [] if t.get("type") == "page"]
         if not pages:
-            print(f"Chrome did not open its debugging connection within {STARTUP_S} s; close other Chrome windows "
-                  "started by this script and try again", file=sys.stderr)
+            log.flush()
+            active = profile / "DevToolsActivePort"
+            tail = (profile / "chrome.log").read_text(encoding="utf-8", errors="replace").strip().splitlines()[-8:]
+            port_text = active.read_text().split()[0] if active.exists() and active.read_text().strip() else ""
+            lines = [f"Chrome did not open its debugging connection within {STARTUP_S} s.",
+                     f"  Chrome: {exe}",
+                     f"  still running: {proc.poll() is None} (exit code {proc.poll()})",
+                     f"  port file written: {active.exists()} {port_text}",
+                     f"  profile: {profile}",
+                     "  Chrome's last messages:"] + [f"    {line}" for line in tail or ["(none)"]]
+            print("\n".join(lines), file=sys.stderr)
             return 2
         ws_url = pages[0]
         async with websockets.connect(ws_url, max_size=50_000_000, proxy=None) as ws:
@@ -236,6 +246,7 @@ async def drive(url: str, headless: bool, pause: float | None, shots: Path | Non
                 input("\n[Enter] close the browser")
     finally:
         proc.terminate()
+        log.close()
     print(f"\n{len(STEPS) - failed} of {len(STEPS)} steps showed their expected answer.")
     return 1 if failed else 0
 
