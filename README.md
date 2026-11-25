@@ -6,6 +6,15 @@ Capstone project (Track B · API-Side), Executive PG Programme in Generative AI 
 Team **HexAgents_Squad**: Alok Srivastava · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj
 Mentor: Dr. Gunjan Balde
 
+## v1.0 at a glance (submission, 26 Nov 2026)
+- **Result:** on the frozen gold set (80 questions and 22 refusal tests), the final agent A5 answers 95 of 102 correctly, against 86 for the Week 2 agent A1 and 50 for the Week 1 single-prompt baseline B0; no agent version states a number found in no source (B0: 9); 5.5 s per question (median).
+- **Technical report (12 pages):** [docs/report/final_report.pdf](docs/report/final_report.pdf), checked against the criteria in [docs/report/rubric_checklist.md](docs/report/rubric_checklist.md).
+- **Evaluation report with the failure taxonomy:** [eval/results/evaluation_report.md](eval/results/evaluation_report.md) ([PDF](eval/results/report/evaluation_report.pdf)).
+- **Trace dashboard:** traced runs in [eval/results/traces/](eval/results/traces/), Langfuse screenshots in [docs/screenshots/w3/](docs/screenshots/w3/).
+- **The final UI:** [docs/screenshots/w3-12/](docs/screenshots/w3-12/); responsible AI: [docs/responsible_ai.md](docs/responsible_ai.md).
+- **Release notes and how to verify them:** [docs/release_v1.0.md](docs/release_v1.0.md) (`python scripts/release_check.py`); every design decision: [docs/decisions.md](docs/decisions.md).
+- **Run it:** `make up` with Docker ([below](#run-it-with-docker-w3-11)), or locally from [LOCAL_SETUP.md](LOCAL_SETUP.md).
+
 The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt). What FinSight answers, refuses and returns is defined in [docs/spec.md](docs/spec.md); the corpus scope is [config/companies.yaml](config/companies.yaml).
 
 ## Setup in 15 minutes
@@ -50,8 +59,8 @@ One command, `make up`, starts the API and the UI, which talks to it. The data a
 
 The second-person run on a clean machine is recorded in [docs/deploy_check.md](docs/deploy_check.md).
 
-## Status (end of Week 0)
-Built and tested: corpus download and Item-level parsing (`ingest/01`, `02`), XBRL facts (`ingest/05`), chunking and hybrid retrieval with recall@k (`ingest/03`, `04`, `retrieval/`, `eval/run_retrieval.py`), the four agent tools (`tools/`), the LLM client (`core/`), the gold set (`eval/gold_set.jsonl`, tag `gold-v1`) and the refusal/injection test sets. Planned: the agents (`agent/`), the API (`api/`), the UI (`ui/`) and a reranker. Decisions: [docs/decisions.md](docs/decisions.md); retrieval results: [eval/results/retrieval_summary.md](eval/results/retrieval_summary.md).
+## Week 0 (29 Oct – 6 Nov, complete)
+The specification and refusal policy ([docs/spec.md](docs/spec.md)); corpus download and Item-level parsing (`ingest/01`, `02`), XBRL facts (`ingest/05`), chunking and hybrid retrieval with recall@k (`ingest/03`, `04`, `retrieval/`, `eval/run_retrieval.py`), the four agent tools (`tools/`), the LLM client (`core/`), the gold set (`eval/gold_set.jsonl`, frozen as tag `gold-v1` before any answer was measured) and the refusal and injection test sets. Retrieval results: [eval/results/retrieval_summary.md](eval/results/retrieval_summary.md); plan: [docs/week0_plan.txt](docs/week0_plan.txt).
 
 ## Week 1 (10–14 Nov, complete; open items carried into Week 2)
 The provided Qwen3-8B endpoint; a model comparison (Qwen3-8B vs Llama-3.2-3B, with and without retrieval) on short and summary answers, refusals and hallucinations; prompting baselines (zero-shot, few-shot, chain-of-thought with self-consistency, decomposition); retrieval experiments (re-index, question-derived filters, statements first, reranker). Results: [docs/report/week1_results_note.md](docs/report/week1_results_note.md) (one page) and [docs/report/week1_detailed_results.md](docs/report/week1_detailed_results.md); tickets and contracts: [docs/week1_plan.txt](docs/week1_plan.txt).
@@ -59,8 +68,8 @@ The provided Qwen3-8B endpoint; a model comparison (Qwen3-8B vs Llama-3.2-3B, wi
 ## Week 2 (16–22 Nov, complete)
 The agentic layer: a LangGraph planner → executor → composer → critic agent on the four tools, memory across turns, Langfuse tracing, a FastAPI service and a Streamlit UI, prompt-injection and PII defences; the 10 demo queries met their expectation and the agent's gold run (A1) got 42/48 numeric answers right against the Week 1 baseline's 16/48. Results: [docs/report/week2_results_note.md](docs/report/week2_results_note.md) (one page) and [docs/report/week2_detailed_results.md](docs/report/week2_detailed_results.md); plan, design and tickets: [docs/week2_plan.txt](docs/week2_plan.txt).
 
-## Week 3 (22–27 Nov, next)
-Evaluate, improve, harden, ship: ablations; an improved agent (A5: stronger deterministic critic checks, the missing XBRL metrics, better summaries and refusal edge cases, tuned on a development set v2 and run on gold once); optimization of latency, tokens and code; the evaluation report with the failure taxonomy; the trace dashboard; safety tests through the API; Docker Compose; the 12-page report; code freeze 25 Nov, submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt).
+## Week 3 (22–26 Nov, complete)
+Evaluate, improve, harden, ship: ablations; an improved agent (A5: stronger deterministic critic checks, the missing XBRL metrics, better summaries and refusal edge cases, tuned on a development set v2 and run on gold once: 95 of 102 against A1's 86); optimization of latency, tokens and code; the evaluation report with the failure taxonomy; the trace dashboard; safety tests through the API; Docker Compose; the 12-page report; code freeze 25 Nov, release v1.0 and submission 26 Nov. Plan and tickets: [docs/week3_plan.txt](docs/week3_plan.txt); release notes: [docs/release_v1.0.md](docs/release_v1.0.md).
 The technical report: [docs/report/final_report.pdf](docs/report/final_report.pdf) (source [final_report.md](docs/report/final_report.md), rubric checklist [rubric_checklist.md](docs/report/rubric_checklist.md)); the evaluation report: [eval/results/evaluation_report.md](eval/results/evaluation_report.md).
 
 ## Folder structure

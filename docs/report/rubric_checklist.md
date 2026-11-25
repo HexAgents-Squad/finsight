@@ -28,7 +28,7 @@ Status: **met** (evidence committed), **open** (the named ticket finishes it), *
 |---|---|---|
 | Weekly plans and results notes, on time | `docs/week0_plan.txt` … `docs/week3_plan.txt`; `docs/report/week1_results_note.md`, `docs/report/week2_results_note.md` | met |
 | One reviewed pull request per ticket, CI green | the repository's pull requests; `.github/workflows/ci.yml` | met |
-| Code freeze 25 Nov, release v1.0 and submission 26 Nov | W3-13 | open |
+| Code freeze 25 Nov, release v1.0 and submission 26 Nov | `docs/release_v1.0.md`, `scripts/release_check.py`; W3-13 | partly: the release check and notes are in; the v1.0 tag and the upload follow the merge |
 | Mentor sessions used and recorded | `docs/mentor_meetings.md` | partly: only the 7 Nov session is recorded; the Week 1 and Week 2 reviews should be added (W3-13) |
 
 ### A working deployed system (20%)
