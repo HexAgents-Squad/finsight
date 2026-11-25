@@ -2,7 +2,7 @@
 
 <p class="subtitle">Technical report · Capstone Track B (API-side) · Executive PG Programme in Generative AI &amp; Agentic AI, IIT Kharagpur · 26 Nov 2026</p>
 
-**Team HexAgents_Squad:** Alok Srivastava (editor) · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj. **Mentor:** Dr. Gunjan Balde. **Code:** github.com/HexAgents-Squad/finsight (private).
+**Team HexAgents_Squad:** Alok Srivastava (editor) · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj. **Mentor:** Dr. Gunjan Balde. **Code (public):** [github.com/HexAgents-Squad/finsight](https://github.com/HexAgents-Squad/finsight).
 
 **How this report was written.** Every section was drafted by the editor with an AI assistant (Claude) from committed results, then reviewed by the member who owns that work, named under each heading. Five standards run through it. *Clarity:* one claim per paragraph, the result first. *Traceability:* every number in a section appears in a file that section cites on its Sources line; `python scripts/final_report.py --check` verifies this in CI, along with the page limit and that this PDF matches its source. *Evidence:* committed result files, graded answers, traces and screenshots of the final UI. *Reproducibility:* every result regenerates from committed files and the reply cache (Appendix A and B). *Measurable impact:* each change is reported as a before-and-after on the same questions, with paired tests (§8, §9).
 

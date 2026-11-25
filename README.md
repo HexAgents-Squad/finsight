@@ -21,10 +21,9 @@ One command, `make up`, starts the API and the UI, which talks to it. The data a
    git clone https://github.com/HexAgents-Squad/finsight.git
    cd finsight
    ```
-   The repository is private, so git asks for your GitHub sign-in. In WSL2, to reuse the one Git for Windows already
-   holds, run this once before cloning:
+   The repository is public, so cloning needs no sign-in. Pushing does (team members only): in WSL2, to reuse the
+   GitHub sign-in Git for Windows already holds, run this once:
    `git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/libexec/git-core/git-credential-manager.exe"`.
-   Elsewhere, sign in with a personal access token, or clone over SSH.
 2. **Settings:** `cp .env.example .env`, then edit `.env`:
    - the hosted endpoint: the five `LLM_*` lines from [LOCAL_SETUP.md](LOCAL_SETUP.md#hosted-endpoint-qwen3-8b), with the group's CA certificate in `certs/`;
    - or a local Ollama on the same machine: `LLM_BASE_URL=http://host.docker.internal:11434/v1` (inside a container, `localhost` is the container itself);
