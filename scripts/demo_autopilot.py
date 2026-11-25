@@ -197,6 +197,10 @@ async def drive(url: str, headless: bool, pause: float | None, shots: Path | Non
                      f"  port file written: {active.exists()} {port_text}",
                      f"  profile: {profile}",
                      "  Chrome's last messages:"] + [f"    {line}" for line in tail or ["(none)"]]
+            if proc.poll() == 0 and not active.exists():
+                lines.append("  Chrome exited at once without opening a window: it handed the start to a Chrome that is "
+                             "already running. Close every Chrome window (and Chrome in the system tray) and try again, "
+                             "or use Edge: $env:CHROME = \"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\"")
             print("\n".join(lines), file=sys.stderr)
             return 2
         ws_url = pages[0]
