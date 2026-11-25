@@ -14,6 +14,7 @@ Mentor: Dr. Gunjan Balde
 - **The final UI:** [docs/screenshots/w3-12/](docs/screenshots/w3-12/); responsible AI: [docs/responsible_ai.md](docs/responsible_ai.md).
 - **Release notes and how to verify them:** [docs/release_v1.0.md](docs/release_v1.0.md) (`python scripts/release_check.py`); every design decision: [docs/decisions.md](docs/decisions.md).
 - **Run it:** `make up` with Docker ([below](#run-it-with-docker-w3-11)), or locally from [LOCAL_SETUP.md](LOCAL_SETUP.md).
+- **The demo:** [docs/demo/](docs/demo/): the 10-minute script, `make demo-offline` (answers from the reply cache, no endpoint), the UI autopilot and the blocked-injection demo.
 
 The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt). What FinSight answers, refuses and returns is defined in [docs/spec.md](docs/spec.md); the corpus scope is [config/companies.yaml](config/companies.yaml).
 

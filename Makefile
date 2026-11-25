@@ -22,7 +22,7 @@ export FINSIGHT_GID ?= $(shell id -g)
 LANGFUSE_SECRETS := LF_POSTGRES_PASSWORD LF_CLICKHOUSE_PASSWORD LF_REDIS_PASSWORD LF_MINIO_PASSWORD \
 	LF_NEXTAUTH_SECRET LF_SALT LF_ENCRYPTION_KEY
 
-.PHONY: help ingest index eval test release-check check-data up down logs ps langfuse
+.PHONY: help ingest index eval test release-check check-data up demo-offline down logs ps langfuse
 
 help: ## list the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-11s %s\n", $$1, $$2}'
@@ -58,6 +58,11 @@ up: check-data ## build the image, start the API and the UI, and wait until both
 	$(COMPOSE) up --build --detach --wait --wait-timeout 900 api ui
 	@echo "UI:  http://$$($(COMPOSE) port ui 8501)"
 	@echo "API: http://$$($(COMPOSE) port api 8000)/docs"
+
+demo-offline: check-data ## the demo with no endpoint: answers only from the reply cache (docker-compose.offline.yml)
+	mkdir -p data/cache/llm certs
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.offline.yml up --build --detach --wait --wait-timeout 900 api ui
+	@echo "UI (offline demo mode): http://$$($(COMPOSE) port ui 8501)"
 
 down: ## stop and remove the containers (data/ and the model cache volume are kept)
 	$(COMPOSE) --profile langfuse down
