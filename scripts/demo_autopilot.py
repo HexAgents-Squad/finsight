@@ -12,7 +12,8 @@ question is one the system has already answered and committed (the test checks e
 so in the offline demo mode every reply comes from the reply cache. A step whose answer does not appear in time is
 reported, and the run continues with the next one.
 With Enter between steps, press it in the terminal, then click back to the browser. The browser is driven through its
-debugging port (--debug-port, default 9333); a separate profile is used, so your own Chrome stays as it is.
+debugging port, a free one Chrome picks itself (--debug-port to fix one); a separate profile is used, so your own
+Chrome stays as it is. It prints each stage: starting Chrome, opening the UI, each step.
 Needs Chrome or Edge (CHROME to name it) and the `websockets` package (installed with uvicorn).
 Exit codes: 0 = every step showed its expected answer, 1 = a step did not, 2 = no browser or no UI.
 """
@@ -46,6 +47,7 @@ class Step:
     open_trace: bool = False
 
 
+STARTUP_S = 60                                                # Chrome's first start with a new profile can be slow
 DEMO_RUN = "eval/results/traces/W3-09-demo-a5.jsonl"          # the 10 demo queries on A5, traced (W3-09)
 API_RUN = "eval/results/api_safety/api_tests.jsonl"           # the safety tests through POST /ask on A5 (W3-10)
 STEPS = (
@@ -155,39 +157,49 @@ class Page:
 
 
 async def drive(url: str, headless: bool, pause: float | None, shots: Path | None, timeout: float,
-                port: int = 9333) -> int:
+                port: int = 0) -> int:
     import websockets
     exe = browser()
     if exe is None:
         print("no Chrome or Edge found (set CHROME to its path)", file=sys.stderr)
         return 2
-    profile = tempfile.mkdtemp(prefix="finsight-demo-")
+    profile = Path(tempfile.mkdtemp(prefix="finsight-demo-"))
+    # Port 0: Chrome picks a free port and writes it to DevToolsActivePort in the profile (no clash with any program)
     args = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={profile}", "--no-first-run",
-            "--window-size=1440,960", "about:blank"] + (["--headless=new"] if headless else [])
+            "--no-default-browser-check", "--window-size=1440,960", "about:blank"] + (["--headless=new"] if headless else [])
+    print(f"Starting {'headless ' if headless else ''}Chrome ...", flush=True)
     proc = subprocess.Popen(args)
+    local = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 127.0.0.1 never through a proxy
     failed = 0
     try:
-        tabs = None
-        for _ in range(100):
-            try:
-                tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json"))
-                break
-            except OSError:
-                time.sleep(0.2)
+        tabs, t0 = None, time.monotonic()
+        while tabs is None and time.monotonic() - t0 < STARTUP_S:
+            active = profile / "DevToolsActivePort"
+            debug_port = port or (int(active.read_text().split()[0]) if active.exists() and active.read_text().strip()
+                                  else None)
+            if debug_port:
+                try:
+                    tabs = json.load(local.open(f"http://127.0.0.1:{debug_port}/json", timeout=5))
+                except (OSError, ValueError):
+                    pass
+            if tabs is None:
+                time.sleep(0.3)
         pages = [t["webSocketDebuggerUrl"] for t in tabs or [] if t.get("type") == "page"]
         if not pages:
-            print(f"the browser did not open its debugging port {port} (is another program using it? --debug-port)",
-                  file=sys.stderr)
+            print(f"Chrome did not open its debugging connection within {STARTUP_S} s; close other Chrome windows "
+                  "started by this script and try again", file=sys.stderr)
             return 2
         ws_url = pages[0]
-        async with websockets.connect(ws_url, max_size=50_000_000) as ws:
+        async with websockets.connect(ws_url, max_size=50_000_000, proxy=None) as ws:
             page = Page(ws)
+            print(f"Opening the UI at {url} ...", flush=True)
             await page.call("Page.navigate", url=url)
             if not await page.wait_for(lambda s: "New conversation" in s and "API" in s, 120):
-                print(f"the UI at {url} did not load (is it running?)", file=sys.stderr)
+                print(f"the UI at {url} did not load in 120 s (is `make demo-offline` running? --url)", file=sys.stderr)
                 return 2
             await page.wait_for(lambda s: "API ready" in s, 60)
             await asyncio.sleep(2)
+            print("The UI is ready.", flush=True)
             for n, step in enumerate(STEPS, 1):
                 if pause is None:
                     input(f"\n[Enter] {step.title}: {step.question}")
@@ -236,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--shots", type=Path, help="save a screenshot after each step into this folder")
     ap.add_argument("--timeout", type=float, default=60.0, help="seconds to wait for each answer")
     ap.add_argument("--list", action="store_true", help="print the steps and stop")
-    ap.add_argument("--debug-port", type=int, default=9333, help="the browser's remote-debugging port")
+    ap.add_argument("--debug-port", type=int, default=0, help="the browser's debugging port (default: a free one)")
     args = ap.parse_args(argv)
     if args.list:
         for step in STEPS:
