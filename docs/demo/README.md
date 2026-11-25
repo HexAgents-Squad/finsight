@@ -7,6 +7,7 @@
 - `python scripts/demo_autopilot.py`: types the live steps into the UI one by one (Enter for the next), for the
   demo and its recording; `--headless --pause 2 --shots DIR` checks them and saves screenshots.
 - `python scripts/demo_injection.py`: the blocked prompt injection, from the reply cache with local embeddings.
+- The seven live steps checked on Docker in the offline demo mode: [docs/screenshots/w3-14/](../screenshots/w3-14/).
 - The slides draft: shared with the team outside the repository (the editable deck changes in rehearsals); its PDF
   goes here once the slides are final.
 

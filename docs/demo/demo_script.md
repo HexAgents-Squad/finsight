@@ -12,16 +12,18 @@ from the reply cache, with or without the endpoint (ADR-049).
 
 1. **Start FinSight** on the demo laptop, in WSL2 Ubuntu, in the repository: `make demo-offline` (no endpoint
    needed). Use `make up` instead only to show live answers, and only after the team agrees to spend the shared key.
-   Wait for "UI (offline demo mode): ...".
+   Wait for "UI (offline demo mode): ...". If port 8000 or 8501 is taken, set `FINSIGHT_API_PORT` and
+   `FINSIGHT_UI_PORT` (e.g. 8010 and 8511) and pass the UI's address to the autopilot with `--url`.
 2. **Open the UI** at http://localhost:8501 and check that the sidebar says "API ready".
 3. **Rehearse the UI part** once: `python scripts/demo_autopilot.py --headless --pause 2` must report that every
    step showed its expected answer.
 4. **Open, in tabs:** the slides; the Langfuse project, signed in, filtered on the tag `run:W3-09-demo-a5`; a
-   terminal in the repository with the venv active, for the injection step.
+   terminal in a checkout with the venv active (LOCAL_SETUP.md), for the injection step: it runs on the host, as
+   the image holds only the runtime code (no `eval/` or `scripts/`).
 5. **Fallback, if anything fails:** the recorded backup video, then the committed screenshots
    (`docs/screenshots/w3-12/`, `docs/screenshots/w3/`).
 
-*Sources:* `README.md`
+*Sources:* `README.md`, `docs/screenshots/w3-14/README.md`
 
 ## The script
 
