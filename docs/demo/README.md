@@ -1,7 +1,7 @@
 # The demo (W3-14)
 
-- [demo_script.md](demo_script.md): the 10-minute script for 5 Dec, who presents what, the live steps, the
-  fallbacks, how to record the backup.
+- [demo_script.md](demo_script.md): the 10-minute script, who presents what in a live run, the live steps, the
+  fallbacks, how to record the demo (submitted as a video by 27 Nov: [../submission.md](../submission.md)).
 - `make demo-offline`: FinSight on Docker answering only from the reply cache (`docker-compose.offline.yml`), so
   the demo needs no endpoint and spends no shared key.
 - `python scripts/demo_autopilot.py`: types the live steps into the UI one by one (Enter for the next), for the
@@ -11,7 +11,7 @@
 - The slides draft: shared with the team outside the repository (the editable deck changes in rehearsals); its PDF
   goes here once the slides are final.
 
-## The backup recording
+## The recording
 
 Not recorded yet. Once it is made (steps in demo_script.md, "Recording the backup"), put its link here:
 

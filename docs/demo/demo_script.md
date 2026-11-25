@@ -1,14 +1,16 @@
-# The 10-minute demo (W3-14, 5 Dec 2026)
+# The 10-minute demo (W3-14)
 
-The live demo of FinSight and its recorded backup, following the project plan's demo script (§13): the problem and
-the architecture, then live a fact, a verified ratio, a comparison, a follow-up, a refusal and a blocked injection,
-then the trace, then the results. Speakers are proposed by who owns each part (the ticket owners); change them in the
-first rehearsal. Every question below has already been answered and committed, so the offline demo mode answers it
-from the reply cache, with or without the endpoint (ADR-049).
+The demo of FinSight, following the project plan's demo script (§13): the problem and the architecture, then live a
+fact, a verified ratio, a comparison, a follow-up, a refusal and a blocked injection, then the trace, then the
+results. The course has no live session on 5 Dec (`docs/submission.md`): the demo is **submitted as a recording** by
+the deadline, 27 Nov 2026, 11:59 PM IST, and a live run is for the panel on 12 Dec if the team is nominated. In the
+recording one narrator covers every part; the speakers below are for a live run, proposed by who owns each part.
+Every question below has already been answered and committed, so the offline demo mode answers it from the reply
+cache, with or without the endpoint (ADR-049).
 
-*Sources:* `FinSight_Project_Plan.txt`, `docs/decisions.md`
+*Sources:* `FinSight_Project_Plan.txt`, `docs/decisions.md`, `docs/submission.md`
 
-## Before the demo (30 minutes ahead)
+## Before the demo or the recording (30 minutes ahead)
 
 1. **Start FinSight** on the demo laptop, in WSL2 Ubuntu, in the repository: `make demo-offline` (no endpoint
    needed). Use `make up` instead only to show live answers, and only after the team agrees to spend the shared key.
@@ -56,14 +58,17 @@ speaker narrates). Steps 1 to 6 each start a new conversation, except the follow
 
 *Sources:* `eval/results/traces/W3-09-demo-a5.jsonl`, `eval/results/api_safety/api_tests.jsonl`, `eval/results/demo/W2-07_demo.md`
 
-## Recording the backup
+## Recording the demo (the submission's video)
 
-1. Start the offline demo mode and open the UI as above; close other windows and notifications.
-2. Start the recording: Windows Snipping Tool, **Win + Shift + R**, select the browser window, microphone on.
-3. Run `python scripts/demo_autopilot.py` and narrate each step from the table (Enter for the next one), then step 7
-   in the terminal, then the Langfuse trace and the results slides.
-4. Stop the recording; check it plays, with sound. Upload it to the team's shared drive (it is too large for git) and
-   put the link in `docs/demo/README.md`.
+1. Start the offline demo mode and open the UI as above; close other windows, turn on Do Not Disturb.
+2. Arrange the screen: the slides in PowerPoint, the browser (the autopilot opens its own window) and a terminal,
+   each one click away. Record the **whole screen**, as the video moves between them.
+3. Start the recording: Windows Snipping Tool, **Win + Shift + R**, select the whole screen, microphone on.
+4. Follow the script's table: the opening slides; `python scripts/demo_autopilot.py` for steps 1 to 6 (Enter in the
+   terminal for each next step, then back to the browser); step 7 in the terminal; the Langfuse traces (or their
+   screenshots); the results slides. Keep to about 10 minutes.
+5. Stop the recording; watch it once, with sound. Upload it to the team's shared folder (it is too large for git),
+   share it as "Anyone with the link can view", and put the link in `docs/demo/README.md` and the submission PDF.
 
 ## Questions to expect
 

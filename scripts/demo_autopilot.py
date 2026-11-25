@@ -1,4 +1,4 @@
-"""The live demo's UI part, driven step by step (W3-14, docs/demo/demo_script.md): for the 5 Dec demo and its recording.
+"""The live demo's UI part, driven step by step (W3-14, docs/demo/demo_script.md): for the recording and a live run.
 
     python scripts/demo_autopilot.py                    # a visible Chrome window; Enter moves to the next step
     python scripts/demo_autopilot.py --pause 12         # no keyboard: 12 s on each answer, for narration
@@ -11,6 +11,8 @@ a follow-up), waits until the answer shows the text it expects, and opens the tr
 question is one the system has already answered and committed (the test checks each against its committed answer),
 so in the offline demo mode every reply comes from the reply cache. A step whose answer does not appear in time is
 reported, and the run continues with the next one.
+With Enter between steps, press it in the terminal, then click back to the browser. The browser is driven through its
+debugging port (--debug-port, default 9333); a separate profile is used, so your own Chrome stays as it is.
 Needs Chrome or Edge (CHROME to name it) and the `websockets` package (installed with uvicorn).
 Exit codes: 0 = every step showed its expected answer, 1 = a step did not, 2 = no browser or no UI.
 """
@@ -132,6 +134,16 @@ class Page:
             await self.call("Input.dispatchKeyEvent", type=kind, key="Enter", code="Enter", windowsVirtualKeyCode=13,
                             text="\r" if kind == "keyDown" else "")
 
+    async def ready(self, timeout: float = 20) -> bool:
+        """The chat box is there and enabled (it is disabled while a question is pending and absent while the page
+        reruns): typing earlier loses the question."""
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            if await self.js("(() => { const t = document.querySelector('textarea'); return !!t && !t.disabled; })()"):
+                return True
+            await asyncio.sleep(0.3)
+        return False
+
     async def scroll_to_end(self) -> None:
         await self.js("""(() => { const m = document.querySelector('[data-testid="stMain"], section.stMain');
             if (m) m.scrollTop = m.scrollHeight; window.scrollTo(0, document.body.scrollHeight); })()""")
@@ -142,13 +154,13 @@ class Page:
         path.write_bytes(base64.b64decode((await self.call("Page.captureScreenshot", format="png"))["data"]))
 
 
-async def drive(url: str, headless: bool, pause: float | None, shots: Path | None, timeout: float) -> int:
+async def drive(url: str, headless: bool, pause: float | None, shots: Path | None, timeout: float,
+                port: int = 9333) -> int:
     import websockets
     exe = browser()
     if exe is None:
         print("no Chrome or Edge found (set CHROME to its path)", file=sys.stderr)
         return 2
-    port = 9333
     profile = tempfile.mkdtemp(prefix="finsight-demo-")
     args = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={profile}", "--no-first-run",
             "--window-size=1440,960", "about:blank"] + (["--headless=new"] if headless else [])
@@ -162,7 +174,12 @@ async def drive(url: str, headless: bool, pause: float | None, shots: Path | Non
                 break
             except OSError:
                 time.sleep(0.2)
-        ws_url = next(t["webSocketDebuggerUrl"] for t in tabs or [] if t["type"] == "page")
+        pages = [t["webSocketDebuggerUrl"] for t in tabs or [] if t.get("type") == "page"]
+        if not pages:
+            print(f"the browser did not open its debugging port {port} (is another program using it? --debug-port)",
+                  file=sys.stderr)
+            return 2
+        ws_url = pages[0]
         async with websockets.connect(ws_url, max_size=50_000_000) as ws:
             page = Page(ws)
             await page.call("Page.navigate", url=url)
@@ -177,10 +194,19 @@ async def drive(url: str, headless: bool, pause: float | None, shots: Path | Non
                 else:
                     print(f"\n{step.title}: {step.question}")
                 if step.new_conversation and n > 1:
+                    shown = (await page.text()).count(STEPS[n - 2].question)
                     await page.click("button", "New conversation", last=False)
-                    await asyncio.sleep(1.5)
-                before = (await page.text()).count(step.expect)
-                await page.ask(step.question)
+                    # the earlier conversation is gone before the next question is typed
+                    await page.wait_for(lambda s, q=STEPS[n - 2].question, c=shown: s.count(q) < c, 15)
+                await page.ready()
+                await asyncio.sleep(0.5)
+                text = await page.text()
+                before, asked = text.count(step.expect), text.count(step.question)
+                for _ in range(2):                  # typed into a page that was rerunning: type it once more
+                    await page.ask(step.question)
+                    if await page.wait_for(lambda s, q=step.question, c=asked: s.count(q) > c, 8):
+                        break
+                    await page.ready()
                 ok = await page.wait_for(lambda s, b=before, e=step.expect: s.count(e) > b, timeout)
                 if step.open_trace and ok:
                     await asyncio.sleep(1.0)
@@ -210,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--shots", type=Path, help="save a screenshot after each step into this folder")
     ap.add_argument("--timeout", type=float, default=60.0, help="seconds to wait for each answer")
     ap.add_argument("--list", action="store_true", help="print the steps and stop")
+    ap.add_argument("--debug-port", type=int, default=9333, help="the browser's remote-debugging port")
     args = ap.parse_args(argv)
     if args.list:
         for step in STEPS:
@@ -218,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.headless and args.pause is None:
         args.pause = 2.0                                # no keyboard to wait for
-    return asyncio.run(drive(args.url, args.headless, args.pause, args.shots, args.timeout))
+    return asyncio.run(drive(args.url, args.headless, args.pause, args.shots, args.timeout, args.debug_port))
 
 
 if __name__ == "__main__":

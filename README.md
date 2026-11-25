@@ -15,6 +15,7 @@ Mentor: Dr. Gunjan Balde
 - **Release notes and how to verify them:** [docs/release_v1.0.md](docs/release_v1.0.md) (`python scripts/release_check.py`); every design decision: [docs/decisions.md](docs/decisions.md).
 - **Run it:** `make up` with Docker ([below](#run-it-with-docker-w3-11)), or locally from [LOCAL_SETUP.md](LOCAL_SETUP.md).
 - **The demo:** [docs/demo/](docs/demo/): the 10-minute script, `make demo-offline` (answers from the reply cache, no endpoint), the UI autopilot and the blocked-injection demo.
+- **How it is submitted:** [docs/submission.md](docs/submission.md) (the course's guidelines and timeline, and every deliverable).
 
 The full plan is in [FinSight_Project_Plan.txt](FinSight_Project_Plan.txt). What FinSight answers, refuses and returns is defined in [docs/spec.md](docs/spec.md); the corpus scope is [config/companies.yaml](config/companies.yaml).
 
