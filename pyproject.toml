@@ -1,6 +1,6 @@
 [project]
 name = "finsight"
-version = "0.1.0"
+version = "1.0.0"
 description = "Multi-agent copilot for SEC 10-K/10-Q filings with citations and verified calculations"
 requires-python = ">=3.11"
 

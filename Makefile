@@ -22,7 +22,7 @@ export FINSIGHT_GID ?= $(shell id -g)
 LANGFUSE_SECRETS := LF_POSTGRES_PASSWORD LF_CLICKHOUSE_PASSWORD LF_REDIS_PASSWORD LF_MINIO_PASSWORD \
 	LF_NEXTAUTH_SECRET LF_SALT LF_ENCRYPTION_KEY
 
-.PHONY: help ingest index eval test check-data up down logs ps langfuse
+.PHONY: help ingest index eval test release-check check-data up down logs ps langfuse
 
 help: ## list the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-11s %s\n", $$1, $$2}'
@@ -46,6 +46,9 @@ eval: ## offline: validate the gold, test and development sets, and check the ev
 test: ## offline: ruff and pytest, as CI runs them
 	$(PYTHON) -m ruff check .
 	$(PYTHON) -m pytest -q
+
+release-check: ## offline: everything that must hold before the v1.0 tag (scripts/release_check.py)
+	$(PYTHON) scripts/release_check.py --allow-dirty
 
 check-data: ## check that .env and the data the API loads are present
 	$(PYTHON) scripts/check_data.py

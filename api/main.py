@@ -204,7 +204,7 @@ def create_app(graph: Any = None, config: ApiConfig | None = None,
         sent = request.headers.get(SESSION_HEADER)
         return f"session:{session_digest(sent)}" if sent and state.ids.valid(sent) else f"new:{uuid.uuid4().hex}"
 
-    app = FastAPI(title="FinSight", version="0.1.0", lifespan=_lifespan(state, warm_up),
+    app = FastAPI(title="FinSight", version="1.0.0", lifespan=_lifespan(state, warm_up),
                   description="Questions about US companies' SEC 10-K and 10-Q filings, answered with citations.")
     limiter = Limiter(key_func=session_key)
     app.state.limiter = limiter
