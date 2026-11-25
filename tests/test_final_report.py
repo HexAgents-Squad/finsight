@@ -51,6 +51,11 @@ def test_a_number_its_sources_do_not_hold_is_reported(tmp_path):
     assert fr.untraced(md2, root) == ["1. A: 0.775 is in none of its sources", "1. A: 43/48 is in none of its sources"]
 
 
+def test_a_count_with_a_separator_is_a_claim_even_in_the_range_of_years(tmp_path):
+    md, root = _report(tmp_path, "## 1. A\n\nUp to 2,000 documents, in 2024.\n\n*Sources:* `res.md`\n", "none")
+    assert fr.untraced(md, root) == ["1. A: 2000 is in none of its sources"]
+
+
 def test_a_fraction_is_one_claim_and_names_years_and_small_counts_are_not_claims(tmp_path):
     md, root = _report(tmp_path, "## 1. A\n\nIn 2024, W3-03 and ADR-039 ran 3 checks on Qwen3-8B; 5/12 right.\n\n"
                                  "*Sources:* `res.md`\n", "5 and 12 appear apart")
@@ -94,7 +99,8 @@ def test_markdown_renders_tables_nested_lists_figures_and_escapes_text():
 def test_the_html_is_deterministic_and_the_appendix_is_cut_for_the_page_count():
     assert fr.html_sha256(REPORT) == fr.html_sha256(REPORT)
     assert fr.APPENDIX in REPORT and fr.APPENDIX not in fr.body_only(REPORT)
-    assert "Appendix A" not in fr.page(fr.body_only(REPORT)) and "Appendix A" in fr.page(REPORT)
+    heading = "<h2>Appendix A."
+    assert heading not in fr.page(fr.body_only(REPORT)) and heading in fr.page(REPORT)
 
 
 def test_an_edited_report_makes_the_pdf_stale(monkeypatch, tmp_path):
@@ -110,6 +116,6 @@ def test_pdf_pages_counts_page_objects_not_the_page_tree():
 
 
 @pytest.mark.parametrize("token, expected", [("1,563", True), ("12", False), ("13", True), ("2025", False),
-                                             ("0.5", True), ("3.50", True)])
+                                             ("2,000", True), ("0.5", True), ("3.50", True)])
 def test_which_numbers_are_checked(token, expected):
     assert fr.checked(token) is expected

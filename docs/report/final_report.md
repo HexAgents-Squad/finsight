@@ -4,9 +4,17 @@
 
 **Team HexAgents_Squad:** Alok Srivastava (editor) · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj. **Mentor:** Dr. Gunjan Balde. **Code:** github.com/HexAgents-Squad/finsight (private).
 
-**How this report was written.** Every section was drafted by the editor with an AI assistant (Claude) from committed results, then reviewed by the member who owns that work, named under each heading. Every number in a section appears in a file that section cites; `python scripts/final_report.py --check` verifies this in CI, along with the page limit and that this PDF matches its source.
+**How this report was written.** Every section was drafted by the editor with an AI assistant (Claude) from committed results, then reviewed by the member who owns that work, named under each heading. Five standards run through it. *Clarity:* one claim per paragraph, the result first. *Traceability:* every number in a section appears in a file that section cites on its Sources line; `python scripts/final_report.py --check` verifies this in CI, along with the page limit and that this PDF matches its source. *Evidence:* committed result files, graded answers, traces and screenshots of the final UI. *Reproducibility:* every result regenerates from committed files and the reply cache (Appendix A and B). *Measurable impact:* each change is reported as a before-and-after on the same questions, with paired tests (§8, §9).
 
 **Summary.** FinSight answers questions about the 10-K and 10-Q filings of 20 US companies with citations and verified calculations, on the course's Qwen3-8B endpoint. A single retrieval-augmented prompt (B0) answers 50 of the 102 gold questions correctly, and the best prompting strategy 57. Our LangGraph agent (A1), which fetches figures from SEC XBRL data, computes with a calculator and checks every draft, answers 86. The final version (A5), with fixes developed on separate development questions, answers 95: right where B0 is wrong 48 times and the reverse 3 times (p < 0.01). Numbers that appear in no source fall from 9 for B0 to 0 for every agent version, at 5.54 s and 3,419 tokens per question (median and mean).
+
+| Results at a glance (gold-v1, 102 questions) | Week 1 baseline B0 | Week 2 agent A1 | Week 3 final A5 |
+|---|---|---|---|
+| correct answers, all types | 50/102 | 86/102 | 95/102 |
+| short numeric answers | 16/48 | 42/48 | 44/48 |
+| refusals and "not reported" | 21/32 | 29/32 | 32/32 |
+| wrong answers stating a number in no source (hallucination) | 9 | 0 | 0 |
+| latency per question, median (s) | 2.38 | 4.97 | 5.54 |
 
 *Sources:* `eval/results/evaluation_report.md`, `eval/results/agent_baselines.md`
 
@@ -22,7 +30,16 @@ Analysts, credit officers and students ask concrete questions of company filings
 
 **Constraint.** Track B fixes the model: the course's hosted Qwen3-8B chat endpoint and its bge-small embedding endpoint, no fine-tuning and no larger model. Quality has to come from retrieval, tools, orchestration and evaluation. General chatbots, commercial research platforms and finance-trained models (BloombergGPT, FinGPT) address parts of this problem; our contribution is reliability that is measured on a small model, with every figure sourced and checked.
 
-*Sources:* `docs/spec.md`, `config/companies.yaml`
+**How the project progressed.** Four weeks, each ending in a gate with numbers; the evaluation set was frozen and the baseline measured before the agent was built, as the brief requires.
+
+| Week | Built | Gate result |
+|---|---|---|
+| Week 0, to 6 Nov | specification and refusal policy; 120 filings parsed into 1,260 Item sections; XBRL facts; gold-v1 (80) frozen with 22 refusal and 12 injection tests; three chunkings indexed | C3 hybrid with company and year filters: recall@5 0.747 |
+| Week 1, 8 – 14 Nov | the endpoint probed; one evaluation harness; model comparison; three prompting strategies; filters from the question, statements first, a reranker; re-index on the course embeddings | B0 answers 50/102; best strategy 57/102; recall@5 0.986 |
+| Week 2, 16–22 Nov | the LangGraph agent (planner, executor, composer, critic) on four tools; memory; Langfuse tracing; FastAPI service and Streamlit UI; injection and PII defences | A1 answers 86/102; 10/10 demo queries; 0/12 injections |
+| Week 3, 22 – 26 Nov | ablations; development set v2; the critic's question checks; four new XBRL metrics; summary and refusal fixes; optimization; safety through the API; Docker; this report | A5 answers 95/102; 22/22 refusal tests through the API; `make up` on a fresh WSL2 install |
+
+*Sources:* `docs/spec.md`, `config/companies.yaml`, `docs/mentor_meetings.md`, `docs/week0_plan.txt`, `docs/week3_plan.txt`, `README.md`, `docs/report/week1_detailed_results.md`, `docs/report/week2_detailed_results.md`, `eval/results/evaluation_report.md`, `eval/results/retrieval_summary.md`, `eval/results/api_safety_results.md`
 
 ## 2. System architecture
 
@@ -37,6 +54,8 @@ Analysts, credit officers and students ask concrete questions of company filings
 **Four tools:** `search_filings` (hybrid retrieval with filters read from the question), `get_financial_fact` (17 XBRL metrics), `compare_periods` (one metric across years, with year-over-year growth) and `calculate` (ratio, percent, growth, difference, sum, CAGR, rounded half-up as the specification says).
 
 **Serving.** A FastAPI service (`POST /ask`, `GET /health`) holds one compiled graph, signed session ids for memory across turns, a reply cache for verified answers and refusals, and rate limits per session and per address. A Streamlit UI talks only to the API and shows each answer as a card: badge (verified, not verified, refused, partial refusal), answer, calculation, figures, citations linked to sec.gov and a trace expander. Langfuse traces every node, tool call and model call, with e-mail addresses and phone numbers masked. `make up` starts both services with Docker Compose (§9).
+
+![Figure 2. The final UI: a ratio answered with its calculation, figures, linked sources and the run's trace (left); a follow-up, "And Microsoft's?", resolved from the conversation (right). The sidebar, not shown, carries the research-assistant disclaimer and the API status.](figures/final_ui_answers.png)
 
 *Sources:* `docs/spec.md`, `docs/decisions.md`
 
@@ -153,11 +172,20 @@ Three chunkings (C1-C3) were crossed with three retrievers (BM25, dense, hybrid 
 | segment | a segment question is not answered with company totals | 1 |
 | net_sales | net sales are not answered with total revenue that includes membership income | 1 |
 
-![Figure 2. A5's trace of gold question B14 in Langfuse: the critic's segment check flags an answer built from Amazon's company totals for an AWS question.](../screenshots/w3/04_trace_a5_b14_critic.png)
+![Figure 3. A5's trace of gold question B14 in Langfuse: the critic's segment check flags an answer built from Amazon's company totals for an AWS question.](../screenshots/w3/04_trace_a5_b14_critic.png)
 
-**Robustness.** In A1's gold run no question hit a limit, 4 of 166 tool calls returned a typed error, and every answer was a valid contract. The ten demo queries (all seven types, five new questions) met their expectation 10/10, at a median 4.9 s.
+**Failure handling.** The brief asks for error handling for tool failures, malformed JSON, infinite loops and token budget caps; each is in the graph and measured on gold:
 
-*Sources:* `docs/report/week2_detailed_results.md`, `docs/decisions.md`, `eval/results/critic/critic_gold.md`, `eval/results/critic/critic_dev2.md`, `eval/results/planner_dev.md`, `eval/results/tool_calls.md`, `eval/results/demo/W2-07_demo.md`
+| Failure | How FinSight handles it | Measured (A1 / A5 on gold) |
+|---|---|---|
+| tool failure | typed errors (not reported, out of corpus, no results, invalid input); one replan, then "could not verify" | 4/166 and 5/170 tool calls returned an error |
+| malformed JSON | guided decoding against the plan and answer schemas, validation, one re-ask | JSON retries per task 0.00 in every run |
+| infinite loops | at most 10 tool steps, repeated identical calls stopped, one replan and one send-back | stopped by the step cap 0/102 |
+| token budget and time | about 12,000 tokens and 60 s per question; output-size guards on tool results | task completed within the limits 102/102 |
+
+The ten demo queries (all seven types, five new questions) met their expectation 10/10, at a median 4.9 s.
+
+*Sources:* `docs/report/week2_detailed_results.md`, `docs/decisions.md`, `eval/results/critic/critic_gold.md`, `eval/results/critic/critic_dev2.md`, `eval/results/planner_dev.md`, `eval/results/tool_calls.md`, `eval/results/demo/W2-07_demo.md`, `eval/results/evaluation_report.md`, `docs/spec.md`
 
 ## 8. Compensating for a small model, and the ablations
 
@@ -195,7 +223,7 @@ The **calculator** carries most of the gain: without it, 22 answers become tool-
 
 *Owners (review): Anirudh M K (W3-09 evaluation report and traces, W3-07 optimization) and Alok Srivastava (W3-08).*
 
-![Figure 3. Accuracy by answer type for each version on gold-v1 (102 questions, every answer decided).](../../eval/results/report/accuracy.svg)
+![Figure 4. Accuracy by answer type for each version on gold-v1 (102 questions, every answer decided).](../../eval/results/report/accuracy.svg)
 
 | Answer type | B0 | S1 | A1 | A5 |
 |---|---|---|---|---|
@@ -207,7 +235,7 @@ The **calculator** carries most of the gain: without it, 22 answers become tool-
 
 The agent is the step change and A5 the refinement. Paired with B0 on the same questions, A5 is right where B0 is wrong 48 times and the reverse 3 times (p < 0.01); against A1, 10 and 1 (p = 0.01), with no answer type significantly different on its own. A5's critic verified 98 of 102 answers; the 4 it left unverified are all wrong, and every citation of every answer names a source the run had (82/82).
 
-![Figure 4. Wrong answers per version by failure class.](../../eval/results/report/failure_taxonomy.svg)
+![Figure 5. Wrong answers per version by failure class.](../../eval/results/report/failure_taxonomy.svg)
 
 **Failure taxonomy.** The failure classes move as the plan intended: hallucinations from 9 (B0) to 0, refusal errors from 16 to 4 (A1) and 0 (A5), and wrong answers from 52 to 16 and 7. A5's 7 are 2 retrieval misses, 4 reasoning errors and 1 tool-call error: line items the facts tool has no metric for (a medical care ratio, a segment's operating margin, Costco's net sales excluding membership fees), the F02 follow-up, and three summaries short of full marks (E01, E03, E10).
 
@@ -216,7 +244,8 @@ The agent is the step change and A5 the refinement. Paired with B0 on the same q
 | tokens, mean | 3,536 | 3,000 | 3,419 |
 | latency, median (s) | 2.38 | 4.97 | 5.54 |
 | latency, 95th percentile (s) | 3.61 | 12.42 | 11.24 |
-| tool calls (mean) | – | 1.63 | 1.67 |
+| tool calls per task (mean) | – | 1.63 | 1.67 |
+| task completed (an answer contract, no error, within the limits) | 102/102 | 102/102 | 102/102 |
 
 **Cost and latency.** The agent is slower than one prompt because it makes about two model calls and 1.7 tool calls per question, all within the 60 s limit. Profiling (W3-07) put 55% of the time in the planner's model call, 38% in the composer's and 6% in search; the critic costs no call. W3-07 skipped the composer's re-ask when no figure is missing, trimmed its evidence to what it may cite, parsed the configuration once instead of five times per question and warmed everything at API start-up, with no answer changed; the offline test suite went from 17.4 to 1.6 minutes.
 
@@ -242,9 +271,13 @@ The agent is the step change and A5 the refinement. Paired with B0 on the same q
 | planted sentence reached a model as written | 0/12 |
 | tests that retrieved the planted passage, carrying the specification's note | 11/11 |
 
+![Figure 6. Refusals in the final UI: a partial refusal answers the fact and declines the advice (left); a forecast is refused under R2 with a suggestion of what FinSight can answer (right).](figures/final_ui_refusals.png)
+
+**Human-in-the-loop boundary.** FinSight takes no consequential action: it only reads public filings and answers. Any use of an answer in client communication or an investment decision requires review by a qualified person, and the UI says so on every page.
+
 **Hallucination control and human oversight.** Figures come only from tools or a cited passage, and the verified badge reflects the critic (§7, §9). Humans decide what a script cannot: two graders grade every summary and label every wrong answer, and a person verified every gold question and test before use. The rate limit was shown through the API: repeats are served from the reply cache, then a 429 with Retry-After 60.
 
-*Sources:* `docs/responsible_ai.md`, `eval/results/api_safety_results.md`, `docs/report/week2_detailed_results.md`, `docs/decisions.md`
+*Sources:* `docs/responsible_ai.md`, `eval/results/api_safety_results.md`, `docs/report/week2_detailed_results.md`, `docs/decisions.md`, `docs/spec.md`
 
 ## 11. Limitations and future work
 
@@ -266,17 +299,19 @@ Everything above is regenerated from committed files without a key: `ruff check 
 
 ## Appendix B. Where each result comes from
 
-| Section | Result | Committed file |
-|---|---|---|
-| Section 3 | corpus, chunk and index statistics | `eval/results/retrieval_summary.md`, `eval/results/furniture_removal.md` |
-| Section 4 | question sets, grading agreement | `eval/gold_set.jsonl`, `eval/dev_set_v2.jsonl`, `eval/results/grading/` |
-| Section 5 | model comparison, prompting baselines | `eval/results/model_comparison.md`, `eval/results/prompting_baselines.md` |
-| Section 6 | retrieval experiments | `eval/results/retrieval_summary.md`, `eval/results/embedding_comparison.md` |
-| Section 7 | planner, tool schemas, critic, demo | `eval/results/planner_dev.md`, `eval/results/tool_calls.md`, `eval/results/critic/`, `eval/results/demo/` |
-| Section 8 | ablations and A5 | `eval/results/agent_ablations.md`, `eval/results/agent_baselines.md` |
-| Section 9 | accuracy, taxonomy, cost, traces, deployment | `eval/results/evaluation_report.md`, `eval/results/traces/`, `docs/deploy_check.md` |
-| Section 10 | safety, refusal and PII through the API | `eval/results/api_safety_results.md`, `docs/responsible_ai.md` |
-| All | every design decision with its numbers | `docs/decisions.md` (ADR-001 to ADR-047) |
+| Section | Result | Committed file | Regenerated by |
+|---|---|---|---|
+| Section 3 | corpus, chunk and index statistics | `eval/results/retrieval_summary.md`, `eval/results/furniture_removal.md` | `make ingest index` |
+| Section 4 | question sets, grading agreement | `eval/gold_set.jsonl`, `eval/dev_set_v2.jsonl`, `eval/results/grading/` | `make eval` (the validators) |
+| Section 5 | model comparison, prompting baselines | `eval/results/model_comparison.md`, `eval/results/prompting_baselines.md` | `python eval/run_models.py`, then `python eval/score_answers.py` |
+| Section 6 | retrieval experiments | `eval/results/retrieval_summary.md`, `eval/results/embedding_comparison.md` | `python eval/run_retrieval.py --rerank` |
+| Section 7 | planner, tool schemas, critic, demo | `eval/results/planner_dev.md`, `eval/results/tool_calls.md`, `eval/results/critic/`, `eval/results/demo/` | `python eval/run_planner.py`, `python eval/critic_eval.py`, `python eval/run_demo.py` |
+| Section 8 | ablations and A5 | `eval/results/agent_ablations.md`, `eval/results/agent_baselines.md` | `python eval/run_agent.py --ablation no-calculator` (and the others) |
+| Section 9 | accuracy, taxonomy, cost, traces, deployment | `eval/results/evaluation_report.md`, `eval/results/traces/`, `docs/deploy_check.md` | `python eval/report.py`; `python scripts/trace_runs.py`; `make up` |
+| Section 10 | safety, refusal and PII through the API | `eval/results/api_safety_results.md`, `docs/responsible_ai.md` | `python eval/run_api_safety.py run` |
+| All | every design decision with its numbers | `docs/decisions.md` (ADR-001 to ADR-047) | – |
+
+Runs replay from the reply cache (`data/cache/llm`), so a re-run gives the same answers without a request; the scoring and report steps need no key at all.
 
 ## Appendix C. Who did what
 
@@ -289,3 +324,18 @@ Everything above is regenerated from committed files without a key: `ruff check 
 | Anirudh M K | retrieval and embeddings (WP5, W1-05, W1-16); tracing (W2-08); optimization, evaluation report and trace dashboard (W3-07, W3-09); the demo (W3-14) |
 
 Much of the code was built by Alok with an AI assistant for the ticket owners, and every pull request was reviewed by the ticket's backup (the ADRs' author column records this, e.g. "built by Alok"). All five members wrote or verified gold questions, graded answers and ran the smoke test on their own laptops.
+
+## Appendix D. The Track B brief, requirement by requirement
+
+| Requirement of the brief (Track B) | Where it is met |
+|---|---|
+| I. Specification, refusals, a correct answer; 60–100 gold queries written before any code | §1, §4: `docs/spec.md`; gold-v1, 80 questions, frozen in Week 0 |
+| II. Single-prompt baseline; three prompting strategies; how the small model breaks | §5: B0 and S1-S3; the failure labels |
+| III. RAG over 500–2,000 documents: chunking experiments, hybrid BM25 + dense, a reranker, citations; recall@k separate from answers | §3, §6: 1,260 documents; C1-C3; hybrid RRF; cross-encoder; recall@k on 73 questions |
+| IV. Agentic layer: three or more tools, planner → executor → critic, state across turns, error handling (tools, JSON, loops, token caps) | §2, §7: four tools; the four-node graph; memory; the failure-handling table |
+| V. Accuracy, task completion, tool calls per task, cost and latency, failure taxonomy, tracing | §9: all of them; Langfuse traces |
+| VI. Streamlit front-end, containerised, rate limiting and caching; responsible AI (injection, PII, refusals, human-in-the-loop) | §2, §9, §10: the final UI, Docker Compose, the API's limits and cache; the safety tests |
+| Guardrails: corpus at most 2,000 documents; at most 10 steps per query; evaluation frozen before agent code; "compensating for a small model" | §3, §7, §4, §8 |
+| Deliverables: repository, trace dashboard, evaluation report with the taxonomy, this report, a 10-minute live demo | `docs/report/rubric_checklist.md` (the demo is W3-14) |
+
+*Sources:* `FinSight_Project_Plan.txt`, `eval/results/retrieval_summary.md`, `docs/spec.md`

@@ -55,10 +55,6 @@ NUMERIC_CELL = re.compile(r"[\d\s.,/%()\-+<=>*–]*")    # a table cell holding 
 PATH = re.compile(r"`([A-Za-z0-9_./\-]+\.[A-Za-z0-9]+)`")
 
 
-class ReportError(ValueError):
-    """A check of the report failed; the message names the section and what is wrong."""
-
-
 def norm(token: str) -> str:
     """A number without its thousands separators and trailing zeros after the point: 1,563 -> 1563, 3.50 -> 3.5."""
     t = token.replace(",", "")
@@ -68,12 +64,13 @@ def norm(token: str) -> str:
 
 
 def checked(token: str) -> bool:
-    """Whether a number in the report must be found in its sources: not a small count, a year or a page number."""
+    """Whether a number in the report must be found in its sources: not a small count (up to 12), and not a year (a
+    bare four-digit number from 1990 to 2030; "2,000" with its separator is a count and is checked)."""
     t = norm(token)
     if "." in t:
         return True
     value = int(t)
-    return value > 12 and not 1990 <= value <= 2030
+    return value > 12 and not ("," not in token and 1990 <= value <= 2030)
 
 
 def numbers_in(text: str) -> set[str]:
@@ -86,7 +83,7 @@ def claims_in(text: str) -> set[str]:
     """The numbers a section claims: each fraction whole, and every other number that checked() selects."""
     fractions = {f"{norm(m.group(1))}/{norm(m.group(2))}" for m in FRACTION.finditer(text)}
     rest = FRACTION.sub(" ", text)
-    return fractions | {n for n in numbers_in(rest) if checked(n)}
+    return fractions | {norm(m.group(0)) for m in NUMBER.finditer(rest) if checked(m.group(0).rstrip(","))}
 
 
 @dataclass
@@ -164,7 +161,7 @@ def inline(text: str) -> str:
         if part.startswith("`") and part.endswith("`") and len(part) > 1:
             out.append(f"<code>{html.escape(part[1:-1])}</code>")
             continue
-        t = html.escape(part, quote=False)
+        t = html.escape(part)
         t = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', t)
         t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
         t = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", t)
@@ -296,7 +293,7 @@ td { padding: 0.7mm 1.4mm; border-bottom: 0.5pt solid #d9e3e1; vertical-align: t
 tr:nth-child(even) td { background: #f3f8f7; }
 td.num, th.num { text-align: right; white-space: nowrap; }
 figure { margin: 1.5mm 0 2.6mm; text-align: center; break-inside: avoid; }
-figure img { max-width: 100%; max-height: 80mm; }
+figure img { max-width: 100%; max-height: 74mm; }
 th code { background: transparent; color: inherit; padding: 0; }
 figcaption { font: italic 7.8pt "Segoe UI", Arial, sans-serif; color: #5b6b73; margin-top: 0.8mm; }
 a { color: #1f7a72; text-decoration: none; }
