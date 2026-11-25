@@ -74,8 +74,9 @@ the first time, 36 s after `make down`.
 
 ## How to verify it
 
-- `python scripts/release_check.py` (or `make release-check`): the version, the frozen sets against `gold-v1`, every
-  generated report and data validator, and these notes' traceability; offline, needs `git fetch --tags`.
+- `python scripts/release_check.py` (or `make release-check` on a branch): the version, the frozen sets against
+  `gold-v1`, every generated report and data validator, and these notes' traceability; on `main` it also checks a
+  clean tree, that `main` equals `origin/main` and that `v1.0` does not exist yet; offline, needs `git fetch --tags`.
 - `make test`: ruff and the offline tests (fake clients, no key).
 - `make up`, then http://localhost:8501: the system on Docker (README, "Run it with Docker").
 - The runs replay from the reply cache (`data/cache/llm`), so a re-run gives the same answers without a request.

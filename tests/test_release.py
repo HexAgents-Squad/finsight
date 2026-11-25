@@ -62,6 +62,28 @@ def test_the_gold_set_and_the_tests_are_as_frozen_at_gold_v1():
     assert rc.check_frozen() == []
 
 
+def test_the_tag_lands_only_on_the_merged_pushed_main_and_never_moves():
+    assert rc.tag_target_problems("main", "abc", "abc", tag_exists=False) == []
+    assert rc.tag_target_problems("w3/UPGRAD-88-release", "abc", "abc", False)[0].startswith("HEAD is w3/")
+    assert rc.tag_target_problems("main", "abc", "def", False) == [
+        "main differs from origin/main: git pull --ff-only (and push nothing unreviewed)"]
+    assert rc.tag_target_problems("main", "abc", None, False) == ["origin/main is unknown: git fetch origin"]
+    assert rc.tag_target_problems("main", "abc", "abc", True) == ["the tag v1.0 exists already: a released tag is never moved"]
+
+
+def test_a_frozen_file_missing_at_the_tag_is_named(monkeypatch):
+    real = rc.git
+
+    def fake(*args):
+        if args[0] == "show" and args[1].endswith("injection_tests.jsonl"):
+            return real("show", "no-such-ref:nothing")
+        return real(*args)
+    if not _has_tag(rc.GOLD_TAG):
+        pytest.skip("the gold-v1 tag is not in this clone")
+    monkeypatch.setattr(rc, "git", fake)
+    assert rc.check_frozen() == ["eval/injection_tests.jsonl is not in the tag gold-v1"]
+
+
 def test_the_makefile_runs_the_release_check():
     makefile = (rc.REPO / "Makefile").read_text(encoding="utf-8")
     assert re.search(r"^release-check:.*\n\t\$\(PYTHON\) scripts/release_check\.py", makefile, re.M)
