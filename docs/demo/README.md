@@ -13,7 +13,7 @@
 
 ## The recording
 
-Not recorded yet. Once it is made (steps in demo_script.md, "Recording the backup"), put its link here:
+The demo submitted with the capstone (steps in demo_script.md, "Recording the demo"):
 
-- Recording: *(link to come)*
-- Recorded by, on, with: *(name, date, `make demo-offline` or `make up`)*
+- Recording: [03_Demo_Recording.mp4 on Google Drive](https://drive.google.com/file/d/1xY3_OGtOIoUtsXE67BxPfWcZwpU-6RQf/view) (anyone with the link can view)
+- Recorded by Alok Srivastava on 26 Nov 2026, on the Docker setup (`make up`), with the questions traced to Langfuse; three of those traces are public: [P&G's operating margin](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/bc2a247e7f454a58779e41297631086a), [Pfizer or Johnson & Johnson](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/b187871705e2d068a22ec2b3ed2ec353), [a refused rule-breaking request](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/1d8c7b29464db0b56a5d3fcceec249fb).

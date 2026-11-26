@@ -23,6 +23,10 @@ FinSight meets it.
 So the 10-minute demo is submitted as a recording (W3-14), and a live run is for the panel, if the team is
 nominated.
 
+## Our submission
+
+The LMS page asks for one file, the technical report as a PDF, with the links to the demo video, the repository and the trace dashboard inside it and the model-card information in it. `docs/report/final_report.pdf` carries them on its front page and in Appendix E, and §10 is the Responsible AI section and model card. The shared folder: [FinSight_Capstone_HexAgents_Squad](https://drive.google.com/drive/folders/1dVHhpvG2hf91wKdYiojcEK7JCuTbIXdC).
+
 ## What goes in the submission (Track B deliverables)
 
 | Deliverable | In the repository | In the shared folder |
