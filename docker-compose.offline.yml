@@ -1,0 +1,22 @@
+# The offline demo mode (W3-14, ADR-049): FinSight on Docker answering only from the reply cache, so the demo works
+# when the course endpoint is down and never spends the shared key. `make demo-offline` runs
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml up --build --detach --wait api ui
+# and `make down` stops it as usual.
+#
+# - Chat requests go through a proxy that does not exist (127.0.0.1:9), so any reply not in data/cache/llm fails at
+#   once and the answer says it could not be verified; a cached reply is served as before (the cache key names the
+#   endpoint, which is unchanged, so every committed demo question is found).
+# - Embeddings are computed in the container with BAAI/bge-small-en-v1.5, the same vectors as the course endpoint
+#   (ADR-021), downloaded once from Hugging Face into the hf-cache volume (Hugging Face is exempt from the proxy).
+# - Tracing is off: no request leaves the machine except that one model download.
+# The UI is unchanged; only the API's environment differs.
+
+services:
+  api:
+    environment:
+      HTTPS_PROXY: http://127.0.0.1:9
+      HTTP_PROXY: http://127.0.0.1:9
+      NO_PROXY: localhost,127.0.0.1,api,ui,huggingface.co,.huggingface.co,hf.co,.hf.co
+      EMBED_BACKEND: sentence-transformers
+      EMBED_LOCAL_MODEL_NAME: BAAI/bge-small-en-v1.5
+      LANGFUSE_ENABLED: "false"

@@ -45,11 +45,11 @@ APPENDIX = "<!-- appendix -->"
 PAGEBREAK = "<!-- pagebreak -->"
 
 # A number as written in prose or a table: 1,563 · 0.774 · 42 (in 42/48) · 5.54 · 48.25 (in 48.25M). Not part of a
-# name: no letter, digit, hyphen, dot or comma directly before it (W3-03, ADR-039, FY2024, Qwen3-8B, v1.0), and never
-# a piece of a longer number (the match runs to the number's last digit).
-NUMBER = re.compile(r"(?<![A-Za-z0-9\-.,])\d[\d,]*(?:\.\d+)?(?!\d)(?!\.\d)")
+# name or a clock time: no letter, digit, hyphen, dot, comma or colon directly before it (W3-03, ADR-039, FY2024,
+# Qwen3-8B, v1.0, 4:15), and never a piece of a longer number (the match runs to the number's last digit).
+NUMBER = re.compile(r"(?<![A-Za-z0-9\-.,:])\d[\d,]*(?:\.\d+)?(?!\d)(?!\.\d)")
 # A count out of a total, 42/48 or 42 / 48, or "13 of 13": checked as one claim, wherever its parts are small
-FRACTION = re.compile(r"(?<![A-Za-z0-9\-.,/])(\d[\d,]*)\s*(?:/|of)\s*(\d[\d,]*)(?![\d/]|\.\d)")
+FRACTION = re.compile(r"(?<![A-Za-z0-9\-.,/:])(\d[\d,]*)\s*(?:/|of)\s*(\d[\d,]*)(?![\d/]|\.\d)")
 SOURCES_LINE = re.compile(r"^\*Sources:\*\s*(.*)$", re.M)
 NUMERIC_CELL = re.compile(r"[\d\s.,/%()\-+<=>*–]*")    # a table cell holding only figures (bold allowed)
 PATH = re.compile(r"`([A-Za-z0-9_./\-]+\.[A-Za-z0-9]+)`")
