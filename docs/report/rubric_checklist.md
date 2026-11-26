@@ -47,7 +47,7 @@ Status: **met** (evidence committed), **open** (the named ticket finishes it), *
 
 | Criterion | Evidence | Status |
 |---|---|---|
-| 12-page report following the plan's outline (11 sections) | `docs/report/final_report.md`, `docs/report/final_report.pdf` | met: body within 12 pages, recorded in `docs/report/final_report.build.json` |
+| 12-page report following the plan's outline (11 sections) | `docs/report/final_report.md`, `docs/report/final_report.pdf` | met: 12 pages in all, appendix included (the mentor's limit), recorded in `docs/report/final_report.build.json` |
 | Every figure traceable to a committed file | `scripts/final_report.py`, `tests/test_final_report.py` | met |
 | Each member's section reviewed by its owner | the "Owner (reviews)" line under each heading | open: each owner's review in the W3-12 pull request |
 | A rehearsed 10-minute demo | `docs/demo/demo_script.md` | partly: the script; the recording before 27 Nov; a live run rehearsed if the team is nominated for the 12 Dec panel |

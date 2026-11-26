@@ -17,7 +17,7 @@ MEMBERS = ["Alok Srivastava", "Anirudh M K", "Chandra Shekhar Pandey", "Amresh K
 
 
 def test_the_committed_report_passes_every_check():
-    assert fr.check() == []                  # traceable, paths exist, the PDF built from this text, body <= 12 pages
+    assert fr.check() == []                  # traceable, paths exist, the PDF built from this text, <= 12 pages
 
 
 def test_the_report_follows_the_outline_and_names_an_owner_and_sources_for_each_section():
@@ -34,7 +34,8 @@ def test_the_report_follows_the_outline_and_names_an_owner_and_sources_for_each_
 
 def test_the_build_record_is_within_the_page_limit():
     record = json.loads(fr.RECORD.read_text(encoding="utf-8"))
-    assert record["pages_body"] <= fr.MAX_BODY_PAGES and record["pages_body"] < record["pages_total"]
+    assert record["pages_total"] <= fr.MAX_PAGES                      # the whole PDF, appendix included
+    assert record["pages_body"] < record["pages_total"]
     assert record["pages_total"] == fr.pdf_pages(fr.PDF.read_bytes())
 
 
