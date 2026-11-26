@@ -14,8 +14,8 @@ The report is written by hand in Markdown (docs/report/final_report.md). This sc
      and prints it to docs/report/final_report.pdf with headless Chrome, once whole and once without the appendix;
   4. records in docs/report/final_report.build.json the SHA-256 of that HTML and both page counts.
 --check repeats 1 and 2, renders the HTML again and compares its hash with the record (so a report edited without
-rebuilding the PDF fails), checks the PDF's page count against the record and the body (everything before the
-appendix) against the 12-page limit. Only the build needs Chrome; CI runs --check (the tests do the same).
+rebuilding the PDF fails), checks the PDF's page count against the record and the whole PDF, appendix included,
+against the 12-page limit (the mentor's). Only the build needs Chrome; CI runs --check (the tests do the same).
 Exit codes: 0 = built (or current with --check), 1 = a check failed, 2 = no Chrome found.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ SOURCE = REPORT_DIR / "final_report.md"
 PDF = REPORT_DIR / "final_report.pdf"
 RECORD = REPORT_DIR / "final_report.build.json"
 CHECKLIST = REPORT_DIR / "rubric_checklist.md"
-MAX_BODY_PAGES = 12
+MAX_PAGES = 12                  # the whole PDF, appendix included (the mentor's limit)
 APPENDIX = "<!-- appendix -->"
 PAGEBREAK = "<!-- pagebreak -->"
 
@@ -293,7 +293,7 @@ td { padding: 0.7mm 1.4mm; border-bottom: 0.5pt solid #d9e3e1; vertical-align: t
 tr:nth-child(even) td { background: #f3f8f7; }
 td.num, th.num { text-align: right; white-space: nowrap; }
 figure { margin: 1.5mm 0 2.6mm; text-align: center; break-inside: avoid; }
-figure img { max-width: 100%; max-height: 74mm; }
+figure img { max-width: 100%; max-height: 66mm; }
 th code { background: transparent; color: inherit; padding: 0; }
 figcaption { font: italic 7.8pt "Segoe UI", Arial, sans-serif; color: #5b6b73; margin-top: 0.8mm; }
 a { color: #1f7a72; text-decoration: none; }
@@ -379,8 +379,8 @@ def build() -> int:
     record = {"html_sha256": html_sha256(markdown), "pages_body": body_pages, "pages_total": total}
     RECORD.write_bytes((json.dumps(record, indent=2) + "\n").encode("utf-8"))
     print(f"written {PDF.relative_to(REPO).as_posix()}: {total} pages ({body_pages} before the appendix)")
-    if body_pages > MAX_BODY_PAGES:
-        print(f"ERROR: the body is {body_pages} pages, over the {MAX_BODY_PAGES}-page limit", file=sys.stderr)
+    if total > MAX_PAGES:
+        print(f"ERROR: the report is {total} pages, over the {MAX_PAGES}-page limit (appendix included)", file=sys.stderr)
         return 1
     return 0
 
@@ -395,8 +395,8 @@ def check() -> list[str]:
         out.append("the PDF is stale (the report changed since it was built): run python scripts/final_report.py")
     if pdf_pages(PDF.read_bytes()) != record.get("pages_total"):
         out.append("the PDF's page count differs from its build record: run python scripts/final_report.py")
-    if record.get("pages_body", MAX_BODY_PAGES + 1) > MAX_BODY_PAGES:
-        out.append(f"the body is {record.get('pages_body')} pages, over the {MAX_BODY_PAGES}-page limit")
+    if record.get("pages_total", MAX_PAGES + 1) > MAX_PAGES:
+        out.append(f"the report is {record.get('pages_total')} pages, over the {MAX_PAGES}-page limit (appendix included)")
     return out
 
 

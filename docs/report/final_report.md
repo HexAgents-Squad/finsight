@@ -2,7 +2,13 @@
 
 <p class="subtitle">Technical report · Capstone Track B (API-side) · Executive PG Programme in Generative AI &amp; Agentic AI, IIT Kharagpur · 26 Nov 2026</p>
 
-**Team HexAgents_Squad:** Alok Srivastava (editor) · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj. **Mentor:** Dr. Gunjan Balde. **Code (public):** [github.com/HexAgents-Squad/finsight](https://github.com/HexAgents-Squad/finsight).
+**Team HexAgents_Squad:** Alok Srivastava (editor) · Anirudh M K · Chandra Shekhar Pandey · Amresh Kumar · Giridharan Selvaraj. **Mentor:** Dr. Gunjan Balde.
+
+**Submission links** (each opens without signing in; the full list is in Appendix E):
+- **Code:** [github.com/HexAgents-Squad/finsight](https://github.com/HexAgents-Squad/finsight) (public), [release v1.0](https://github.com/HexAgents-Squad/finsight/releases/tag/v1.0).
+- **Demo video (10 minutes):** [on Google Drive](https://drive.google.com/file/d/1xY3_OGtOIoUtsXE67BxPfWcZwpU-6RQf/view).
+- **Trace dashboard (Langfuse, public traces):** [a ratio, P&G's operating margin](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/bc2a247e7f454a58779e41297631086a) · [two companies compared](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/b187871705e2d068a22ec2b3ed2ec353) · [a refused rule-breaking request](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/1d8c7b29464db0b56a5d3fcceec249fb) · [screenshots](https://drive.google.com/drive/folders/1bNRJcV5ActjKoJ-PMzWWl3YHH7PeraCj).
+- **All deliverables** (this report, the evaluation report, the video, the slides, the screenshots): [shared folder](https://drive.google.com/drive/folders/1dVHhpvG2hf91wKdYiojcEK7JCuTbIXdC).
 
 **How this report was written.** Every section was drafted by the editor with an AI assistant (Claude) from committed results, then reviewed by the member who owns that work, named under each heading. Five standards run through it. *Clarity:* one claim per paragraph, the result first. *Traceability:* every number in a section appears in a file that section cites on its Sources line; `python scripts/final_report.py --check` verifies this in CI, along with the page limit and that this PDF matches its source. *Evidence:* committed result files, graded answers, traces and screenshots of the final UI. *Reproducibility:* every result regenerates from committed files and the reply cache (Appendix A and B). *Measurable impact:* each change is reported as a before-and-after on the same questions, with paired tests (§8, §9).
 
@@ -253,9 +259,11 @@ The agent is the step change and A5 the refinement. Paired with B0 on the same q
 
 *Sources:* `eval/results/evaluation_report.md`, `eval/results/agent_baselines.md`, `docs/decisions.md`, `docs/deploy_check.md`
 
-## 10. Responsible AI
+## 10. Responsible AI and model card
 
 *Owner (reviews): Chandra Shekhar Pandey (W3-10).*
+
+**Model card.** *Model:* Qwen3-8B on the course's hosted endpoint, used as given (no fine-tuning, thinking off), with bge-small-en-v1.5 embeddings; the system around it is described in §2 and §7. *Data:* public SEC filings and XBRL facts of 20 companies (§3); no personal data. *Evaluation:* §4 and §9. *Intended use, refusals, adversarial tests and failure modes:* below and in §9; *limitations:* §11.
 
 **Intended use and refusals.** A research assistant over public filings; the UI states that it can be wrong, cites its sources and gives no investment advice, forecasts or valuation opinions. The planner applies R1-R7 before any tool runs; through the API all 22 refusal tests pass, each answer identical to the agent's own gold run.
 
@@ -339,3 +347,16 @@ Much of the code was built by Alok with an AI assistant for the ticket owners, a
 | Deliverables: repository, trace dashboard, evaluation report with the taxonomy, this report, a 10-minute live demo | `docs/report/rubric_checklist.md` (the demo is W3-14) |
 
 *Sources:* `FinSight_Project_Plan.txt`, `eval/results/retrieval_summary.md`, `docs/spec.md`
+
+## Appendix E. Submission links
+
+Every link opens without signing in ("Anyone with the link can view"; the files can be downloaded).
+
+| Deliverable | Link |
+|---|---|
+| Git repository with the full agent stack (public) | [github.com/HexAgents-Squad/finsight](https://github.com/HexAgents-Squad/finsight), [release v1.0](https://github.com/HexAgents-Squad/finsight/releases/tag/v1.0) |
+| 10-minute demo of the running system (video) | [03_Demo_Recording.mp4 on Google Drive](https://drive.google.com/file/d/1xY3_OGtOIoUtsXE67BxPfWcZwpU-6RQf/view) |
+| Trace dashboard: public Langfuse traces | [P&G's operating margin](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/bc2a247e7f454a58779e41297631086a), [Pfizer or Johnson & Johnson](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/b187871705e2d068a22ec2b3ed2ec353), [a refused rule-breaking request](https://us.cloud.langfuse.com/project/cmwnz4frw017vad0e92ldh748/traces/1d8c7b29464db0b56a5d3fcceec249fb) |
+| Trace dashboard: screenshots | [05_Trace_Dashboard on Google Drive](https://drive.google.com/drive/folders/1bNRJcV5ActjKoJ-PMzWWl3YHH7PeraCj) |
+| Responsible AI section (model card) | this report, §10; the full document: [docs/responsible_ai.md](https://github.com/HexAgents-Squad/finsight/blob/main/docs/responsible_ai.md) |
+| Evaluation report, slides, UI screenshots, this report | [the shared folder on Google Drive](https://drive.google.com/drive/folders/1dVHhpvG2hf91wKdYiojcEK7JCuTbIXdC) |
